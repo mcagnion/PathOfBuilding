@@ -515,13 +515,18 @@ Highest Weight - Displays the order retrieved from trade]]
 	end)
 	self.controls.pbNotice = new("LabelControl",  {"BOTTOMRIGHT", nil, "BOTTOMRIGHT"}, {-row_height - pane_margins_vertical - row_vertical_padding, -pane_margins_vertical, 300, row_height}, "")
 
+	self.controls.findAllButton = new("ButtonControl", {"BOTTOMRIGHT", nil, "BOTTOMRIGHT"}, {-pane_margins_horizontal, -pane_margins_vertical, 240, row_height}, "Find All", function()
+		self:FindAllBestItems()
+	end)
+	self.controls.findAllButton.tooltipText = "Open query options once, then launch searches for all slots."
+
 	-- used in PopupDialog:Draw()
 	local function scrollBarFunc()
 		self.controls.scrollBar.height = self.pane_height-100
 		self.controls.scrollBar:SetContentDimension(self.pane_height-100, self.effective_rows_height)
 		self.controls.sectionAnchor.y = -self.controls.scrollBar.offset
 	end
-	main:OpenPopup(pane_width, self.pane_height, "Trader", self.controls, nil, nil, "close", (scrollBarShown and scrollBarFunc or nil))
+	main:OpenPopup(pane_width, self.pane_height + 50, "Trader", self.controls, nil, nil, "close", (scrollBarShown and scrollBarFunc or nil))
 end
 
 -- Popup to set stat weight multipliers for sorting
@@ -829,8 +834,12 @@ function TradeQueryClass:SortFetchResults(row_idx, mode)
 		end
 		return newTbl
 	elseif mode == self.sortModes.StatValue  then
-		for result_index = 1, #self.resultTbl[row_idx] do
-			t_insert(newTbl, { outputAttr = getResultWeight(result_index), index = result_index })
+		if self.resultTbl[row_idx] then
+			for result_index = 1, #self.resultTbl[row_idx] do
+				t_insert(newTbl, { outputAttr = getResultWeight(result_index), index = result_index })
+			end
+		else
+			return nil, "No results available for sorting"
 		end
 		table.sort(newTbl, function(a,b) return a.outputAttr > b.outputAttr end)
 	elseif mode == self.sortModes.StatValuePrice then
@@ -1139,4 +1148,71 @@ function TradeQueryClass:UpdateRealms()
 		}
 		setRealmDropList()
 	end
+end
+
+function TradeQueryClass:FindAllBestItems()
+	local pendingQueries = { }
+	for row_idx, slotTbl in ipairs(self.slotTables) do
+		local activeSlot = slotTbl.nodeId and self.itemsTab.sockets[slotTbl.nodeId] or self.itemsTab.slots[slotTbl.slotName]
+		local isFlaskSlot = activeSlot and activeSlot.slotName and activeSlot.slotName:find("Flask")
+		if activeSlot and not isFlaskSlot and not self.resultTbl[row_idx] then
+			t_insert(pendingQueries, {
+				slot = activeSlot,
+				context = { slotTbl = slotTbl, controls = self.controls, row_idx = row_idx },
+			})
+		end
+	end
+
+	if #pendingQueries == 0 then
+		self:SetNotice(self.controls.pbNotice, colorCodes.POSITIVE .. "No pending slots to search.")
+		return
+	end
+
+	local function processPending(index, skipPopup)
+		local pending = pendingQueries[index]
+		if not pending then
+			return
+		end
+
+		self.tradeQueryGenerator:RequestQuery(pending.slot, pending.context, self.statSortSelectionList, function(context, query, errMsg)
+			if errMsg then
+				self:SetNotice(context.controls.pbNotice, colorCodes.NEGATIVE .. errMsg)
+				processPending(index + 1, true)
+				return
+			end
+			self:SetNotice(context.controls.pbNotice, "")
+
+			if main.POESESSID == nil or main.POESESSID == "" then
+				local url = self.tradeQueryRequests:buildUrl(self.hostName .. "trade/search", self.pbRealm, self.pbLeague)
+				url = url .. "?q=" .. urlEncode(query)
+				self.controls["uri"..context.row_idx]:SetText(url, true)
+				processPending(index + 1, true)
+				return
+			end
+
+			context.controls["priceButton"..context.row_idx].label = "Searching..."
+			self.tradeQueryRequests:SearchWithQueryWeightAdjusted(self.pbRealm, self.pbLeague, query,
+				function(items, fetchErrMsg)
+					if fetchErrMsg then
+						self:SetNotice(context.controls.pbNotice, colorCodes.NEGATIVE .. fetchErrMsg)
+					else
+						self:SetNotice(context.controls.pbNotice, "")
+						self.resultTbl[context.row_idx] = items
+						self:UpdateControlsWithItems(context.row_idx)
+					end
+					context.controls["priceButton"..context.row_idx].label = "Price Item"
+					processPending(index + 1, true)
+				end,
+				{
+					callbackQueryId = function(queryId)
+						local url = self.tradeQueryRequests:buildUrl(self.hostName .. "trade/search", self.pbRealm, self.pbLeague, queryId)
+						self.controls["uri"..context.row_idx]:SetText(url, true)
+					end
+				}
+			)
+		end, skipPopup)
+	end
+
+	-- Show query options once, then reuse saved options for remaining rows.
+	processPending(1, false)
 end
