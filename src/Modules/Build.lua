@@ -1790,6 +1790,54 @@ function buildMode:CompareStatList(tooltip, statList, actor, baseOutput, compare
 	return count
 end
 
+-- Add requirement warnings to tooltip when comparison would break attribute requirements
+function buildMode:AddRequirementWarningsToTooltip(tooltip, baseOutput, compareOutput, header, existingCount)
+	if not baseOutput or not compareOutput then
+		return 0
+	end
+	local count = 0
+
+	local useOmni = compareOutput.ReqOmni or baseOutput.ReqOmni
+	local entries = useOmni
+		and { { attr = "Omni", req = "ReqOmni", label = "Omniscience" } }
+		or {
+			{ attr = "Str", req = "ReqStr", label = "Strength" },
+			{ attr = "Dex", req = "ReqDex", label = "Dexterity" },
+			{ attr = "Int", req = "ReqInt", label = "Intelligence" },
+		}
+
+	for _, entry in ipairs(entries) do
+		local baseReq = baseOutput[entry.req] or 0
+		local compReq = compareOutput[entry.req] or 0
+		local baseVal = baseOutput[entry.attr] or 0
+		local compVal = compareOutput[entry.attr] or 0
+
+		-- only add warning if compare fails requirement and base did not
+		if compReq > compVal and baseReq <= baseVal then
+			if existingCount == 0 and count == 0 then
+				tooltip:AddLine(14, header)
+			end
+
+			local src = compareOutput[entry.req .. "Item"]
+			local srcName
+			if src then
+				if src.source == "Item" and src.sourceItem then
+					srcName = src.sourceItem.name
+				elseif src.source == "Gem" and src.sourceGem then
+					srcName = src.sourceGem.nameSpec
+				end
+			end
+
+			local text = srcName and s_format("^7Would not meet %s requirement of %s", entry.label, srcName)
+								 or s_format("^7Would not meet %s requirement", entry.label)
+			tooltip:AddLine(14, colorCodes.NEGATIVE .. text)
+			count = count + 1
+		end
+	end
+
+	return count
+end
+
 -- Compare values of all display stats between the two output tables, and add any changed stats to the tooltip
 -- Adds the provided header line before the first stat line, if any are added
 -- Returns the number of stat lines added
@@ -1804,6 +1852,7 @@ function buildMode:AddStatComparesToTooltip(tooltip, baseOutput, compareOutput, 
 		end
 	end
 	count = count + self:CompareStatList(tooltip, self.displayStats, self.calcsTab.mainEnv.player, baseOutput, compareOutput, header, nodeCount)
+	count = count + self:AddRequirementWarningsToTooltip(tooltip, baseOutput, compareOutput, header, count)
 	return count
 end
 
