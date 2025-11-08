@@ -1792,50 +1792,92 @@ end
 
 -- Add requirement warnings to tooltip when comparison would break attribute requirements
 function buildMode:AddRequirementWarningsToTooltip(tooltip, baseOutput, compareOutput, header, existingCount)
-	if not baseOutput or not compareOutput then
-		return 0
-	end
-	local count = 0
+    if not baseOutput or not compareOutput then
+        return 0
+    end
+    local count = 0
 
-	local useOmni = compareOutput.ReqOmni or baseOutput.ReqOmni
-	local entries = useOmni
-		and { { attr = "Omni", req = "ReqOmni", label = "Omniscience" } }
-		or {
-			{ attr = "Str", req = "ReqStr", label = "Strength" },
-			{ attr = "Dex", req = "ReqDex", label = "Dexterity" },
-			{ attr = "Int", req = "ReqInt", label = "Intelligence" },
-		}
+    local useOmni = compareOutput.ReqOmni or baseOutput.ReqOmni
+    local entries = useOmni
+        and { { attr = "Omni", req = "ReqOmni", label = "Omniscience" } }
+        or {
+            { attr = "Str", req = "ReqStr", label = "Strength" },
+            { attr = "Dex", req = "ReqDex", label = "Dexterity" },
+            { attr = "Int", req = "ReqInt", label = "Intelligence" },
+        }
 
-	for _, entry in ipairs(entries) do
-		local baseReq = baseOutput[entry.req] or 0
-		local compReq = compareOutput[entry.req] or 0
-		local baseVal = baseOutput[entry.attr] or 0
-		local compVal = compareOutput[entry.attr] or 0
+    for _, entry in ipairs(entries) do
+        local baseReq = baseOutput[entry.req] or 0
+        local compReq = compareOutput[entry.req] or 0
+        local baseVal = baseOutput[entry.attr] or 0
+        local compVal = compareOutput[entry.attr] or 0
 
-		-- only add warning if compare fails requirement and base did not
-		if compReq > compVal and baseReq <= baseVal then
-			if existingCount == 0 and count == 0 then
-				tooltip:AddLine(14, header)
-			end
+        -- Only add warnings if comparison fails and base did not
+        if compReq > compVal and baseReq <= baseVal then
+            if existingCount == 0 and count == 0 then
+                tooltip:AddLine(14, header)
+            end
 
-			local src = compareOutput[entry.req .. "Item"]
-			local srcName
-			if src then
-				if src.source == "Item" and src.sourceItem then
-					srcName = src.sourceItem.name
-				elseif src.source == "Gem" and src.sourceGem then
-					srcName = src.sourceGem.nameSpec
-				end
-			end
+            -- Build a set of already-failing sources in base to exclude
+            local baseFailSet = {}
+            local baseFailList = baseOutput[entry.req .. "FailList"] or {}
+            for _, b in ipairs(baseFailList) do
+                if b.source then
+                    if b.source.source == "Item" then
+                        local name = (b.source.sourceItem and b.source.sourceItem.name) or ""
+                        local slot = b.source.sourceSlot or ""
+                        baseFailSet["Item:" .. slot .. ":" .. name] = true
+                    elseif b.source.source == "Gem" then
+                        local g = b.source.sourceGem or {}
+                        baseFailSet["Gem:" .. (g.nameSpec or "") .. ":" .. (g.level or 0) .. "/" .. (g.quality or 0)] = true
+                    end
+                end
+            end
 
-			local text = srcName and s_format("^7Would not meet %s requirement of %s", entry.label, srcName)
-								 or s_format("^7Would not meet %s requirement", entry.label)
-			tooltip:AddLine(14, colorCodes.NEGATIVE .. text)
-			count = count + 1
-		end
-	end
+            local addedAny = false
+            local compFailList = compareOutput[entry.req .. "FailList"] or {}
+            for _, it in ipairs(compFailList) do
+                local src = it.source
+                local reqVal = it.req or compReq
+                local key, srcName
+                if src then
+                    if src.source == "Item" and src.sourceItem then
+                        srcName = src.sourceItem.name
+                        key = "Item:" .. (src.sourceSlot or "") .. ":" .. srcName
+                    elseif src.source == "Gem" and src.sourceGem then
+                        srcName = src.sourceGem.nameSpec
+                        key = "Gem:" .. (src.sourceGem.nameSpec or "") .. ":" .. (src.sourceGem.level or 0) .. "/" .. (src.sourceGem.quality or 0)
+                    end
+                end
+                if key and not baseFailSet[key] and srcName then
+                    local text = s_format("^7%s requires %d %s", srcName, reqVal, entry.label)
+                    tooltip:AddLine(14, colorCodes.NEGATIVE .. text)
+                    count = count + 1
+                    addedAny = true
+                end
+            end
 
-	return count
+            -- Fallback to generic or single-source line if we couldn't enumerate
+            if not addedAny then
+                local src = compareOutput[entry.req .. "Item"]
+                local srcName
+                if src then
+                    if src.source == "Item" and src.sourceItem then
+                        srcName = src.sourceItem.name
+                    elseif src.source == "Gem" and src.sourceGem then
+                        srcName = src.sourceGem.nameSpec
+                    end
+                end
+                local text = srcName
+                    and s_format("^7Would not meet %s requirement of %s (^7%d required)", entry.label, srcName, compReq)
+                    or s_format("^7Would not meet %s requirement", entry.label)
+                tooltip:AddLine(14, colorCodes.NEGATIVE .. text)
+                count = count + 1
+            end
+        end
+    end
+
+    return count
 end
 
 -- Compare values of all display stats between the two output tables, and add any changed stats to the tooltip

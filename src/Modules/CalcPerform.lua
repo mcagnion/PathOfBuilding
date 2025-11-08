@@ -1936,6 +1936,7 @@ function calcs.perform(env, skipEHP)
 				}
 			end
 			local out = {val = 0, source = nil}
+			local failList = { }
 			for _, reqSource in ipairs(env.requirementsTable) do
 				if reqSource[attr] and reqSource[attr] > 0 then
 					local req = m_floor(reqSource[attr] * reqMult)
@@ -1947,6 +1948,10 @@ function calcs.perform(env, skipEHP)
 					if req > out.val then
 						out.val = req
 						out.source = reqSource
+					end
+					-- Collect all sources that currently fail the requirement in this environment
+					if not ignoreAttrReq and req > (output[breakdownAttr] or 0) then
+						t_insert(failList, { source = reqSource, req = req })
 					end
 					if breakdown then
 						local row = {
@@ -1979,6 +1984,8 @@ function calcs.perform(env, skipEHP)
 					output["Req"..breakdownAttr.."String"] = out.val > (output[breakdownAttr] or 0) and colorCodes.NEGATIVE..(out.val) or out.val
 				end
 			end
+			-- Expose list of all failing sources for this attribute in this environment
+			output["Req"..breakdownAttr.."FailList"] = (not ignoreAttrReq and #failList > 0) and failList or nil
 		end
 	end
 
