@@ -1850,7 +1850,7 @@ function buildMode:AddRequirementWarningsToTooltip(tooltip, baseOutput, compareO
                     end
                 end
                 if key and not baseFailSet[key] and srcName then
-                    local text = s_format("^7%s requires %d %s", srcName, reqVal, entry.label)
+                    local text = s_format("%s requires %d %s", srcName, reqVal, entry.label)
                     tooltip:AddLine(14, colorCodes.NEGATIVE .. text)
                     count = count + 1
                     addedAny = true
@@ -1869,8 +1869,8 @@ function buildMode:AddRequirementWarningsToTooltip(tooltip, baseOutput, compareO
                     end
                 end
                 local text = srcName
-                    and s_format("^7Would not meet %s requirement of %s (^7%d required)", entry.label, srcName, compReq)
-                    or s_format("^7Would not meet %s requirement", entry.label)
+                    and s_format("Would not meet %s requirement of %s (%d required)", entry.label, srcName, compReq)
+                    or s_format("Would not meet %s requirement", entry.label)
                 tooltip:AddLine(14, colorCodes.NEGATIVE .. text)
                 count = count + 1
             end
