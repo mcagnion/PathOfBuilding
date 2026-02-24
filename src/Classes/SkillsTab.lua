@@ -9,6 +9,7 @@ local t_insert = table.insert
 local t_remove = table.remove
 local m_min = math.min
 local m_max = math.max
+local gemUpgradeReport = LoadModule("Modules/GemUpgradeReport")
 
 local groupSlotDropList = {
 	{ label = "None" },
@@ -75,6 +76,18 @@ local sortGemTypeList = {
 	{ label = "Effective Hit Pool", type = "TotalEHP" },
 }
 
+local gemUpgradeImpactFilterList = {
+	{ label = "All", value = "ALL" },
+	{ label = "Upgrade > 0", value = "POSITIVE" },
+}
+
+local gemUpgradeSourceFilterList = {
+	{ label = "All", value = "ALL" },
+	{ label = "Normal (no corruption)", value = "NATURAL" },
+	{ label = "Corruption", value = "CORRUPTION" },
+	{ label = "Vendor Recipe", value = "RECIPE" },
+}
+
 local alternateGemQualityList ={
 	{ label = "Default", type = "Default" },
 	{ label = "Anomalous", type = "Alternate1" },
@@ -98,6 +111,8 @@ local SkillsTabClass = newClass("SkillsTab", "UndoHandler", "ControlHost", "Cont
 	self.showLegacyGems = false
 	self.defaultGemLevel = "normalMaximum"
 	self.defaultGemQuality = main.defaultGemQuality
+	self.gemUpgradeImpactFilter = "ALL"
+	self.gemUpgradeSourceFilter = "ALL"
 
 	-- Set selector
 	self.controls.setSelect = new("DropDownControl", { "TOPLEFT", self, "TOPLEFT" }, { 76, 8, 210, 20 }, nil, function(index, value)
@@ -111,6 +126,22 @@ local SkillsTabClass = newClass("SkillsTab", "UndoHandler", "ControlHost", "Cont
 	self.controls.setLabel = new("LabelControl", { "RIGHT", self.controls.setSelect, "LEFT" }, { -2, 0, 0, 16 }, "^7Skill set:")
 	self.controls.setManage = new("ButtonControl", { "LEFT", self.controls.setSelect, "RIGHT" }, { 4, 0, 90, 20 }, "Manage...", function()
 		self:OpenSkillSetManagePopup()
+	end)
+	self.gemUpgradeSortStatList = { }
+	for _, stat in ipairs(data.powerStatList) do
+		if stat.stat then
+			t_insert(self.gemUpgradeSortStatList, stat)
+		end
+	end
+	self.gemUpgradeSortStat = self.gemUpgradeSortStatList[1]
+	for _, stat in ipairs(self.gemUpgradeSortStatList) do
+		if stat.stat == self.sortGemsByDPSField then
+			self.gemUpgradeSortStat = stat
+			break
+		end
+	end
+	self.controls.gemUpgradeReport = new("ButtonControl", { "LEFT", self.controls.setManage, "RIGHT" }, { 8, 0, 150, 20 }, "Gem Upgrade Report", function()
+		self:OpenGemUpgradePopup()
 	end)
 
 	-- Socket group list
@@ -559,6 +590,274 @@ function SkillsTabClass:Draw(viewPort, inputEvents)
 	self:UpdateGemSlots()
 
 	self:DrawControls(viewPort)
+end
+
+function SkillsTabClass:BuildGemUpgradeReport(currentStat)
+	return gemUpgradeReport.Build(self, currentStat, {
+		impact = self.gemUpgradeImpactFilter,
+		source = self.gemUpgradeSourceFilter,
+	})
+end
+
+function SkillsTabClass:SelectGemFromUpgradeReport(reportRow, popupsToClose)
+	if not reportRow then
+		return
+	end
+
+	local groupIndex = isValueInArray(self.socketGroupList, reportRow.socketGroup)
+	if not groupIndex then
+		return
+	end
+
+	self.controls.groupList:SelectIndex(groupIndex)
+	self:SetDisplayGroup(self.socketGroupList[groupIndex])
+	if self.gemSlots[reportRow.gemIndex] and self.gemSlots[reportRow.gemIndex].nameSpec then
+		self:SelectControl(self.gemSlots[reportRow.gemIndex].nameSpec)
+	end
+
+	for _ = 1, popupsToClose or 1 do
+		if main.popups[1] then
+			main:ClosePopup()
+		end
+	end
+end
+
+function SkillsTabClass:AddGemQualitySummaryToTooltip(tooltip, gemInstance, qualityAmount)
+	if not (gemInstance and gemInstance.gemData) then
+		return 0
+	end
+	local gemData = gemInstance.gemData
+	local qualityType = gemInstance.qualityId or "Default"
+	local qualityValue = m_max(0, qualityAmount or gemInstance.quality or 0)
+	if qualityValue <= 0 then
+		return 0
+	end
+
+	local lineCount = 0
+	local function addQualityLines(qualityList, grantedEffect)
+		tooltip:AddLine(18, colorCodes.GEM .. grantedEffect.name)
+		tooltip:AddLine(16, colorCodes.NORMAL .. "At +" .. tostring(qualityValue) .. "% Quality:")
+		for _, qual in pairs(qualityList) do
+			local stats = { }
+			stats[qual[1]] = qual[2] * qualityValue
+			local descriptions = self.build.data.describeStats(stats, grantedEffect.statDescriptionScope)
+			for _, line in ipairs(descriptions) do
+				if line then
+					if grantedEffect.statMap[qual[1]] or self.build.data.skillStatMap[qual[1]] then
+						tooltip:AddLine(16, colorCodes.MAGIC .. line)
+					else
+						local unsupportedLine = colorCodes.UNSUPPORTED .. line
+						unsupportedLine = main.notSupportedModTooltips and (unsupportedLine .. main.notSupportedTooltipText) or unsupportedLine
+						tooltip:AddLine(16, unsupportedLine)
+					end
+					lineCount = lineCount + 1
+				end
+			end
+		end
+	end
+
+	local addedSection = false
+	if gemData.grantedEffect and gemData.grantedEffect.qualityStats and gemData.grantedEffect.qualityStats[qualityType] then
+		addQualityLines(gemData.grantedEffect.qualityStats[qualityType], gemData.grantedEffect)
+		addedSection = true
+	end
+	if gemData.secondaryGrantedEffect and gemData.secondaryGrantedEffect.qualityStats and gemData.secondaryGrantedEffect.qualityStats[qualityType] then
+		if addedSection then
+			tooltip:AddSeparator(10)
+		end
+		addQualityLines(gemData.secondaryGrantedEffect.qualityStats[qualityType], gemData.secondaryGrantedEffect)
+	end
+	return lineCount
+end
+
+function SkillsTabClass:GetGemUpgradeReportStatValue(output, statData)
+	if not (output and statData and statData.stat) then
+		return nil
+	end
+	local statValue = output[statData.stat]
+	if statValue == nil and output.Minion then
+		statValue = output.Minion[statData.stat]
+	end
+	if statValue == nil then
+		statValue = 0
+	end
+	if statData.transform then
+		statValue = statData.transform(statValue)
+	end
+	return statValue
+end
+
+function SkillsTabClass:FindGemUpgradeQualityBreakpoint(gemInstance, reportRow, calcFunc)
+	local statData = self.gemUpgradeSortStat
+	if not (gemInstance and reportRow and calcFunc and statData and statData.stat) then
+		return nil
+	end
+	local currentQuality = gemInstance.quality or 0
+	local targetQuality = reportRow.targetQuality or currentQuality
+	if targetQuality <= currentQuality then
+		return nil
+	end
+
+	local currentLevel = gemInstance.level or 0
+	local contextLevel = reportRow.targetLevel or currentLevel
+	local useFullDPS = reportRow.useFullDPS
+
+	gemInstance.level = contextLevel
+	gemInstance.quality = currentQuality
+	local baseErr, baseOutput = PCall(calcFunc, nil, useFullDPS)
+	if baseErr then
+		gemInstance.level = currentLevel
+		gemInstance.quality = currentQuality
+		return nil
+	end
+	local baseStatValue = self:GetGemUpgradeReportStatValue(baseOutput, statData)
+
+	for quality = currentQuality + 1, targetQuality do
+		gemInstance.quality = quality
+		local errMsg, output = PCall(calcFunc, nil, useFullDPS)
+		if not errMsg then
+			local statValue = self:GetGemUpgradeReportStatValue(output, statData)
+			if statValue ~= baseStatValue then
+				gemInstance.level = currentLevel
+				gemInstance.quality = currentQuality
+				return quality
+			end
+		end
+	end
+
+	gemInstance.level = currentLevel
+	gemInstance.quality = currentQuality
+	return nil
+end
+
+function SkillsTabClass:AddGemUpgradeReportTooltip(tooltip, reportRow)
+	if not reportRow or not reportRow.socketGroup then
+		tooltip:Clear()
+		return
+	end
+
+	if not tooltip:CheckForUpdate(self.build.outputRevision, reportRow) then
+		return
+	end
+
+	local socketGroup = reportRow.socketGroup
+	local gemInstance = socketGroup.gemList and socketGroup.gemList[reportRow.gemIndex]
+	if not gemInstance then
+		tooltip:AddLine(14, "^1Unable to find gem for this report row.")
+		return
+	end
+
+	local calcFunc, calcBase = self.build.calcsTab:GetMiscCalculator()
+	if not calcFunc then
+		tooltip:AddLine(14, "^1Unable to calculate upgrade delta.")
+		return
+	end
+
+	local currentLevel = gemInstance.level
+	local currentQuality = gemInstance.quality
+	gemInstance.level = reportRow.targetLevel or gemInstance.level
+	gemInstance.quality = reportRow.targetQuality or gemInstance.quality
+
+	local errMsg, upgradedOutput = PCall(calcFunc, nil, reportRow.useFullDPS)
+
+	gemInstance.level = currentLevel
+	gemInstance.quality = currentQuality
+	self:ProcessSocketGroup(socketGroup)
+
+	if errMsg then
+		tooltip:AddLine(14, "^1Unable to calculate delta for this upgrade.")
+		return
+	end
+
+	tooltip:AddLine(14, string.format("^7%s  |  ^7%s: %s -> %s", reportRow.name, reportRow.upgradeLabel, tostring(reportRow.level), tostring(reportRow.nextLevel)))
+	tooltip:AddSeparator(8)
+	local changeCount = self.build:AddStatComparesToTooltip(tooltip, calcBase, upgradedOutput, "^7Applying this upgrade will give you:")
+	if changeCount == 0 then
+		tooltip:AddLine(14, "^7No measurable stat change for current config.")
+	end
+	if (reportRow.targetQuality or currentQuality) ~= currentQuality then
+		tooltip:AddSeparator(8)
+		tooltip:AddLine(14, "^7Quality effect reminder:")
+		local qualityLineCount = self:AddGemQualitySummaryToTooltip(tooltip, gemInstance, reportRow.targetQuality)
+		if qualityLineCount == 0 then
+			tooltip:AddLine(14, "^7No quality effect description for this gem.")
+		end
+		local firstBreakpointQuality = self:FindGemUpgradeQualityBreakpoint(gemInstance, reportRow, calcFunc)
+		local sortStatLabel = (self.gemUpgradeSortStat and self.gemUpgradeSortStat.label) or "selected stat"
+		if firstBreakpointQuality then
+			tooltip:AddSeparator(8)
+			tooltip:AddLine(14, string.format("^7First quality breakpoint for %s: ^x33FF77+%d%%", sortStatLabel, firstBreakpointQuality))
+		else
+			tooltip:AddSeparator(8)
+			tooltip:AddLine(14, string.format("^7No quality breakpoint for %s up to ^7+%d%%", sortStatLabel, reportRow.targetQuality or currentQuality))
+		end
+		self:ProcessSocketGroup(socketGroup)
+	end
+end
+
+function SkillsTabClass:OpenGemUpgradePopup()
+	local controls = { }
+	local refreshReport
+	local rawReportCacheByStat = { }
+	local rawReportCacheRevision = -1
+	controls.sortLabel = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 24, 0, 16 }, "^7Sort by:")
+	controls.sortSelect = new("DropDownControl", { "LEFT", controls.sortLabel, "RIGHT" }, { 8, 0, 220, 20 }, self.gemUpgradeSortStatList, function(index, selected)
+		self.gemUpgradeSortStat = selected or self.gemUpgradeSortStat
+		if refreshReport then
+			refreshReport(true)
+		end
+	end)
+	controls.impactLabel = new("LabelControl", { "LEFT", controls.sortSelect, "RIGHT" }, { 20, 0, 0, 16 }, "^7Impact:")
+	controls.impactSelect = new("DropDownControl", { "LEFT", controls.impactLabel, "RIGHT" }, { 8, 0, 160, 20 }, gemUpgradeImpactFilterList, function(index, selected)
+		self.gemUpgradeImpactFilter = selected and selected.value or self.gemUpgradeImpactFilter
+		if refreshReport then
+			refreshReport(false)
+		end
+	end)
+	controls.sourceLabel = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 52, 0, 16 }, "^7Method:")
+	controls.sourceSelect = new("DropDownControl", { "LEFT", controls.sourceLabel, "RIGHT" }, { 8, 0, 160, 20 }, gemUpgradeSourceFilterList, function(index, selected)
+		self.gemUpgradeSourceFilter = selected and selected.value or self.gemUpgradeSourceFilter
+		if refreshReport then
+			refreshReport(false)
+		end
+	end)
+	controls.reportList = new("GemUpgradeReportListControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 84, 860, 392 }, function(reportRow, doubleClick)
+		if doubleClick then
+			self:SelectGemFromUpgradeReport(reportRow, 1)
+		end
+	end, function(tooltip, reportRow)
+		self:AddGemUpgradeReportTooltip(tooltip, reportRow)
+	end)
+	controls.close = new("ButtonControl", { "TOP", controls.reportList, "BOTTOM" }, { 0, 12, 90, 20 }, "Close", function()
+		main:ClosePopup()
+	end)
+	refreshReport = function(forceRebuild)
+		local selectedStat = controls.sortSelect.list[controls.sortSelect.selIndex] or self.gemUpgradeSortStat or self.gemUpgradeSortStatList[1]
+		self.gemUpgradeSortStat = selectedStat
+		if rawReportCacheRevision ~= self.build.outputRevision then
+			rawReportCacheRevision = self.build.outputRevision
+			rawReportCacheByStat = { }
+			forceRebuild = true
+		end
+		local statKey = selectedStat and selectedStat.stat or ""
+			if forceRebuild or not rawReportCacheByStat[statKey] then
+				rawReportCacheByStat[statKey] = gemUpgradeReport.Build(self, selectedStat)
+			end
+			local filteredReport = gemUpgradeReport.Filter(rawReportCacheByStat[statKey], {
+				impact = self.gemUpgradeImpactFilter,
+				source = self.gemUpgradeSourceFilter,
+			})
+			controls.reportList:SetReport(selectedStat, filteredReport)
+		end
+
+	main:OpenPopup(900, 520, "Gem Upgrade Report", controls, nil, nil, "close")
+	controls.sortSelect:SelByValue((self.gemUpgradeSortStat and self.gemUpgradeSortStat.stat) or self.sortGemsByDPSField or "CombinedDPS", "stat")
+	self.gemUpgradeSortStat = controls.sortSelect.list[controls.sortSelect.selIndex] or self.gemUpgradeSortStatList[1]
+	controls.impactSelect:SelByValue(self.gemUpgradeImpactFilter, "value")
+	self.gemUpgradeImpactFilter = (controls.impactSelect.list[controls.impactSelect.selIndex] or controls.impactSelect.list[1]).value
+	controls.sourceSelect:SelByValue(self.gemUpgradeSourceFilter, "value")
+	self.gemUpgradeSourceFilter = (controls.sourceSelect.list[controls.sourceSelect.selIndex] or controls.sourceSelect.list[1]).value
+	refreshReport(true)
 end
 
 function SkillsTabClass:CopySocketGroup(socketGroup)
