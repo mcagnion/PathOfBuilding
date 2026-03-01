@@ -25,6 +25,7 @@ local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 	self.build = build
 	self.isComparing = false;
 	self.isCustomMaxDepth = false;
+	self.includePowerReportMasteries = false
 
 	self.viewer = new("PassiveTreeView")
 
@@ -195,6 +196,7 @@ local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 	self.controls.treeHeatMap = new("CheckBoxControl", { "LEFT", self.controls.findTimelessJewel, "RIGHT" }, { 130, 0, 20 }, "Show Node Power:", function(state)
 		self.viewer.showHeatMap = state
 		self.controls.treeHeatMapStatSelect.shown = state
+		self.controls.powerReportMasteries.shown = state
 
 		if state == false and ToastNotification:Exists(self.powerBuilderToastId) then
 			self.controls.powerReportList.shown = false 
@@ -269,6 +271,25 @@ local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 		function() return self.controls.powerReportList.shown and "Hide Power Report" or "Show Power Report" end, function()
 		self.controls.powerReportList.shown = not self.controls.powerReportList.shown
 	end)
+
+	-- Include masteries in Power Report.
+	-- CheckBox labels are drawn to the left of the box, so this offset reserves space
+	-- and prevents the label from overlapping the controls on its left.
+	local powerReportMasteriesLabel = "Include Masteries:"
+	local powerReportMasteriesOffset = DrawStringWidth(16, "VAR", powerReportMasteriesLabel) + 13
+	self.controls.powerReportMasteries = new(
+		"CheckBoxControl",
+		{ "LEFT", self.controls.powerReport, "RIGHT" },
+		{ powerReportMasteriesOffset, 0, 20 },
+		powerReportMasteriesLabel,
+		function(state)
+			self.includePowerReportMasteries = state
+			local powerStat = self.build.calcsTab.powerStat or data.powerStatList[1]
+			local report = self:BuildPowerReportList(powerStat)
+			self.controls.powerReportList:SetReport(powerStat, report)
+		end
+	)
+	self.controls.powerReportMasteries.shown = false
 
 	-- Power Report List
 	local yPos = self.controls.treeHeatMap.y == 0 and self.controls.specSelect.height + 4 or self.controls.specSelect.height * 2 + 8
@@ -400,8 +421,11 @@ function TreeTabClass:Draw(viewPort, inputEvents)
 									+ self.controls.treeHeatMap.width + 130
 									+ self.controls.nodePowerMaxDepthSelect.width + self.controls.nodePowerMaxDepthSelect.x
 									+ (self.isCustomMaxDepth and (self.controls.nodePowerMaxDepthCustom.width + self.controls.nodePowerMaxDepthCustom.x) or 0)
-									+ (self.viewer.showHeatMap and (self.controls.treeHeatMapStatSelect.width + self.controls.treeHeatMapStatSelect.x 
-																	+ self.controls.powerReport.width + self.controls.powerReport.x) or 0)
+									+ (self.viewer.showHeatMap and (
+										self.controls.treeHeatMapStatSelect.width + self.controls.treeHeatMapStatSelect.x
+										+ self.controls.powerReportMasteries.width + self.controls.powerReportMasteries.x
+										+ self.controls.powerReport.width + self.controls.powerReport.x
+									) or 0)
 	
 	-- Check first line
 	if viewPort.width >= widthFirstLineControls + widthSecondLineControls + rightMargin then
@@ -458,6 +482,8 @@ function TreeTabClass:Draw(viewPort, inputEvents)
 
 	self.controls.treeHeatMap.state = self.viewer.showHeatMap
 	self.controls.treeHeatMapStatSelect.shown = self.viewer.showHeatMap
+	self.controls.powerReportMasteries.shown = self.viewer.showHeatMap
+	self.controls.powerReportMasteries.state = self.includePowerReportMasteries
 	self.controls.treeHeatMapStatSelect.list = self.powerStatList
 	self.controls.treeHeatMapStatSelect.selIndex = 1
 	self.controls.treeHeatMapStatSelect:CheckDroppedWidth(true)
@@ -1051,6 +1077,7 @@ end
 
 function TreeTabClass:BuildPowerReportList(currentStat)
 	local report = {}
+	local includeMasteries = self.includePowerReportMasteries
 
 	if not (currentStat and currentStat.stat) then
 		return report
@@ -1081,7 +1108,9 @@ function TreeTabClass:BuildPowerReportList(currentStat)
 	-- search all nodes, ignoring ascendancies, sockets, etc.
 	for nodeId, node in pairs(self.build.spec.nodes) do
 		local isAlloc = node.alloc or self.build.calcsTab.mainEnv.grantedPassives[nodeId]
-		if (node.type == "Normal" or node.type == "Keystone" or node.type == "Notable") and not node.ascendancyName then
+		local isRegularNode = node.type == "Normal" or node.type == "Keystone" or node.type == "Notable"
+		local isMasteryNode = includeMasteries and node.type == "Mastery"
+		if (isRegularNode or isMasteryNode) and not node.ascendancyName then
 			local pathDist
 			if isAlloc then
 				pathDist = #(node.depends or { }) == 0 and 1 or #node.depends
