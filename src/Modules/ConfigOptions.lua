@@ -1093,6 +1093,16 @@ Huge sets the radius to 11.
 		modList:NewMod("TotemsSummoned", "OVERRIDE", val, "Config", { type = "Condition", var = "Combat" })
 		modList:NewMod("Condition:HaveTotem", "FLAG", val >= 1, "Config", { type = "Condition", var = "Combat" })
 	end },
+	{
+		var = "fullDPSAutoMaxTotems",
+		type = "check",
+		label = "Auto-count Totems in Full DPS?",
+		ifFlag = "totem",
+		tooltip =
+			"If enabled, Full DPS will use your current number of Summoned Totems for Totem skills\n"
+			.. "when their skill Count is 1.\n\n"
+			.. "Manual Count values greater than 1 are still respected.",
+	},
 	{ var = "conditionSummonedGolemInPast8Sec", type = "check", label = "Summoned Golem in past 8 Seconds?", ifCond = "SummonedGolemInPast8Sec", implyCond = "SummonedGolemInPast10Sec", apply = function(val, modList, enemyModList)
 		modList:NewMod("Condition:SummonedGolemInPast8Sec", "FLAG", true, "Config", { type = "Condition", var = "Combat" })
 	end },
