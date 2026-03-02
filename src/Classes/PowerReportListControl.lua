@@ -116,6 +116,27 @@ function PowerReportListClass:OnSelClick(index, report, doubleClick)
 	end
 end
 
+function PowerReportListClass:AddValueTooltip(tooltip, index, report)
+	tooltip:Clear()
+	if not report then
+		return
+	end
+
+	tooltip:AddLine(16, colorCodes.CRAFTED..report.name)
+	if report.cluster then
+		tooltip:AddLine(16, "^7Source: Cluster Jewel passive")
+	end
+
+	if report.stats and report.stats[1] then
+		tooltip:AddSeparator(14)
+		for _, line in ipairs(report.stats) do
+			if line ~= " " then
+				tooltip:AddLine(16, colorCodes.MAGIC..line)
+			end
+		end
+	end
+end
+
 function PowerReportListClass:GetRowValue(column, index, report)
 	return column == 1 and report.type
 		or column == 2 and report.name

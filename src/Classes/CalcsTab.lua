@@ -477,6 +477,14 @@ function CalcsTabClass:PowerBuilder()
 	local useFullDPS = self.powerStat and self.powerStat.stat == "FullDPS"
 	local calcFunc, calcBase = self:GetMiscCalculator()
 	local cache = { }
+	local cacheOwner = { }
+	local masteryChoiceCache = { }
+	local usedMasteryEffects = { }
+	for masteryNodeId, effectId in pairs(self.build.spec.masterySelections) do
+		if self.build.spec.allocNodes[masteryNodeId] then
+			usedMasteryEffects[effectId] = masteryNodeId
+		end
+	end
 	local distanceMap = { }
 	local distanceList = { }
 	local newPowerMax = {
@@ -528,16 +536,94 @@ function CalcsTabClass:PowerBuilder()
 			if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] then
 				if not cache[node.modKey] then
 					cache[node.modKey] = calcFunc({ addNodes = { [node] = true } }, useFullDPS)
+					cacheOwner[node.modKey] = nodeId
 				end
 				local output = cache[node.modKey]
+				local pathCalcNode = node
+				node.power.cacheOwner = cacheOwner[node.modKey] == nodeId
+
+				if node.type == "Mastery" and node.masteryEffects and #node.masteryEffects > 0 then
+					local masteryChoice = masteryChoiceCache[node.modKey]
+					if not masteryChoice then
+						masteryChoice = { options = { } }
+						local bestScore
+						for _, effectRef in ipairs(node.masteryEffects) do
+							local effect = self.build.spec.tree.masteryEffects[effectRef.effect]
+							local assignedNodeId = effect and usedMasteryEffects[effect.id]
+							-- A mastery effect can only be selected once across allocated masteries.
+							-- Skip effects already used by another allocated node.
+							if effect and effect.modList and (not assignedNodeId or assignedNodeId == node.id) then
+								local effectNode = {
+									id = node.id,
+									type = "Mastery",
+									name = node.name,
+									modList = effect.modList,
+									modKey = effect.modKey
+								}
+								local effectKey = "masteryEffect:"..node.modKey..":"..effect.id
+								if not cache[effectKey] then
+									cache[effectKey] = calcFunc({ addNodes = { [effectNode] = true } }, useFullDPS)
+								end
+								local effectOutput = cache[effectKey]
+								local optionScore
+								local optionPathScore
+								if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
+									optionScore = self:CalculatePowerStat(self.powerStat, effectOutput, calcBase)
+									optionPathScore = optionScore
+									if node.path and not node.ascendancyName and node.pathDist > 1 then
+										local effectPathNodes = { }
+										for _, pathNode in pairs(node.path) do
+											if pathNode == node then
+												effectPathNodes[effectNode] = true
+											else
+												effectPathNodes[pathNode] = true
+											end
+										end
+										optionPathScore = self:CalculatePowerStat(self.powerStat, calcFunc({ addNodes = effectPathNodes }, useFullDPS), calcBase)
+									end
+								else
+									optionScore = self:CalculateCombinedOffDefStat(effectOutput, calcBase)
+									optionPathScore = optionScore
+								end
+
+								t_insert(masteryChoice.options, {
+									id = effect.id,
+									sd = effect.sd,
+									singleStat = optionScore,
+									pathPower = optionPathScore
+								})
+
+								if bestScore == nil or optionScore > bestScore then
+									bestScore = optionScore
+									masteryChoice.output = effectOutput
+									masteryChoice.effect = effect
+									masteryChoice.effectNode = effectNode
+								end
+							end
+						end
+						masteryChoiceCache[node.modKey] = masteryChoice
+					end
+
+					node.power.masteryOptions = masteryChoice.options
+					if masteryChoice.output then
+						output = masteryChoice.output
+						pathCalcNode = masteryChoice.effectNode
+						node.power.masteryEffectSd = masteryChoice.effect.sd
+					end
+				end
+
 				if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
 					node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
 					if node.path and not node.ascendancyName then
 						newPowerMax.singleStat = m_max(newPowerMax.singleStat, node.power.singleStat)
 						node.power.pathPower = node.power.singleStat
 						local pathNodes = { }
-						for _, node in pairs(node.path) do
-							pathNodes[node] = true
+						for _, pathNode in pairs(node.path) do
+							pathNodes[pathNode] = true
+						end
+						if pathCalcNode ~= node and pathNodes[node] then
+							pathNodes[node] = nil
+							pathNodes[pathCalcNode] = true
 						end
 						if node.pathDist > 1 then
 							node.power.pathPower = self:CalculatePowerStat(self.powerStat, calcFunc({ addNodes = pathNodes }, useFullDPS), calcBase)
@@ -554,17 +640,20 @@ function CalcsTabClass:PowerBuilder()
 					end
 				end
 			elseif node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] then
-				if not cache[node.modKey.."_remove"] then
-					cache[node.modKey.."_remove"] = calcFunc({ removeNodes = { [node] = true } }, useFullDPS)
+				local removeKey = node.modKey.."_remove"
+				if not cache[removeKey] then
+					cache[removeKey] = calcFunc({ removeNodes = { [node] = true } }, useFullDPS)
+					cacheOwner[removeKey] = nodeId
 				end
-				local output = cache[node.modKey.."_remove"]
+				local output = cache[removeKey]
+				node.power.cacheOwner = cacheOwner[removeKey] == nodeId
 				if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
 					node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
 					if node.depends and not node.ascendancyName then
 						node.power.pathPower = node.power.singleStat
 						local pathNodes = { }
-						for _, node in pairs(node.depends) do
-							pathNodes[node] = true
+						for _, depNode in pairs(node.depends) do
+							pathNodes[depNode] = true
 						end
 						if #node.depends > 1 then
 							node.power.pathPower = self:CalculatePowerStat(self.powerStat, calcFunc({ removeNodes = pathNodes }, useFullDPS), calcBase)
