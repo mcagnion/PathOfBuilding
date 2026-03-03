@@ -4,7 +4,6 @@
 -- Configuration tab for the current build.
 --
 local t_insert = table.insert
-local t_sort = table.sort
 local t_concat = table.concat
 local m_min = math.min
 local m_max = math.max
@@ -14,6 +13,7 @@ local s_upper = string.upper
 
 local varList = LoadModule("Modules/ConfigOptions")
 local configVisibility = LoadModule("Modules/ConfigVisibility")
+local enemyConditionUtils = LoadModule("Modules/EnemyConditionUtils")
 
 local ConfigTabClass = newClass("ConfigTab", "UndoHandler", "ControlHost", "Control", function(self, build)
 	self.UndoHandler()
@@ -152,86 +152,31 @@ local ConfigTabClass = newClass("ConfigTab", "UndoHandler", "ControlHost", "Cont
 		return out
 	end
 
+	local ailmentSourceLabels = {
+		Chill = "Ailment calculation: Chill",
+		Freeze = "Ailment calculation: Freeze",
+		Shock = "Ailment calculation: Shock",
+		Ignite = "Ailment calculation: Ignite",
+		Scorch = "Ailment calculation: Scorch",
+		Brittle = "Ailment calculation: Brittle",
+		Sap = "Ailment calculation: Sap",
+		Bleed = "Ailment calculation: Bleed",
+		Poison = "Ailment calculation: Poison",
+		Blind = "Debuff calculation: Blind",
+	}
+
 	local function formatConditionSource(source)
-		if not source then
-			return source
-		end
-		local ailmentSourceLabels = {
-			Chill = "Ailment calculation: Chill",
-			Freeze = "Ailment calculation: Freeze",
-			Shock = "Ailment calculation: Shock",
-			Ignite = "Ailment calculation: Ignite",
-			Scorch = "Ailment calculation: Scorch",
-			Brittle = "Ailment calculation: Brittle",
-			Sap = "Ailment calculation: Sap",
-			Bleed = "Ailment calculation: Bleed",
-			Poison = "Ailment calculation: Poison",
-			Blind = "Debuff calculation: Blind",
-		}
-		if ailmentSourceLabels[source] then
-			return ailmentSourceLabels[source]
-		end
-		local sourceType = source:match("[^:]+")
-		if sourceType == "Tree" then
-			local nodeId = source:match("Tree:(%d+)")
-			if nodeId then
-				local nodeIdNumber = tonumber(nodeId)
-				local node = self.build.spec.nodes[nodeIdNumber]
-					or self.build.spec.tree.nodes[nodeIdNumber]
-					or (
-						self.build.latestTree
-						and self.build.latestTree.nodes
-						and self.build.latestTree.nodes[nodeIdNumber]
-					)
-				if node and node.dn then
-					return "Tree: " .. StripEscapes(node.dn)
-				end
-			end
-			local tattooNodeId = source:match("Tree:(%w+)")
-			local tattooMap = self.build.spec.tree
-				and self.build.spec.tree.tattoo
-				and self.build.spec.tree.tattoo.idMap
-			if tattooNodeId and tattooMap and tattooMap[tattooNodeId] then
-				return "Tree: " .. StripEscapes(tattooMap[tattooNodeId])
-			end
-		elseif sourceType == "Item" then
-			local itemId = source:match("Item:(%d+):.+")
-			local item = itemId and self.build.itemsTab.items[tonumber(itemId)]
-			if item and item.name then
-				return "Item: " .. StripEscapes(item.name)
-			end
-		elseif sourceType == "Skill" then
-			local skillId = source:match("Skill:(.+)")
-			local skill = skillId and self.build.data.skills[skillId]
-			if skill and skill.name then
-				return "Skill: " .. StripEscapes(skill.name)
-			end
-		elseif sourceType == "Pantheon" then
-			local godName = source:match("Pantheon:(.+)")
-			if godName then
-				return "Pantheon: " .. StripEscapes(godName)
-			end
-		end
-		return source
+		return enemyConditionUtils.formatConditionSource(self.build, source, ailmentSourceLabels)
 	end
 
 	local function formatConditionSourcesTooltip(mods)
 		if not mods then
 			return
 		end
-		local sourceSeen = { }
-		local sourceList = { }
-		for _, mod in ipairs(mods) do
-			local source = mod and formatConditionSource(mod.source)
-			if source and source ~= "Base" and not sourceSeen[source] then
-				sourceSeen[source] = true
-				t_insert(sourceList, source)
-			end
-		end
+		local sourceList = enemyConditionUtils.collectConditionSources(self.build, mods, ailmentSourceLabels)
 		if #sourceList == 0 then
 			return
 		end
-		t_sort(sourceList)
 		local maxSources = 4
 		local shownSources = { }
 		for i = 1, m_min(maxSources, #sourceList) do
@@ -607,7 +552,7 @@ local ConfigTabClass = newClass("ConfigTab", "UndoHandler", "ControlHost", "Cont
 					return self.configSets[self.activeConfigSetId].input[ifOption]
 				end))
 			end
-				if varData.ifCond then
+			if varData.ifCond then
 				t_insert(shownFuncs, listOrSingleIfOption(varData.ifCond, function(ifOption)
 					if implyCond(varData) then
 						return true
@@ -628,11 +573,11 @@ local ConfigTabClass = newClass("ConfigTab", "UndoHandler", "ControlHost", "Cont
 					end
 					return out
 				end))
-				end
-				if varData.ifMinionCond then
-					t_insert(shownFuncs, listOrSingleIfOption(varData.ifMinionCond, function(ifOption)
-						if implyCond(varData) then
-							return true
+			end
+			if varData.ifMinionCond then
+				t_insert(shownFuncs, listOrSingleIfOption(varData.ifMinionCond, function(ifOption)
+					if implyCond(varData) then
+						return true
 					end
 					return self.build.calcsTab.mainEnv.minionConditionsUsed[ifOption]
 				end))
@@ -645,10 +590,10 @@ local ConfigTabClass = newClass("ConfigTab", "UndoHandler", "ControlHost", "Cont
 					if not mods then
 						return out
 					end
-						for _, mod in ipairs(mods) do
-							out = (out and out.."\n" or "") .. modLib.formatMod(mod) .. "|" .. mod.source
-						end
-						return out
+					for _, mod in ipairs(mods) do
+						out = (out and out.."\n" or "") .. modLib.formatMod(mod) .. "|" .. mod.source
+					end
+					return out
 				end))
 			end
 			if varData.ifEnemyCond then
@@ -688,6 +633,7 @@ local ConfigTabClass = newClass("ConfigTab", "UndoHandler", "ControlHost", "Cont
 					end
 					return tooltipPrefix or out
 				end))
+			end
 			local extraEnemyConditionHints = getEnemyConditionHints(varData)
 			if extraEnemyConditionHints and not varData.ifEnemyCond then
 				t_insert(tooltipFuncs, function()
@@ -716,18 +662,6 @@ local ConfigTabClass = newClass("ConfigTab", "UndoHandler", "ControlHost", "Cont
 					end
 					return joinTooltipLines(tooltipPrefix, out)
 				end)
-			end
-			if varData.ifCondTrue then
-				t_insert(shownFuncs, listOrSingleIfOption(varData.ifCondTrue, function(ifOption)
-					return self.build.calcsTab.mainEnv.player.modDB.conditions[ifOption]
-				end))
-				t_insert(tooltipFuncs, listOrSingleIfTooltip(varData.ifCondTrue, function(ifOption)
-					if not launch.devModeAlt then
-						return
-					end
-					local out = "Condition state: " .. ifOption .. "=" .. tostring(self.build.calcsTab.mainEnv.player.modDB.conditions[ifOption])
-					return out
-				end))
 			end
 			if varData.ifMult then
 				t_insert(shownFuncs, listOrSingleIfOption(varData.ifMult, function(ifOption)
