@@ -572,6 +572,13 @@ function calcs.initEnv(build, mode, override, specEnv)
 			env.minion.modDB.parent = cachedMinionDB
 		end
 	end
+	if override.assumeEnemyConditions then
+		for condition, enabled in pairs(override.assumeEnemyConditions) do
+			if enabled then
+				env.enemyDB:NewMod("Condition:"..condition, "FLAG", true, "PowerReport")
+			end
+		end
+	end
 
 	if override.conditions then
 		for _, flag in ipairs(override.conditions) do
