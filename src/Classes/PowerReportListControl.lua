@@ -7,6 +7,8 @@
 local t_insert = table.insert
 local t_remove = table.remove
 local t_sort = table.sort
+local t_concat = table.concat
+local m_min = math.min
 
 local PowerReportListClass = newClass("PowerReportListControl", "ListControl", function(self, anchor, rect, nodeSelectCallback)
 	self.ListControl(anchor, rect, 16, "VERTICAL", false)
@@ -41,7 +43,7 @@ function PowerReportListClass:SetReport(stat, report)
 	self.originalList = report or {}
 
 	if stat and stat.stat then
-		self.label = report and "Click to focus node on tree" or "Building Tree..."
+		self.label = report and "Click to focus node on tree (tooltips show assumed enemy conditions)" or "Building Tree..."
 	else
 		self.label = "^7\""..self.powerColumn.label.."\" not supported.  Select a specific stat from the dropdown."
 	end
@@ -134,6 +136,92 @@ function PowerReportListClass:AddValueTooltip(tooltip, index, report)
 				tooltip:AddLine(16, colorCodes.MAGIC..line)
 			end
 		end
+	end
+
+	local function conditionKey(conditionList)
+		return conditionList and t_concat(conditionList, ",") or ""
+	end
+	local function subtractConditionLists(conditionList, baseConditionList)
+		if not conditionList then
+			return nil
+		end
+		local baseSet = { }
+		for _, condition in ipairs(baseConditionList or { }) do
+			baseSet[condition] = true
+		end
+		local out = { }
+		local seen = { }
+		for _, condition in ipairs(conditionList) do
+			if not baseSet[condition] and not seen[condition] then
+				seen[condition] = true
+				t_insert(out, condition)
+			end
+		end
+		if #out == 0 then
+			return nil
+		end
+		t_sort(out)
+		return out
+	end
+	local function findConditionSources(condition)
+		local sourceMap = report.enemyConditionSourceMap
+		if sourceMap then
+			return sourceMap[condition]
+		end
+	end
+	local function formatSources(sources)
+		if not sources or #sources == 0 then
+			return nil
+		end
+		local limit = 3
+		local shown = { }
+		for i = 1, m_min(limit, #sources) do
+			t_insert(shown, sources[i])
+		end
+		local out = t_concat(shown, ", ")
+		if #sources > limit then
+			out = out .. " +" .. (#sources - limit) .. " more"
+		end
+		return out
+	end
+	local function addAssumedConditionBlock(title, conditions)
+		if not conditions or #conditions == 0 then
+			return false
+		end
+		tooltip:AddSeparator(14)
+		tooltip:AddLine(16, "^7" .. title)
+		for _, condition in ipairs(conditions) do
+			local sourceText = formatSources(findConditionSources(condition))
+			if sourceText then
+				tooltip:AddLine(16, "^7- " .. condition .. "^8 (" .. sourceText .. ")")
+			else
+				tooltip:AddLine(16, "^7- " .. condition)
+			end
+		end
+		return true
+	end
+
+	local nodeAssumptions = subtractConditionLists(
+		report.assumedEnemyConditions,
+		report.baseAssumedEnemyConditions
+	)
+	local pathAssumptions = subtractConditionLists(
+		report.pathAssumedEnemyConditions,
+		report.baseAssumedEnemyConditions
+	)
+	local hasAssumptions = addAssumedConditionBlock(
+		"Power Report assumptions added by this node:",
+		nodeAssumptions
+	)
+	if conditionKey(pathAssumptions) ~= conditionKey(nodeAssumptions) then
+		hasAssumptions = addAssumedConditionBlock(
+			"Power Report assumptions added by node/path:",
+			pathAssumptions
+		) or hasAssumptions
+	end
+	if hasAssumptions then
+		tooltip:AddLine(16, "^8Affects Power/Per Point values only.")
+		tooltip:AddLine(16, "^8Enable matching Configuration options to match these values.")
 	end
 end
 
