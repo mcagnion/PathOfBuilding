@@ -15,6 +15,7 @@ local m_max = math.max
 local m_floor = math.floor
 local band = bit.band
 local b_rshift = bit.rshift
+local enemyConditionUtils = LoadModule("Modules/EnemyConditionUtils")
 
 local PassiveTreeViewClass = newClass("PassiveTreeView", function(self)
 	self.ring = NewImageHandle()
@@ -1399,98 +1400,6 @@ function PassiveTreeViewClass:AddNodeTooltip(tooltip, node, build)
 			tooltip:AddLine(16, string.format("DPS power: %g   Defence power: %g", node.power.offence, node.power.defence))
 		end
 	end
-	local function conditionKey(conditionList)
-		return conditionList and t_concat(conditionList, ",") or ""
-	end
-	local function unionConditionLists(...)
-		local set = { }
-		for i = 1, select("#", ...) do
-			local list = select(i, ...)
-			if list then
-				for _, condition in ipairs(list) do
-					set[condition] = true
-				end
-			end
-		end
-		if not next(set) then
-			return nil
-		end
-		local out = { }
-		for condition in pairs(set) do
-			t_insert(out, condition)
-		end
-		t_sort(out)
-		return out
-	end
-	local function subtractConditionLists(conditionList, baseConditionList)
-		if not conditionList then
-			return nil
-		end
-		local baseSet = { }
-		for _, condition in ipairs(baseConditionList or { }) do
-			baseSet[condition] = true
-		end
-		local seen = { }
-		local out = { }
-		for _, condition in ipairs(conditionList) do
-			if not baseSet[condition] and not seen[condition] then
-				seen[condition] = true
-				t_insert(out, condition)
-			end
-		end
-		if #out == 0 then
-			return nil
-		end
-		t_sort(out)
-		return out
-	end
-	local function formatConditionSource(source)
-		if not source then
-			return source
-		end
-		local sourceType = source:match("[^:]+")
-		if sourceType == "Tree" then
-			local nodeId = source:match("Tree:(%d+)")
-			if nodeId then
-				local nodeIdNumber = tonumber(nodeId)
-				local sourceNode = build.spec.nodes[nodeIdNumber]
-					or build.spec.tree.nodes[nodeIdNumber]
-					or (
-						build.latestTree
-						and build.latestTree.nodes
-						and build.latestTree.nodes[nodeIdNumber]
-					)
-				if sourceNode and sourceNode.dn then
-					return "Tree: " .. StripEscapes(sourceNode.dn)
-				end
-			end
-			local tattooNodeId = source:match("Tree:(%w+)")
-			local tattooMap = build.spec.tree
-				and build.spec.tree.tattoo
-				and build.spec.tree.tattoo.idMap
-			if tattooNodeId and tattooMap and tattooMap[tattooNodeId] then
-				return "Tree: " .. StripEscapes(tattooMap[tattooNodeId])
-			end
-		elseif sourceType == "Item" then
-			local itemId = source:match("Item:(%d+):.+")
-			local item = itemId and build.itemsTab.items[tonumber(itemId)]
-			if item and item.name then
-				return "Item: " .. StripEscapes(item.name)
-			end
-		elseif sourceType == "Skill" then
-			local skillId = source:match("Skill:(.+)")
-			local skill = skillId and build.data.skills[skillId]
-			if skill and skill.name then
-				return "Skill: " .. StripEscapes(skill.name)
-			end
-		elseif sourceType == "Pantheon" then
-			local godName = source:match("Pantheon:(.+)")
-			if godName then
-				return "Pantheon: " .. StripEscapes(godName)
-			end
-		end
-		return source
-	end
 	local function addAssumptionWarning(title, conditionList)
 		if not conditionList or #conditionList == 0 then
 			return false
@@ -1501,7 +1410,7 @@ function PassiveTreeViewClass:AddNodeTooltip(tooltip, node, build)
 			local sources = { }
 			local sourceSeen = { }
 			for _, mod in ipairs(build.calcsTab.mainEnv.enemyConditionsUsed[condition] or { }) do
-				local source = mod and formatConditionSource(mod.source)
+				local source = mod and enemyConditionUtils.formatConditionSource(build, mod.source)
 				if source and source ~= "Base" and not sourceSeen[source] then
 					sourceSeen[source] = true
 					t_insert(sources, source)
@@ -1523,11 +1432,11 @@ function PassiveTreeViewClass:AddNodeTooltip(tooltip, node, build)
 	local hasAssumptionWarning = false
 	if node.power then
 		local baseAssumptions = build.calcsTab.powerBaseAssumedEnemyConditions
-		local nodeAssumptions = subtractConditionLists(
+		local nodeAssumptions = enemyConditionUtils.subtractConditionLists(
 			node.power.assumedEnemyConditions,
 			baseAssumptions
 		)
-		local pathAssumptions = subtractConditionLists(
+		local pathAssumptions = enemyConditionUtils.subtractConditionLists(
 			node.power.pathAssumedEnemyConditions,
 			baseAssumptions
 		)
@@ -1535,7 +1444,7 @@ function PassiveTreeViewClass:AddNodeTooltip(tooltip, node, build)
 			"^7Heat map assumptions added by this node:",
 			nodeAssumptions
 		) or hasAssumptionWarning
-		if conditionKey(pathAssumptions) ~= conditionKey(nodeAssumptions) then
+		if enemyConditionUtils.conditionKey(pathAssumptions) ~= enemyConditionUtils.conditionKey(nodeAssumptions) then
 			hasAssumptionWarning = addAssumptionWarning(
 				"^7Path/per-point assumptions added by node/path:",
 				pathAssumptions
@@ -1545,28 +1454,28 @@ function PassiveTreeViewClass:AddNodeTooltip(tooltip, node, build)
 			local optionAssumptions = { }
 			local optionPathAssumptions = { }
 			for _, option in ipairs(node.power.masteryOptions) do
-				optionAssumptions = unionConditionLists(
+				optionAssumptions = enemyConditionUtils.unionConditionLists(
 					optionAssumptions,
-					subtractConditionLists(
+					enemyConditionUtils.subtractConditionLists(
 						option.assumedEnemyConditions,
 						baseAssumptions
 					)
 				)
-				optionPathAssumptions = unionConditionLists(
+				optionPathAssumptions = enemyConditionUtils.unionConditionLists(
 					optionPathAssumptions,
-					subtractConditionLists(
+					enemyConditionUtils.subtractConditionLists(
 						option.pathAssumedEnemyConditions,
 						baseAssumptions
 					)
 				)
 			end
-			if conditionKey(optionAssumptions) ~= conditionKey(nodeAssumptions) then
+			if enemyConditionUtils.conditionKey(optionAssumptions) ~= enemyConditionUtils.conditionKey(nodeAssumptions) then
 				hasAssumptionWarning = addAssumptionWarning(
 					"^7Mastery option assumptions added by option node:",
 					optionAssumptions
 				) or hasAssumptionWarning
 			end
-			if conditionKey(optionPathAssumptions) ~= conditionKey(optionAssumptions) then
+			if enemyConditionUtils.conditionKey(optionPathAssumptions) ~= enemyConditionUtils.conditionKey(optionAssumptions) then
 				hasAssumptionWarning = addAssumptionWarning(
 					"^7Mastery option assumptions added by option path:",
 					optionPathAssumptions

@@ -9,6 +9,7 @@ local t_remove = table.remove
 local t_sort = table.sort
 local t_concat = table.concat
 local m_min = math.min
+local enemyConditionUtils = LoadModule("Modules/EnemyConditionUtils")
 
 local PowerReportListClass = newClass("PowerReportListControl", "ListControl", function(self, anchor, rect, nodeSelectCallback)
 	self.ListControl(anchor, rect, 16, "VERTICAL", false)
@@ -138,31 +139,6 @@ function PowerReportListClass:AddValueTooltip(tooltip, index, report)
 		end
 	end
 
-	local function conditionKey(conditionList)
-		return conditionList and t_concat(conditionList, ",") or ""
-	end
-	local function subtractConditionLists(conditionList, baseConditionList)
-		if not conditionList then
-			return nil
-		end
-		local baseSet = { }
-		for _, condition in ipairs(baseConditionList or { }) do
-			baseSet[condition] = true
-		end
-		local out = { }
-		local seen = { }
-		for _, condition in ipairs(conditionList) do
-			if not baseSet[condition] and not seen[condition] then
-				seen[condition] = true
-				t_insert(out, condition)
-			end
-		end
-		if #out == 0 then
-			return nil
-		end
-		t_sort(out)
-		return out
-	end
 	local function findConditionSources(condition)
 		local sourceMap = report.enemyConditionSourceMap
 		if sourceMap then
@@ -201,11 +177,11 @@ function PowerReportListClass:AddValueTooltip(tooltip, index, report)
 		return true
 	end
 
-	local nodeAssumptions = subtractConditionLists(
+	local nodeAssumptions = enemyConditionUtils.subtractConditionLists(
 		report.assumedEnemyConditions,
 		report.baseAssumedEnemyConditions
 	)
-	local pathAssumptions = subtractConditionLists(
+	local pathAssumptions = enemyConditionUtils.subtractConditionLists(
 		report.pathAssumedEnemyConditions,
 		report.baseAssumedEnemyConditions
 	)
@@ -213,7 +189,7 @@ function PowerReportListClass:AddValueTooltip(tooltip, index, report)
 		"Power Report assumptions added by this node:",
 		nodeAssumptions
 	)
-	if conditionKey(pathAssumptions) ~= conditionKey(nodeAssumptions) then
+	if enemyConditionUtils.conditionKey(pathAssumptions) ~= enemyConditionUtils.conditionKey(nodeAssumptions) then
 		hasAssumptions = addAssumedConditionBlock(
 			"Power Report assumptions added by node/path:",
 			pathAssumptions

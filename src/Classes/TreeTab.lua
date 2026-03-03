@@ -18,6 +18,7 @@ local s_format = string.format
 local s_gsub = string.gsub
 local s_byte = string.byte
 local dkjson = require "dkjson"
+local enemyConditionUtils = LoadModule("Modules/EnemyConditionUtils")
 
 local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 	self.ControlHost()
@@ -1104,8 +1105,8 @@ function TreeTabClass:BuildPowerReportList(currentStat)
 			fmt = ".1f"
 		}
 	end
-		local statScale = (displayStat.pc or displayStat.mod) and 100 or 1
-		local function formatPowerValues(nodePower, pathPower)
+	local statScale = (displayStat.pc or displayStat.mod) and 100 or 1
+	local function formatPowerValues(nodePower, pathPower)
 		local nodePowerStr = s_format("%"..displayStat.fmt, nodePower)
 		local pathPowerStr = s_format("%"..displayStat.fmt, pathPower)
 
@@ -1121,74 +1122,15 @@ function TreeTabClass:BuildPowerReportList(currentStat)
 			pathPowerStr = colorCodes.POSITIVE .. pathPowerStr
 		elseif (pathPower < 0 and not displayStat.lowerIsBetter) or (pathPower > 0 and displayStat.lowerIsBetter) then
 			pathPowerStr = colorCodes.NEGATIVE .. pathPowerStr
-			end
-			return nodePowerStr, pathPowerStr
 		end
-		local function formatConditionSource(source)
-			if not source then
-				return source
-			end
-			local sourceType = source:match("[^:]+")
-			if sourceType == "Tree" then
-				local nodeId = source:match("Tree:(%d+)")
-				if nodeId then
-					local nodeIdNumber = tonumber(nodeId)
-					local node = self.build.spec.nodes[nodeIdNumber]
-						or self.build.spec.tree.nodes[nodeIdNumber]
-						or (
-							self.build.latestTree
-							and self.build.latestTree.nodes
-							and self.build.latestTree.nodes[nodeIdNumber]
-						)
-					if node and node.dn then
-						return "Tree: " .. StripEscapes(node.dn)
-					end
-				end
-				local tattooNodeId = source:match("Tree:(%w+)")
-				local tattooMap = self.build.spec.tree
-					and self.build.spec.tree.tattoo
-					and self.build.spec.tree.tattoo.idMap
-				if tattooNodeId and tattooMap and tattooMap[tattooNodeId] then
-					return "Tree: " .. StripEscapes(tattooMap[tattooNodeId])
-				end
-			elseif sourceType == "Item" then
-				local itemId = source:match("Item:(%d+):.+")
-				local item = itemId and self.build.itemsTab.items[tonumber(itemId)]
-				if item and item.name then
-					return "Item: " .. StripEscapes(item.name)
-				end
-			elseif sourceType == "Skill" then
-				local skillId = source:match("Skill:(.+)")
-				local skill = skillId and self.build.data.skills[skillId]
-				if skill and skill.name then
-					return "Skill: " .. StripEscapes(skill.name)
-				end
-			elseif sourceType == "Pantheon" then
-				local godName = source:match("Pantheon:(.+)")
-				if godName then
-					return "Pantheon: " .. StripEscapes(godName)
-				end
-			end
-			return source
-		end
-		local enemyConditionSourceMap = { }
-		local baseAssumedEnemyConditions =
-			self.build.calcsTab.powerBaseAssumedEnemyConditions
-		for condition, mods in pairs(self.build.calcsTab.mainEnv.enemyConditionsUsed or { }) do
-			local seenSources = { }
-			local sources = { }
-			for _, mod in ipairs(mods) do
-				local source = mod and formatConditionSource(mod.source)
-				if source and source ~= "Base" and not seenSources[source] then
-					seenSources[source] = true
-					t_insert(sources, source)
-				end
-		end
-		if #sources > 0 then
-			t_sort(sources)
-			enemyConditionSourceMap[condition] = sources
-		end
+		return nodePowerStr, pathPowerStr
 	end
+	local enemyConditionSourceMap = enemyConditionUtils.buildEnemyConditionSourceMap(
+		self.build,
+		self.build.calcsTab.mainEnv.enemyConditionsUsed
+	)
+	local baseAssumedEnemyConditions =
+		self.build.calcsTab.powerBaseAssumedEnemyConditions
 
 	-- search all nodes, ignoring ascendancies, sockets, etc.
 	for nodeId, node in pairs(self.build.spec.nodes) do
