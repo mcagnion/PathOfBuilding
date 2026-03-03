@@ -3957,6 +3957,13 @@ function calcs.offence(env, actor, activeSkill)
 		else
 			output.KnockbackChanceOnHit = skillModList:Sum("BASE", cfg, "EnemyKnockbackChance")
 		end
+		if not skillFlags.hit or skillModList:Flag(cfg, "CannotBlind") then
+			output.BlindChanceOnHit = 0
+			output.BlindChanceOnCrit = 0
+		else
+			output.BlindChanceOnHit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyBlindChance"))
+			output.BlindChanceOnCrit = output.BlindChanceOnHit
+		end
 		output.ImpaleChance = env.mode_effective and m_min(100, skillModList:Sum("BASE", cfg, "ImpaleChance")) or 0
 		if skillModList:Sum("BASE", cfg, "FireExposureChance") > 0 then
 			skillFlags.applyFireExposure = true
@@ -5214,6 +5221,12 @@ function calcs.offence(env, actor, activeSkill)
 				}
 			end
 		end
+		output.BlindChance = m_min(
+			100,
+			output.BlindChanceOnHit * (1 - output.CritChance / 100)
+			+ output.BlindChanceOnCrit * output.CritChance / 100
+			+ enemyDB:Sum("BASE", nil, "SelfBlindChance")
+		)
 
 		-- Calculate enemy stun modifiers
 		local enemyStunThresholdRed = -skillModList:Sum("INC", cfg, "EnemyStunThreshold")
@@ -5382,6 +5395,7 @@ function calcs.offence(env, actor, activeSkill)
 		combineStat("SapChance", "AVERAGE")
 		combineStat("SapEffectMod", "AVERAGE")
 		combineStat("SapDuration", "AVERAGE")
+		combineStat("BlindChance", "AVERAGE")
 		combineStat("ImpaleChance", "AVERAGE")
 		combineStat("ImpaleStoredDamage", "AVERAGE")
 		combineStat("ImpaleModifier", "CHANCE", "ImpaleChance")
