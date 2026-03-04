@@ -482,6 +482,37 @@ function CalcsTabClass:PowerBuilder()
 	local cacheOwner = { }
 	local masteryChoiceCache = { }
 	local usedMasteryEffects = { }
+	local primaryAscendancy = self.build.spec.curAscendClassBaseName
+	local secondaryAscendancy = self.build.spec.curSecondaryAscendClass
+		and self.build.spec.curSecondaryAscendClass.id
+	local currentClassId = self.build.spec.curClassId
+	local ascendNameMap = self.build.spec.tree.ascendNameMap or { }
+	local function isCurrentAscendancyNode(node)
+		return node
+			and node.ascendancyName
+			and (
+				node.ascendancyName == primaryAscendancy
+				or node.ascendancyName == secondaryAscendancy
+			)
+	end
+	local function canUsePathPower(node)
+		return node.path and (not node.ascendancyName or isCurrentAscendancyNode(node))
+	end
+	local function isRemoteAscendancyCandidate(node)
+		if not (node and node.ascendancyName) then
+			return false
+		end
+		local ascendInfo = ascendNameMap[node.ascendancyName]
+		local isSameClassAsc = ascendInfo and ascendInfo.classId == currentClassId
+		return not isCurrentAscendancyNode(node)
+			and (
+				node.isBloodline
+				or (
+					isSameClassAsc
+					and (node.type == "Notable" or node.type == "Keystone")
+				)
+			)
+	end
 	local function buildAssumeEnemyConditions(output)
 		local assumptions
 		local candidates = output and output.PowerReportEnemyConditionsAvailable
@@ -550,10 +581,377 @@ function CalcsTabClass:PowerBuilder()
 		{ },
 		"__base"
 	)
+	local function getPowerSelectionValue(selection, output)
+		if not (selection and selection.stat and output) then
+			return nil
+		end
+		local value
+		if output.Minion and selection.stat ~= "FullDPS" and output.Minion[selection.stat] ~= nil then
+			value = output.Minion[selection.stat]
+		else
+			value = output[selection.stat]
+		end
+		if value == nil then
+			value = 0
+		end
+		if selection.transform then
+			value = selection.transform(value)
+		end
+		return value
+	end
+	self.powerBaseStatValue = getPowerSelectionValue(self.powerStat, calcBase)
 	self.powerBaseAssumedEnemyConditions = baseAssumedEnemyConditions
 	for masteryNodeId, effectId in pairs(self.build.spec.masterySelections) do
 		if self.build.spec.allocNodes[masteryNodeId] then
 			usedMasteryEffects[effectId] = masteryNodeId
+		end
+	end
+	local function isSmallAttributeNode(node)
+		return node and node.type == "Normal"
+			and (node.dn == "Strength" or node.dn == "Dexterity" or node.dn == "Intelligence")
+	end
+	local function isAttributeNotableNode(node)
+		local firstStatLine = node and node.sd and node.sd[1]
+		return node and node.type == "Notable" and firstStatLine and (
+			firstStatLine:match("%+30 to Dexterity")
+			or firstStatLine:match("%+30 to Strength")
+			or firstStatLine:match("%+30 to Intelligence")
+		)
+	end
+	local function isTattooEditableNode(node)
+		return node and (
+			node.isTattoo
+			or isSmallAttributeNode(node)
+			or isAttributeNotableNode(node)
+			or node.type == "Keystone"
+			or node.type == "Mastery"
+		)
+	end
+	local function makeTattooGroupKey(node)
+		if isSmallAttributeNode(node) then
+			return "SmallAttribute:" .. node.dn
+		end
+		return "Node:" .. node.id
+	end
+	local function getTattooCandidatesForNode(node)
+		local candidates = { }
+		local baseNode = self.build.spec.tree.nodes[node.id] or node
+		local nodeName = baseNode.dn or ""
+		local nodeValue = (baseNode.sd and baseNode.sd[1]) or ""
+		local numLinkedNodes = baseNode.linkedId and #baseNode.linkedId or 0
+		for _, tattoo in pairs(self.build.spec.tree.tattoo.nodes) do
+			if tattoo and not tattoo.legacy then
+				local matchesTarget = (
+					(nodeName:match((tattoo.targetType or ""):gsub("^Small ", "")))
+					or ((tattoo.targetValue or "") ~= "" and nodeValue:match(tattoo.targetValue))
+					or (
+						tattoo.targetType == "Small Attribute"
+						and (nodeName == "Intelligence" or nodeName == "Strength" or nodeName == "Dexterity")
+					)
+					or (tattoo.targetType == "Keystone" and baseNode.type == "Keystone")
+					or (tattoo.targetType == "Mastery" and baseNode.type == "Mastery")
+				)
+				if matchesTarget and tattoo.MinimumConnected <= numLinkedNodes then
+					t_insert(candidates, tattoo)
+				end
+			end
+		end
+		return candidates
+	end
+	local function makeTattooReplacementNode(baseNode, tattoo)
+		return {
+			id = baseNode.id,
+			type = baseNode.type,
+			name = baseNode.name,
+			dn = tattoo.dn,
+			sd = tattoo.sd,
+			modList = tattoo.modList,
+			modKey = tattoo.modKey,
+			isTattoo = true,
+			overrideType = tattoo.overrideType,
+			reminderText = tattoo.reminderText or { },
+		}
+	end
+	self.powerTattooOptions = { }
+	local function isRunegraftTattoo(tattoo)
+		return tattoo and (
+			tattoo.overrideType == "AlternateMastery"
+			or (tattoo.dn and tattoo.dn:find("Runegraft", 1, true) ~= nil)
+		)
+	end
+	local function calculatePowerScore(output)
+		if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
+			return self:CalculatePowerStat(self.powerStat, output, calcBase)
+		end
+		return self:CalculateCombinedOffDefStat(output, calcBase)
+	end
+	local function countKeys(tbl)
+		local count = 0
+		for _ in pairs(tbl or { }) do
+			count = count + 1
+		end
+		return count
+	end
+	local function getTattooCategory(tattoo)
+		if isRunegraftTattoo(tattoo) then
+			return "Runegraft"
+		end
+		if tattoo and (
+			tattoo.overrideType == "KeystoneTattoo"
+			or tattoo.ks
+			or tattoo.targetType == "Keystone"
+		) then
+			return "Keystone"
+		end
+		if tattoo and (tattoo["not"] or tattoo.targetType == "Notable") then
+			return "Notable"
+		end
+		if tattoo and tattoo.targetType == "Small Attribute" then
+			return "SmallAttribute"
+		end
+		return "Tattoo"
+	end
+	local function getTattooCategoryLabel(category)
+		if category == "Runegraft" then
+			return "Runegraft"
+		end
+		if category == "Keystone" then
+			return "Keystone Tattoo"
+		end
+		if category == "Notable" then
+			return "Notable Tattoo"
+		end
+		if category == "SmallAttribute" then
+			return "Small Attribute Tattoo"
+		end
+		return "Tattoo"
+	end
+	local function getTattooMaxCount(category)
+		if category == "Keystone" then
+			return 1
+		end
+		if category == "Notable" then
+			return 3
+		end
+		return 1
+	end
+	local function getReachablePathDist(node)
+		if not (node and node.path) then
+			return nil
+		end
+		local pathDist = node.pathDist
+		if not pathDist or pathDist <= 0 then
+			pathDist = #node.path
+		end
+		if not pathDist or pathDist <= 0 or pathDist >= 1000 then
+			return nil
+		end
+		return pathDist
+	end
+	local function makeTattooOverrideForNodes(baseNodes, tattoo)
+		local addNodes = { }
+		local removeNodes = { }
+		local tattooByBaseId = { }
+		for _, baseNode in ipairs(baseNodes) do
+			local tattooNode = makeTattooReplacementNode(baseNode, tattoo)
+			addNodes[tattooNode] = true
+			removeNodes[baseNode] = true
+			tattooByBaseId[baseNode.id] = tattooNode
+		end
+		return { addNodes = addNodes, removeNodes = removeNodes }, tattooByBaseId
+	end
+	local function makeTattooNearestOverrideForNodes(baseNodes, tattoo)
+		local addNodes = { }
+		local tattooByBaseId = { }
+		for _, baseNode in ipairs(baseNodes) do
+			local tattooNode = makeTattooReplacementNode(baseNode, tattoo)
+			addNodes[tattooNode] = true
+			tattooByBaseId[baseNode.id] = tattooNode
+		end
+		return { addNodes = addNodes }, tattooByBaseId
+	end
+	local function makeTattooNearestPathOverride(baseNodes, tattooByBaseId)
+		local pathNodes = { }
+		for _, baseNode in ipairs(baseNodes) do
+			local tattooNode = tattooByBaseId[baseNode.id]
+			for _, pathNode in pairs(baseNode.path or { }) do
+				local replacement = tattooByBaseId[pathNode.id]
+				if replacement then
+					pathNodes[replacement] = true
+				else
+					pathNodes[pathNode] = true
+				end
+			end
+			if tattooNode then
+				pathNodes[tattooNode] = true
+			end
+		end
+		return { addNodes = pathNodes }, countKeys(pathNodes)
+	end
+	local tattooCases = { }
+	for _, node in pairs(self.build.spec.nodes) do
+		if isTattooEditableNode(node) and not self.mainEnv.grantedPassives[node.id] then
+			for _, tattoo in ipairs(getTattooCandidatesForNode(node)) do
+				local tattooCategory = getTattooCategory(tattoo)
+				-- Keystone tattoos are intentionally ignored in power report calculations.
+				if tattooCategory ~= "Keystone" then
+					-- Skip no-op replacement (same underlying mod set)
+					if not (node.isTattoo and node.modKey == tattoo.modKey) then
+						local case = tattooCases[tattoo.id]
+						if not case then
+							case = {
+								tattoo = tattoo,
+								category = tattooCategory,
+								replacementByKey = { },
+								replacementCandidates = { },
+								nearestCandidates = { },
+							}
+							tattooCases[tattoo.id] = case
+						end
+						if node.alloc then
+							local groupKey = makeTattooGroupKey(node)
+							if not case.replacementByKey[groupKey] then
+								case.replacementByKey[groupKey] = node
+								t_insert(case.replacementCandidates, node)
+							end
+						else
+							local pathDist = getReachablePathDist(node)
+							if pathDist and canUsePathPower(node) then
+								t_insert(case.nearestCandidates, { node = node, pathDist = pathDist })
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	for tattooId, case in pairs(tattooCases) do
+		local tattoo = case.tattoo
+		local isRunegraftOption = isRunegraftTattoo(tattoo)
+		local category = case.category
+		local maxTattooCount = getTattooMaxCount(category)
+		local categoryLabel = getTattooCategoryLabel(category)
+		t_sort(case.replacementCandidates, function(a, b)
+			return a.id < b.id
+		end)
+		t_sort(case.nearestCandidates, function(a, b)
+			if a.pathDist == b.pathDist then
+				return a.node.id < b.node.id
+			end
+			return a.pathDist < b.pathDist
+		end)
+		local replacementMaxCount = maxTattooCount
+		if replacementMaxCount > #case.replacementCandidates then
+			replacementMaxCount = #case.replacementCandidates
+		end
+		if not isRunegraftOption then
+			local selectedReplacement = { }
+			local selectedReplacementById = { }
+			for count = 1, replacementMaxCount do
+				local bestCandidate
+				local bestAssumedEnemyConditions
+				local bestSingleStat
+				for _, candidate in ipairs(case.replacementCandidates) do
+					if not selectedReplacementById[candidate.id] then
+						local testNodes = { }
+						for i = 1, #selectedReplacement do
+							testNodes[i] = selectedReplacement[i]
+						end
+						t_insert(testNodes, candidate)
+						local replaceOverride = makeTattooOverrideForNodes(testNodes, tattoo)
+						local testNodeKey = { }
+						for _, node in ipairs(testNodes) do
+							t_insert(testNodeKey, tostring(node.id))
+						end
+						t_sort(testNodeKey)
+						local output, assumedEnemyConditions = calcWithPowerReportAssumptions(
+							replaceOverride,
+							"tattooReplace:" .. tattooId .. ":" .. count .. ":" .. t_concat(testNodeKey, ",")
+						)
+						local singleStat = calculatePowerScore(output)
+						if bestSingleStat == nil or singleStat > bestSingleStat then
+							bestCandidate = candidate
+							bestAssumedEnemyConditions = assumedEnemyConditions
+							bestSingleStat = singleStat
+						end
+					end
+				end
+				if not bestCandidate then
+					break
+				end
+				t_insert(selectedReplacement, bestCandidate)
+				selectedReplacementById[bestCandidate.id] = true
+				local firstNode = selectedReplacement[1]
+				local countLabel = count > 1 and (" x" .. count) or ""
+				t_insert(self.powerTattooOptions, {
+					baseNodeId = firstNode.id,
+					baseNodeName = firstNode.dn,
+					baseNodeX = firstNode.x,
+					baseNodeY = firstNode.y,
+					tattooName = tattoo.dn,
+					displayName = tattoo.dn .. " (" .. categoryLabel .. countLabel .. ", replace allocated)",
+					stats = tattoo.sd,
+					singleStat = bestSingleStat,
+					pathPower = nil,
+					pathDist = 0,
+					allocated = true,
+					isRunegraft = isRunegraftOption,
+					tattooCategory = category,
+					assumedEnemyConditions = bestAssumedEnemyConditions,
+					pathAssumedEnemyConditions = nil,
+				})
+				if maxTattooCount > 1 and count == 1 and (bestSingleStat or 0) <= 0 then
+					break
+				end
+			end
+		end
+		local nearestMaxCount = maxTattooCount
+		if nearestMaxCount > #case.nearestCandidates then
+			nearestMaxCount = #case.nearestCandidates
+		end
+		for count = 1, nearestMaxCount do
+			local nearestNodes = { }
+			for i = 1, count do
+				nearestNodes[i] = case.nearestCandidates[i].node
+			end
+			local addOverride, tattooByBaseId = makeTattooNearestOverrideForNodes(nearestNodes, tattoo)
+			local nearestNodeKey = { }
+			for _, node in ipairs(nearestNodes) do
+				t_insert(nearestNodeKey, tostring(node.id))
+			end
+			t_sort(nearestNodeKey)
+			local output, assumedEnemyConditions = calcWithPowerReportAssumptions(
+				addOverride,
+				"tattooNearestNode:" .. tattooId .. ":" .. count .. ":" .. t_concat(nearestNodeKey, ",")
+			)
+			local pathOverride, pathDist = makeTattooNearestPathOverride(nearestNodes, tattooByBaseId)
+			local pathOutput, pathAssumedEnemyConditions = calcWithPowerReportAssumptions(
+				pathOverride,
+				"tattooNearestPath:" .. tattooId .. ":" .. count .. ":" .. t_concat(nearestNodeKey, ",")
+			)
+			local nearestSingleStat = calculatePowerScore(output)
+			local firstNode = nearestNodes[1]
+			local countLabel = count > 1 and (" x" .. count) or ""
+			t_insert(self.powerTattooOptions, {
+				baseNodeId = firstNode.id,
+				baseNodeName = firstNode.dn,
+				baseNodeX = firstNode.x,
+				baseNodeY = firstNode.y,
+				tattooName = tattoo.dn,
+				displayName = tattoo.dn .. " (" .. categoryLabel .. countLabel .. ", nearest)",
+				stats = tattoo.sd,
+				singleStat = nearestSingleStat,
+				pathPower = calculatePowerScore(pathOutput),
+				pathDist = pathDist,
+				allocated = false,
+				isRunegraft = isRunegraftOption,
+				tattooCategory = category,
+				assumedEnemyConditions = assumedEnemyConditions,
+				pathAssumedEnemyConditions = pathAssumedEnemyConditions,
+			})
+			if maxTattooCount > 1 and count == 1 and (nearestSingleStat or 0) <= 0 then
+				break
+			end
 		end
 	end
 	local distanceMap = { }
@@ -579,9 +977,10 @@ function CalcsTabClass:PowerBuilder()
 	for nodeId, node in pairs(self.build.spec.nodes) do
 		wipeTable(node.power)
 		if node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] then
-			distanceMap[node.pathDist or 1000] = distanceMap[node.pathDist or 1000] or { }
-			distanceMap[node.pathDist or 1000][nodeId] = node
-			if not (self.nodePowerMaxDepth and self.nodePowerMaxDepth < node.pathDist) then
+			local nodeDistance = isRemoteAscendancyCandidate(node) and 1 or (node.pathDist or 1000)
+			distanceMap[nodeDistance] = distanceMap[nodeDistance] or { }
+			distanceMap[nodeDistance][nodeId] = node
+			if not (self.nodePowerMaxDepth and self.nodePowerMaxDepth < nodeDistance) then
 				total = total + 1
 			end
 		end
@@ -651,7 +1050,7 @@ function CalcsTabClass:PowerBuilder()
 								if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
 									optionScore = self:CalculatePowerStat(self.powerStat, effectOutput, calcBase)
 									optionPathScore = optionScore
-									if node.path and not node.ascendancyName and node.pathDist > 1 then
+									if canUsePathPower(node) and node.pathDist > 1 then
 										local effectPathNodes = { }
 										for _, pathNode in pairs(node.path) do
 											if pathNode == node then
@@ -670,7 +1069,7 @@ function CalcsTabClass:PowerBuilder()
 								else
 									optionScore = self:CalculateCombinedOffDefStat(effectOutput, calcBase)
 									optionPathScore = optionScore
-									if node.path and not node.ascendancyName and node.pathDist > 1 then
+									if canUsePathPower(node) and node.pathDist > 1 then
 										local effectPathNodes = { }
 										for _, pathNode in pairs(node.path) do
 											if pathNode == node then
@@ -720,7 +1119,7 @@ function CalcsTabClass:PowerBuilder()
 
 				if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
 					node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
-					if node.path and not node.ascendancyName then
+					if canUsePathPower(node) then
 						newPowerMax.singleStat = m_max(newPowerMax.singleStat, node.power.singleStat)
 						node.power.pathPower = node.power.singleStat
 						local pathNodes = { }
@@ -743,7 +1142,7 @@ function CalcsTabClass:PowerBuilder()
 				elseif not self.powerStat or not self.powerStat.ignoreForNodes then
 					node.power.offence, node.power.defence = self:CalculateCombinedOffDefStat(output, calcBase)
 					node.power.singleStat = node.power.offence
-					if node.path and not node.ascendancyName then
+					if canUsePathPower(node) then
 						newPowerMax.offence = m_max(newPowerMax.offence, node.power.offence)
 						newPowerMax.defence = m_max(newPowerMax.defence, node.power.defence)
 						newPowerMax.offencePerPoint = m_max(newPowerMax.offencePerPoint, node.power.offence / node.pathDist)
@@ -765,7 +1164,7 @@ function CalcsTabClass:PowerBuilder()
 				node.power.assumedEnemyConditions = assumedEnemyConditions
 				if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
 					node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
-					if node.depends and not node.ascendancyName then
+					if node.depends and (not node.ascendancyName or isCurrentAscendancyNode(node)) then
 						node.power.pathPower = node.power.singleStat
 						local pathNodes = { }
 						for _, depNode in pairs(node.depends) do

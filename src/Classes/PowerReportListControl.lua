@@ -15,13 +15,18 @@ local PowerReportListClass = newClass("PowerReportListControl", "ListControl", f
 	self.ListControl(anchor, rect, 16, "VERTICAL", false)
 
 	local width = rect[3]
-	self.powerColumn = { width = width * 0.16, label = "", sortable = true }
+	self.powerColumn = { width = width * 0.14, label = "", sortable = true }
+	self.powerPercentColumn = { width = width * 0.11, label = "%", sortable = true }
+	self.pathPowerColumn = { width = width * 0.12, label = "Per Point", sortable = true }
+	self.pathPowerPercentColumn = { width = width * 0.11, label = "%/Point", sortable = true }
 	self.colList = {
-		{ width = width * 0.15, label = "Type", sortable = true },
-		{ width = width * 0.45, label = "Node Name" },
+		{ width = width * 0.13, label = "Type", sortable = true },
+		{ width = width * 0.33, label = "Node Name" },
 		self.powerColumn,
-		{ width = width * 0.05, label = "Points", sortable = true },
-		{ width = width * 0.16, label = "Per Point", sortable = true },
+		self.powerPercentColumn,
+		{ width = width * 0.06, label = "Points", sortable = true },
+		self.pathPowerColumn,
+		self.pathPowerPercentColumn,
 	}
 	self.colLabels = true
 	self.nodeSelectCallback = nodeSelectCallback
@@ -41,6 +46,7 @@ end)
 
 function PowerReportListClass:SetReport(stat, report)
 	self.powerColumn.label = stat and stat.label or ""
+	self.powerPercentColumn.label = self.powerColumn.label ~= "" and (self.powerColumn.label .. " %") or "%"
 	self.originalList = report or {}
 
 	if stat and stat.stat then
@@ -71,10 +77,25 @@ function PowerReportListClass:ReSort(colIndex)
 		end)
 	elseif colIndex == 4 then
 		t_sort(self.list, function (a,b)
-			if a.pathDist == "Anoint" or a.pathDist == "Cluster" then
+			local aPercent = a.powerPercent
+			local bPercent = b.powerPercent
+			if aPercent == bPercent then
+				return compare(a.power, b.power)
+			end
+			if aPercent == nil then
 				return false
 			end
-			if b.pathDist == "Anoint" or b.pathDist == "Cluster" then
+			if bPercent == nil then
+				return true
+			end
+			return compare(aPercent, bPercent)
+		end)
+	elseif colIndex == 5 then
+		t_sort(self.list, function (a,b)
+			if type(a.pathDist) ~= "number" then
+				return false
+			end
+			if type(b.pathDist) ~= "number" then
 				return true
 			end
 			if a.pathDist == b.pathDist then
@@ -82,12 +103,27 @@ function PowerReportListClass:ReSort(colIndex)
 			end
 			return a.pathDist < b.pathDist
 		end)
-	elseif colIndex == 5 then
+	elseif colIndex == 6 then
 		t_sort(self.list, function (a,b)
 			if a.pathPower == b.pathPower and type(a.pathDist) == "number" and type(b.pathDist) == "number" then
 				return a.pathDist < b.pathDist
 			end
 			return compare(a.pathPower, b.pathPower)
+		end)
+	elseif colIndex == 7 then
+		t_sort(self.list, function (a,b)
+			local aPercent = a.pathPowerPercent
+			local bPercent = b.pathPowerPercent
+			if aPercent == bPercent then
+				return compare(a.pathPower, b.pathPower)
+			end
+			if aPercent == nil then
+				return false
+			end
+			if bPercent == nil then
+				return true
+			end
+			return compare(aPercent, bPercent)
 		end)
 	end
 end
@@ -99,7 +135,13 @@ function PowerReportListClass:ReList()
 	end
 
 	for _, item in ipairs(self.originalList) do
-		local insert = item.power > 0
+		local isTattooType = item.type == "Runegraft"
+			or (item.type and item.type:find("Tattoo", 1, true) ~= nil)
+		local canAlwaysShow = item.alwaysShow and (not isTattooType or item.power > 0)
+		local insert = item.power > 0 or canAlwaysShow
+		if isTattooType and item.power <= 0 then
+			insert = false
+		end
 		if not self.showClusters and item.pathDist == "Cluster" then
 			insert = false
 		end
@@ -136,6 +178,98 @@ function PowerReportListClass:AddValueTooltip(tooltip, index, report)
 			if line ~= " " then
 				tooltip:AddLine(16, colorCodes.MAGIC..line)
 			end
+		end
+	end
+
+	local build = self.build
+	local showStatDifferences = self.getShowStatDifferences and self.getShowStatDifferences()
+	if build and showStatDifferences ~= nil then
+		if showStatDifferences then
+			local calcFunc, calcBase = build.calcsTab:GetMiscCalculator(build)
+			local count = 0
+			tooltip:AddSeparator(14)
+
+			local function isGeneratedTattooOption()
+				return report.type == "Runegraft"
+					or (report.type and report.type:find("Tattoo", 1, true) ~= nil)
+			end
+			local function findClusterNodeById(nodeId)
+				for _, node in pairs(build.spec.tree.clusterNodeMap or { }) do
+					if node.id == nodeId then
+						return node
+					end
+				end
+			end
+
+			if isGeneratedTattooOption() then
+				tooltip:AddLine(14, "^8Stat-difference details are not available for this generated option.")
+			else
+				local node = report.cluster and findClusterNodeById(report.id) or build.spec.nodes[report.id]
+				if node then
+					local path = (node.alloc and node.depends) or node.path or { }
+					local pathLength = #path
+					local intuitiveLeapCount = #(node.intuitiveLeapLikesAffecting or { })
+					local pathNodes = { }
+					for _, pathNode in pairs(path) do
+						pathNodes[pathNode] = true
+					end
+					local nodeOutput, pathOutput
+					local isGranted = build.calcsTab.mainEnv.grantedPassives[node.id]
+					local realloc = false
+					if node.alloc and node.type == "Mastery" and main.popups[1] then
+						realloc = true
+						nodeOutput = calcFunc({ addNodes = { [node] = true } })
+					elseif node.alloc then
+						nodeOutput = calcFunc({ removeNodes = { [node] = true } })
+						if pathLength > 1 then
+							pathOutput = calcFunc({ removeNodes = pathNodes })
+						end
+					elseif isGranted then
+						nodeOutput = calcFunc({ removeNodes = { [node.id] = true } })
+					else
+						nodeOutput = calcFunc({ addNodes = { [node] = true } })
+						if pathLength > 1 then
+							pathOutput = calcFunc({ addNodes = pathNodes })
+						end
+					end
+					count = build:AddStatComparesToTooltip(
+						tooltip,
+						calcBase,
+						nodeOutput,
+						realloc and "^7Reallocating this node will give you:"
+							or node.alloc and "^7Unallocating this node will give you:"
+							or isGranted and "^7This node is granted by an item. Removing it will give you:"
+							or "^7Allocating this node will give you:"
+					)
+					if pathLength > 1 and not isGranted and (intuitiveLeapCount == 0 or node.alloc) then
+						count = count + build:AddStatComparesToTooltip(
+							tooltip,
+							calcBase,
+							pathOutput,
+							node.alloc and "^7Unallocating this node and all nodes depending on it will give you:"
+								or "^7Allocating this node and all nodes leading to it will give you:",
+							pathLength
+						)
+					end
+					if count == 0 then
+						if isGranted then
+							tooltip:AddLine(14, "^7This node is granted by an item. Removing it will cause no changes")
+						else
+							tooltip:AddLine(14, string.format(
+								"^7No changes from %s this node%s.",
+								node.alloc and "unallocating" or "allocating",
+								intuitiveLeapCount == 0 and pathLength > 1 and " or the nodes leading to it" or ""
+							))
+						end
+					end
+				else
+					tooltip:AddLine(14, "^8Stat-difference details are unavailable for this entry.")
+				end
+			end
+			tooltip:AddLine(14, colorCodes.TIP.."Tip: Press Ctrl+D to disable the display of stat differences.")
+		else
+			tooltip:AddSeparator(14)
+			tooltip:AddLine(14, colorCodes.TIP.."Tip: Press Ctrl+D to enable the display of stat differences.")
 		end
 	end
 
@@ -205,7 +339,13 @@ function PowerReportListClass:GetRowValue(column, index, report)
 	return column == 1 and report.type
 		or column == 2 and report.name
 		or column == 3 and report.powerStr
-		or column == 4 and (report.pathDist == 1000 and "Anoint" or report.pathDist)
-		or column == 5 and report.pathPowerStr
+		or column == 4 and (report.powerPercentStr or "--")
+		or column == 5 and (
+			report.pathDist == 1000 and "Anoint"
+			or report.pathDist
+			or "--"
+		)
+		or column == 6 and report.pathPowerStr
+		or column == 7 and (report.pathPowerPercentStr or "--")
 		or ""
 end
