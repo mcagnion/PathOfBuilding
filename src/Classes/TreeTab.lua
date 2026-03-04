@@ -19,6 +19,7 @@ local s_gsub = string.gsub
 local s_byte = string.byte
 local dkjson = require "dkjson"
 local powerReportBuilder = LoadModule("Modules/PowerReportBuilder")
+local powerReportOptions = LoadModule("Modules/PowerReportOptions")
 
 local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 	self.ControlHost()
@@ -26,17 +27,7 @@ local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 	self.build = build
 	self.isComparing = false;
 	self.isCustomMaxDepth = false;
-	self.includePowerReportMasteries = false
-	self.includePowerReportTattoos = true
-	self.includePowerReportRunegrafts = true
-	self.includePowerReportNormals = true
-	self.includePowerReportNotables = true
-	self.includePowerReportKeystones = true
-	self.includePowerReportAscNotables = true
-	self.includePowerReportAscKeystones = true
-	self.includePowerReportAscSmalls = true
-	self.includePowerReportBloodlineAscendancy = true
-	self.includePowerReportForbiddenAscendancy = true
+	powerReportOptions.applyDefaults(self)
 
 	self.viewer = new("PassiveTreeView")
 
@@ -543,39 +534,7 @@ function TreeTabClass:Load(xml, dbFileName)
 	if not self.specList[1] then
 		self.specList[1] = new("PassiveSpec", self.build, latestTreeVersion)
 	end
-	if xml.attrib.includePowerReportMasteries ~= nil then
-		self.includePowerReportMasteries = xml.attrib.includePowerReportMasteries == "true"
-	end
-	if xml.attrib.includePowerReportTattoos ~= nil then
-		self.includePowerReportTattoos = xml.attrib.includePowerReportTattoos == "true"
-	end
-	if xml.attrib.includePowerReportRunegrafts ~= nil then
-		self.includePowerReportRunegrafts = xml.attrib.includePowerReportRunegrafts == "true"
-	end
-	if xml.attrib.includePowerReportNormals ~= nil then
-		self.includePowerReportNormals = xml.attrib.includePowerReportNormals == "true"
-	end
-	if xml.attrib.includePowerReportNotables ~= nil then
-		self.includePowerReportNotables = xml.attrib.includePowerReportNotables == "true"
-	end
-	if xml.attrib.includePowerReportKeystones ~= nil then
-		self.includePowerReportKeystones = xml.attrib.includePowerReportKeystones == "true"
-	end
-	if xml.attrib.includePowerReportAscSmalls ~= nil then
-		self.includePowerReportAscSmalls = xml.attrib.includePowerReportAscSmalls == "true"
-	end
-	if xml.attrib.includePowerReportBloodlineAscendancy ~= nil then
-		self.includePowerReportBloodlineAscendancy = xml.attrib.includePowerReportBloodlineAscendancy == "true"
-	end
-	if xml.attrib.includePowerReportAscNotables ~= nil then
-		self.includePowerReportAscNotables = xml.attrib.includePowerReportAscNotables == "true"
-	end
-	if xml.attrib.includePowerReportAscKeystones ~= nil then
-		self.includePowerReportAscKeystones = xml.attrib.includePowerReportAscKeystones == "true"
-	end
-	if xml.attrib.includePowerReportForbiddenAscendancy ~= nil then
-		self.includePowerReportForbiddenAscendancy = xml.attrib.includePowerReportForbiddenAscendancy == "true"
-	end
+	powerReportOptions.readFromXmlAttrib(self, xml.attrib)
 	self:SetActiveSpec(tonumber(xml.attrib.activeSpec) or 1)
 end
 
@@ -588,18 +547,8 @@ end
 function TreeTabClass:Save(xml)
 	xml.attrib = {
 		activeSpec = tostring(self.activeSpec),
-		includePowerReportMasteries = tostring(self.includePowerReportMasteries),
-		includePowerReportTattoos = tostring(self.includePowerReportTattoos),
-		includePowerReportRunegrafts = tostring(self.includePowerReportRunegrafts),
-		includePowerReportNormals = tostring(self.includePowerReportNormals),
-		includePowerReportNotables = tostring(self.includePowerReportNotables),
-		includePowerReportKeystones = tostring(self.includePowerReportKeystones),
-		includePowerReportAscSmalls = tostring(self.includePowerReportAscSmalls),
-		includePowerReportBloodlineAscendancy = tostring(self.includePowerReportBloodlineAscendancy),
-		includePowerReportAscNotables = tostring(self.includePowerReportAscNotables),
-		includePowerReportAscKeystones = tostring(self.includePowerReportAscKeystones),
-		includePowerReportForbiddenAscendancy = tostring(self.includePowerReportForbiddenAscendancy),
 	}
+	powerReportOptions.writeToXmlAttrib(self, xml.attrib)
 	for specId, spec in ipairs(self.specList) do
 		local child = {
 			elem = "Spec"
@@ -1105,23 +1054,8 @@ end
 function TreeTabClass:OpenPowerReportOptionsPopup()
 	local controls = { }
 	local y = 30
-	local options = {
-		{ key = "includePowerReportNormals", label = "Include Normal Passives" },
-		{ key = "includePowerReportNotables", label = "Include Notables" },
-		{ key = "includePowerReportKeystones", label = "Include Keystones" },
-		{ key = "includePowerReportMasteries", label = "Include Masteries" },
-		{ key = "includePowerReportTattoos", label = "Include Tattoos" },
-		{ key = "includePowerReportRunegrafts", label = "Include Runegrafts" },
-		{ key = "includePowerReportAscSmalls", label = "Include Ascendancy Small Passives" },
-		{ key = "includePowerReportAscNotables", label = "Include Ascendancy Notables" },
-		{ key = "includePowerReportAscKeystones", label = "Include Ascendancy Keystones" },
-		{ key = "includePowerReportBloodlineAscendancy", label = "Include Bloodline Ascendancy Passives" },
-		{ key = "includePowerReportForbiddenAscendancy", label = "Include Forbidden Ascendancy Candidates" },
-	}
-	local optionKeys = { }
-	for _, option in ipairs(options) do
-		t_insert(optionKeys, option.key)
-	end
+	local options = powerReportOptions.getList()
+	local optionKeys = powerReportOptions.getKeys()
 	local maxLabelWidth = 0
 	for _, option in ipairs(options) do
 		maxLabelWidth = m_max(maxLabelWidth, DrawStringWidth(16, "VAR", option.label))
@@ -1148,22 +1082,10 @@ function TreeTabClass:OpenPowerReportOptionsPopup()
 	end
 
 	controls.defaults = new("ButtonControl", nil, { -130, y + 8, 120, 20 }, "Defaults", function()
-		applyOptionStates({
-			includePowerReportMasteries = false,
-			includePowerReportTattoos = true,
-			includePowerReportRunegrafts = true,
-			includePowerReportNormals = true,
-			includePowerReportNotables = true,
-			includePowerReportKeystones = true,
-			includePowerReportAscSmalls = true,
-			includePowerReportBloodlineAscendancy = true,
-			includePowerReportAscNotables = true,
-			includePowerReportAscKeystones = true,
-			includePowerReportForbiddenAscendancy = true,
-		})
+		applyOptionStates(powerReportOptions.buildStateByKey(nil))
 	end)
 	controls.none = new("ButtonControl", nil, { 0, y + 8, 90, 20 }, "None", function()
-		applyOptionStates({ })
+		applyOptionStates(powerReportOptions.buildStateByKey(false))
 	end)
 	controls.close = new("ButtonControl", nil, { 130, y + 8, 90, 20 }, "Close", function()
 		main:ClosePopup()
