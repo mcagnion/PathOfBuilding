@@ -19,6 +19,7 @@ local s_gsub = string.gsub
 local s_byte = string.byte
 local dkjson = require "dkjson"
 local enemyConditionUtils = LoadModule("Modules/EnemyConditionUtils")
+local powerReportUtils = LoadModule("Modules/PowerReportUtils")
 
 local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 	self.ControlHost()
@@ -1207,65 +1208,30 @@ function TreeTabClass:BuildPowerReportList(currentStat)
 		}
 	end
 	local statScale = (displayStat.pc or displayStat.mod) and 100 or 1
-	local primaryAscendancy = self.build.spec.curAscendClassBaseName
-	local secondaryAscendancy = self.build.spec.curSecondaryAscendClass
-		and self.build.spec.curSecondaryAscendClass.id
-	local currentClassId = self.build.spec.curClassId
-	local ascendNameMap = self.build.spec.tree.ascendNameMap or { }
+	local ascendancyContext = powerReportUtils.makeAscendancyContext(self.build.spec)
+	local includeAscendancyOptions = {
+		includePowerReportBloodlineAscendancy = self.includePowerReportBloodlineAscendancy,
+		includePowerReportAscNotables = self.includePowerReportAscNotables,
+		includePowerReportAscKeystones = self.includePowerReportAscKeystones,
+		includePowerReportAscSmalls = self.includePowerReportAscSmalls,
+		includePowerReportForbiddenAscendancy = self.includePowerReportForbiddenAscendancy,
+	}
 	local function isRunegraftName(name)
-		return name and name:find("Runegraft", 1, true) ~= nil
-	end
-	local function isEnabledAscendancyType(node)
-		if not (node and node.ascendancyName) then
-			return true
-		end
-		if node.isBloodline and not self.includePowerReportBloodlineAscendancy then
-			return false
-		end
-		if node.type == "Notable" then
-			return self.includePowerReportAscNotables
-		elseif node.type == "Keystone" then
-			return self.includePowerReportAscKeystones
-		elseif node.type == "Normal" then
-			return self.includePowerReportAscSmalls
-		end
-		return true
-	end
-	local function isCurrentAscendancyNode(node)
-		return node
-			and node.ascendancyName
-			and (
-				node.ascendancyName == primaryAscendancy
-				or node.ascendancyName == secondaryAscendancy
-			)
-	end
-	local function isSameBaseClassAscendancyNode(node)
-		if not (node and node.ascendancyName) then
-			return false
-		end
-		local ascendInfo = ascendNameMap[node.ascendancyName]
-		return ascendInfo and ascendInfo.classId == currentClassId
+		return powerReportUtils.isRunegraftName(name)
 	end
 	local function isForbiddenAscendancyNode(node)
-		return self.includePowerReportForbiddenAscendancy
-			and node
-			and node.ascendancyName
-			and not node.isBloodline
-			and not isCurrentAscendancyNode(node)
-			and isSameBaseClassAscendancyNode(node)
-			and (node.type == "Notable" or node.type == "Keystone")
+		return powerReportUtils.isForbiddenAscendancyNode(
+			ascendancyContext,
+			includeAscendancyOptions,
+			node
+		)
 	end
 	local function isIncludedAscendancyNode(node)
-		if not node.ascendancyName then
-			return true
-		end
-		if isCurrentAscendancyNode(node) then
-			return isEnabledAscendancyType(node)
-		end
-		if node.isBloodline then
-			return self.includePowerReportBloodlineAscendancy
-		end
-		return isForbiddenAscendancyNode(node)
+		return powerReportUtils.isIncludedAscendancyNode(
+			ascendancyContext,
+			includeAscendancyOptions,
+			node
+		)
 	end
 	local function formatSinglePowerValue(power)
 		local powerStr = s_format("%"..displayStat.fmt, power)
@@ -1281,37 +1247,10 @@ function TreeTabClass:BuildPowerReportList(currentStat)
 		return formatSinglePowerValue(nodePower), formatSinglePowerValue(pathPower)
 	end
 	local function reportTattooType(category)
-		if category == "Keystone" then
-			return "Keystone Tattoo"
-		elseif category == "Notable" then
-			return "Notable Tattoo"
-		elseif category == "SmallAttribute" then
-			return "Small Attribute Tattoo"
-		end
-		return "Tattoo"
+		return powerReportUtils.reportTattooType(category)
 	end
 	local function reportNodeType(node, isForbiddenNode)
-		if not node then
-			return "Node"
-		end
-		if isForbiddenNode then
-			if node.type == "Notable" then
-				return "Forbidden Notable"
-			elseif node.type == "Keystone" then
-				return "Forbidden Keystone"
-			end
-			return "Forbidden " .. (node.type or "Node")
-		end
-		if node.ascendancyName then
-			local prefix = node.isBloodline and "Bloodline" or "Asc"
-			if node.type == "Notable" then
-				return prefix .. " Notable"
-			elseif node.type == "Keystone" then
-				return prefix .. " Keystone"
-			end
-			return prefix .. " " .. (node.type or "Node")
-		end
-		return node.type or "Node"
+		return powerReportUtils.reportNodeType(node, isForbiddenNode)
 	end
 	local enemyConditionSourceMap = enemyConditionUtils.buildEnemyConditionSourceMap(
 		self.build,

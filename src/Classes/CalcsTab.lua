@@ -10,6 +10,7 @@ local t_sort = table.sort
 local t_concat = table.concat
 local m_max = math.max
 local m_floor = math.floor
+local powerReportUtils = LoadModule("Modules/PowerReportUtils")
 
 local buffModeDropList = {
 	{ label = "Unbuffed", buffMode = "UNBUFFED" },
@@ -482,36 +483,15 @@ function CalcsTabClass:PowerBuilder()
 	local cacheOwner = { }
 	local masteryChoiceCache = { }
 	local usedMasteryEffects = { }
-	local primaryAscendancy = self.build.spec.curAscendClassBaseName
-	local secondaryAscendancy = self.build.spec.curSecondaryAscendClass
-		and self.build.spec.curSecondaryAscendClass.id
-	local currentClassId = self.build.spec.curClassId
-	local ascendNameMap = self.build.spec.tree.ascendNameMap or { }
-	local function isCurrentAscendancyNode(node)
-		return node
-			and node.ascendancyName
-			and (
-				node.ascendancyName == primaryAscendancy
-				or node.ascendancyName == secondaryAscendancy
-			)
-	end
+	local ascendancyContext = powerReportUtils.makeAscendancyContext(self.build.spec)
 	local function canUsePathPower(node)
-		return node.path and (not node.ascendancyName or isCurrentAscendancyNode(node))
+		return node.path and (
+			not node.ascendancyName
+			or powerReportUtils.isCurrentAscendancyNode(ascendancyContext, node)
+		)
 	end
 	local function isRemoteAscendancyCandidate(node)
-		if not (node and node.ascendancyName) then
-			return false
-		end
-		local ascendInfo = ascendNameMap[node.ascendancyName]
-		local isSameClassAsc = ascendInfo and ascendInfo.classId == currentClassId
-		return not isCurrentAscendancyNode(node)
-			and (
-				node.isBloodline
-				or (
-					isSameClassAsc
-					and (node.type == "Notable" or node.type == "Keystone")
-				)
-			)
+		return powerReportUtils.isRemoteAscendancyCandidate(ascendancyContext, node)
 	end
 	local function buildAssumeEnemyConditions(output)
 		local assumptions
@@ -1164,7 +1144,10 @@ function CalcsTabClass:PowerBuilder()
 				node.power.assumedEnemyConditions = assumedEnemyConditions
 				if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
 					node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
-					if node.depends and (not node.ascendancyName or isCurrentAscendancyNode(node)) then
+					if node.depends and (
+						not node.ascendancyName
+						or powerReportUtils.isCurrentAscendancyNode(ascendancyContext, node)
+					) then
 						node.power.pathPower = node.power.singleStat
 						local pathNodes = { }
 						for _, depNode in pairs(node.depends) do
