@@ -824,6 +824,26 @@ function TradeQueryClass:GetUpgradeCandidates()
 	return ranked
 end
 
+function TradeQueryClass:GetUpgradeScoreColor(score, bestScore, worstScore)
+	if score < 0 then
+		return colorCodes.NEGATIVE
+	end
+	if bestScore and worstScore then
+		local scoreRange = bestScore - worstScore
+		local normalized = scoreRange > 0 and ((score - worstScore) / scoreRange) or 1
+		if normalized >= 0.75 then
+			return colorCodes.POSITIVE
+		elseif normalized >= 0.40 then
+			return colorCodes.MAGIC
+		end
+	end
+	return "^7"
+end
+
+function TradeQueryClass:BuildUpgradeScoreTooltip(rank, candidate)
+	return s_format("Rank %d - Score %.3f (%s)", rank, candidate.score, candidate.mode)
+end
+
 function TradeQueryClass:UpdateBestUpgradeLabel()
 	local ranked = self:GetUpgradeCandidates()
 	local bestScore = ranked[1] and ranked[1].score or nil
@@ -842,20 +862,9 @@ function TradeQueryClass:UpdateBestUpgradeLabel()
 			local rowScoreTooltip = nil
 			if rank then
 				local candidate = ranked[rank]
-				local scoreColor = "^7"
-				if candidate.score < 0 then
-					scoreColor = colorCodes.NEGATIVE
-				elseif bestScore and worstScore then
-					local scoreRange = bestScore - worstScore
-					local normalized = scoreRange > 0 and ((candidate.score - worstScore) / scoreRange) or 1
-					if normalized >= 0.75 then
-						scoreColor = colorCodes.POSITIVE
-					elseif normalized >= 0.40 then
-						scoreColor = colorCodes.MAGIC
-					end
-				end
+				local scoreColor = self:GetUpgradeScoreColor(candidate.score, bestScore, worstScore)
 				nameControl.label = scoreColor .. slotTbl.slotName
-				rowScoreTooltip = s_format("Rank %d - Score %.3f (%s)", rank, candidate.score, candidate.mode)
+				rowScoreTooltip = self:BuildUpgradeScoreTooltip(rank, candidate)
 			else
 				nameControl.label = baseColor .. slotTbl.slotName
 			end
@@ -1230,38 +1239,53 @@ function TradeQueryClass:UpdateRealms()
 	end
 end
 
+local FIND_MULTIPLE_DEFAULT_OPTIONS = {
+	ignoreFlasks = true,
+	ignoreJewels = false,
+	ignoreUniqueItems = false,
+}
+
+function TradeQueryClass:GetFindMultipleOptions()
+	self.findMultipleOptions = self.findMultipleOptions or copyTable(FIND_MULTIPLE_DEFAULT_OPTIONS, true)
+	return self.findMultipleOptions
+end
+
 function TradeQueryClass:OpenFindMultiplePopup()
-	self.findMultipleOptions = self.findMultipleOptions or {
-		ignoreFlasks = true,
-		ignoreJewels = false,
-		ignoreUniqueItems = false,
-	}
+	local options = self:GetFindMultipleOptions()
 	local controls = { }
 	local popupWidth = 430
 	local labelX = 24
 	local checkX = 300
 	controls.ignoreFlasksLabel = new("LabelControl", {"TOPLEFT", nil, "TOPLEFT"}, {labelX, 32, 0, 16}, "^7Ignore Flask slots")
 	controls.ignoreFlasks = new("CheckBoxControl", {"TOPLEFT", nil, "TOPLEFT"}, {checkX, 30, 18}, "", function() end)
-	controls.ignoreFlasks.state = self.findMultipleOptions.ignoreFlasks
+	controls.ignoreFlasks.state = options.ignoreFlasks
 	controls.ignoreJewelsLabel = new("LabelControl", {"TOPLEFT", nil, "TOPLEFT"}, {labelX, 60, 0, 16}, "^7Ignore Jewel slots")
 	controls.ignoreJewels = new("CheckBoxControl", {"TOPLEFT", nil, "TOPLEFT"}, {checkX, 58, 18}, "", function() end)
-	controls.ignoreJewels.state = self.findMultipleOptions.ignoreJewels
+	controls.ignoreJewels.state = options.ignoreJewels
 	controls.ignoreUniqueItemsLabel = new("LabelControl", {"TOPLEFT", nil, "TOPLEFT"}, {labelX, 88, 0, 16}, "^7Ignore slots where equipped item is unique")
 	controls.ignoreUniqueItems = new("CheckBoxControl", {"TOPLEFT", nil, "TOPLEFT"}, {checkX, 86, 18}, "", function() end)
-	controls.ignoreUniqueItems.state = self.findMultipleOptions.ignoreUniqueItems
+	controls.ignoreUniqueItems.state = options.ignoreUniqueItems
 
 	controls.start = new("ButtonControl", {"BOTTOM", nil, "BOTTOM"}, {-45, -10, 80, 20}, "Run", function()
-		self.findMultipleOptions.ignoreFlasks = controls.ignoreFlasks.state
-		self.findMultipleOptions.ignoreJewels = controls.ignoreJewels.state
-		self.findMultipleOptions.ignoreUniqueItems = controls.ignoreUniqueItems.state
+		options.ignoreFlasks = controls.ignoreFlasks.state
+		options.ignoreJewels = controls.ignoreJewels.state
+		options.ignoreUniqueItems = controls.ignoreUniqueItems.state
 		main:ClosePopup()
-		self:FindAllBestItems(self.findMultipleOptions)
+		self:FindAllBestItems(options)
 	end)
 	controls.cancel = new("ButtonControl", {"BOTTOM", nil, "BOTTOM"}, {45, -10, 80, 20}, "Cancel", function()
 		main:ClosePopup()
 	end)
 
 	main:OpenPopup(popupWidth, 176, "Find Multiple", controls)
+end
+
+function TradeQueryClass:IsJewelLikeSlot(slotTbl, activeSlotName)
+	return slotTbl.nodeId ~= nil
+		or activeSlotName:find("Jewel") ~= nil
+		or activeSlotName:find("Abyss") ~= nil
+		or (slotTbl.slotName and slotTbl.slotName:find("Jewel") ~= nil)
+		or (slotTbl.slotName and slotTbl.slotName:find("Abyss") ~= nil)
 end
 
 function TradeQueryClass:ShouldSkipFindMultipleRow(row_idx, slotTbl, activeSlot, options)
@@ -1277,11 +1301,7 @@ function TradeQueryClass:ShouldSkipFindMultipleRow(row_idx, slotTbl, activeSlot,
 		return true
 	end
 
-	local isJewelSlot = slotTbl.nodeId ~= nil
-		or activeSlotName:find("Jewel") ~= nil
-		or activeSlotName:find("Abyss") ~= nil
-		or (slotTbl.slotName and slotTbl.slotName:find("Jewel") ~= nil)
-		or (slotTbl.slotName and slotTbl.slotName:find("Abyss") ~= nil)
+	local isJewelSlot = self:IsJewelLikeSlot(slotTbl, activeSlotName)
 	if options.ignoreJewels and isJewelSlot then
 		return true
 	end
@@ -1353,11 +1373,7 @@ function TradeQueryClass:ExecuteFindMultiplePendingQuery(pending, skipPopup, onD
 end
 
 function TradeQueryClass:FindAllBestItems(options)
-	options = options or self.findMultipleOptions or {
-		ignoreFlasks = true,
-		ignoreJewels = false,
-		ignoreUniqueItems = false,
-	}
+	options = options or self:GetFindMultipleOptions()
 	local pendingQueries = self:BuildFindMultiplePendingQueries(options)
 
 	if #pendingQueries == 0 then
