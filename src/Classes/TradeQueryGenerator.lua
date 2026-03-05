@@ -99,6 +99,13 @@ local eldritchModSlots = {
 }
 
 local MAX_FILTERS = 35
+local rarityFilterOptions = { "Any", "Unique only", "Non-unique only" }
+local rarityFilterByIndex = { "any", "unique", "nonunique" }
+local rarityFilterIndexByValue = {
+	any = 1,
+	unique = 2,
+	nonunique = 3
+}
 
 local function logToFile(...)
 	ConPrintf(...)
@@ -937,7 +944,21 @@ function TradeQueryGeneratorClass:FinishQuery()
 	if self.calcContext.itemCategoryQueryStr then
 		filtersTable.type_filters.filters.category = filtersTable.type_filters.filters.category or { option = self.calcContext.itemCategoryQueryStr }
 	end
-	filtersTable.type_filters.filters.rarity = { option = options.requireUnique and "unique" or "nonunique" }
+	local rarityFilter = options.rarityFilter
+	if not rarityFilter then
+		if options.requireUnique == true then
+			rarityFilter = "unique"
+		elseif options.requireUnique == false then
+			rarityFilter = "nonunique"
+		else
+			rarityFilter = "any"
+		end
+	end
+	if rarityFilter == "unique" or rarityFilter == "nonunique" then
+		filtersTable.type_filters.filters.rarity = { option = rarityFilter }
+	else
+		filtersTable.type_filters.filters.rarity = nil
+	end
 	local queryTable = {
 		query = {
 			filters = filtersTable,
@@ -1114,13 +1135,26 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		options.special = { itemName = context.slotTbl.slotName }
 	end
 
-	local requireUniqueState = context.slotTbl.unique or self.lastRequireUnique == true
-	controls.requireUnique = new("CheckBoxControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 18}, "Unique items only:", function(state) end)
-	controls.requireUnique.state = requireUniqueState
-	controls.requireUnique.enabled = not context.slotTbl.unique
-	updateLastAnchor(controls.requireUnique)
+	local selectedRarityFilter
+	if context.slotTbl.unique then
+		selectedRarityFilter = "unique"
+	elseif self.lastRarityFilter then
+		selectedRarityFilter = self.lastRarityFilter
+	elseif self.lastRequireUnique == true then
+		selectedRarityFilter = "unique"
+	elseif self.lastRequireUnique == false then
+		selectedRarityFilter = "nonunique"
+	else
+		selectedRarityFilter = "nonunique"
+	end
 
-	controls.includeMirrored = new("CheckBoxControl", {"TOPRIGHT",lastItemAnchor,"BOTTOMRIGHT"}, {0, 5, 18}, "Mirrored items:", function(state) end)
+	controls.rarityFilter = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 120, 18}, rarityFilterOptions, nil)
+	controls.rarityFilter.selIndex = rarityFilterIndexByValue[selectedRarityFilter] or 3
+	controls.rarityFilterLabel = new("LabelControl", {"RIGHT",controls.rarityFilter,"LEFT"}, {-5, 0, 0, 16}, "Rarity:")
+	controls.rarityFilter.enabled = not context.slotTbl.unique
+	updateLastAnchor(controls.rarityFilter)
+
+	controls.includeMirrored = new("CheckBoxControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 18}, "Mirrored items:", function(state) end)
 	controls.includeMirrored.state = (self.lastIncludeMirrored == nil or self.lastIncludeMirrored == true)
 	updateLastAnchor(controls.includeMirrored)
 
@@ -1226,8 +1260,16 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		if controls.includeCorrupted then
 			self.lastIncludeCorrupted, options.includeCorrupted = controls.includeCorrupted.state, controls.includeCorrupted.state
 		end
-		if controls.requireUnique then
-			self.lastRequireUnique, options.requireUnique = controls.requireUnique.state, controls.requireUnique.state
+		if controls.rarityFilter then
+			self.lastRarityFilter = rarityFilterByIndex[controls.rarityFilter.selIndex] or "any"
+			options.rarityFilter = self.lastRarityFilter
+			if self.lastRarityFilter == "unique" then
+				self.lastRequireUnique, options.requireUnique = true, true
+			elseif self.lastRarityFilter == "nonunique" then
+				self.lastRequireUnique, options.requireUnique = false, false
+			else
+				self.lastRequireUnique, options.requireUnique = nil, nil
+			end
 		end
 		if controls.includeSynthesis then
 			self.lastIncludeSynthesis, options.includeSynthesis = controls.includeSynthesis.state, controls.includeSynthesis.state
