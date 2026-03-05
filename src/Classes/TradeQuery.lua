@@ -1292,9 +1292,6 @@ function TradeQueryClass:ShouldSkipFindMultipleRow(row_idx, slotTbl, activeSlot,
 	if not activeSlot then
 		return true
 	end
-	if self.resultTbl[row_idx] then
-		return true
-	end
 
 	local activeSlotName = activeSlot.slotName or ""
 	if options.ignoreFlasks and activeSlotName:find("Flask") then
