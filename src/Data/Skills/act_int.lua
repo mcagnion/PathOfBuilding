@@ -11284,6 +11284,9 @@ skills["KineticFusillade"] = {
 		local skillData = activeSkill.skillData
 		local t_insert = table.insert
 		local s_format = string.format
+		local m_max = math.max
+		local m_min = math.min
+		local m_floor = math.floor
 
 		local baseDelayBetweenProjectiles = skillData.delayPerProjectile
 		local projectileCount = 1
@@ -11298,64 +11301,133 @@ skills["KineticFusillade"] = {
 		-- Formula: totalTime = (hoverDelay + delayBetweenProj * nProj) * durationMod
 		local hoverDelay = skillData.duration
 		local durationMod = output.DurationMod
-		local baseTimeForAllProjectiles = baseDelayBetweenProjectiles * (projectileCount - 1)
-		local effectiveDelay = (hoverDelay + baseTimeForAllProjectiles) * durationMod
-		-- Testing in game showed playing in Lockstep rounded the duration to server ticks but Predictive did not
-		local effectiveDelayRounded = math.ceil(effectiveDelay / data.misc.ServerTickTime) * data.misc.ServerTickTime
-		local maxEffectiveAPS = 1 / effectiveDelayRounded
-		local maxEffectivePredictiveAPS = 1 / effectiveDelay
+		local useLegacyDpsCalc = skillData.kineticFusilladeLegacyDpsCalc == true
+		local timePerProjectile = baseDelayBetweenProjectiles * durationMod
+		local baseTimeForAllProjectiles
+		local effectiveDelay
+		local effectiveDelayRounded
+		local maxEffectiveAPS
+		local maxEffectivePredictiveAPS
+		local scaledHoverDelay
+		if useLegacyDpsCalc then
+			baseTimeForAllProjectiles = baseDelayBetweenProjectiles * (projectileCount - 1)
+			effectiveDelay = (hoverDelay + baseTimeForAllProjectiles) * durationMod
+			-- Testing in game showed playing in Lockstep rounded the duration to server ticks but Predictive did not
+			effectiveDelayRounded = math.ceil(effectiveDelay / data.misc.ServerTickTime) * data.misc.ServerTickTime
+			maxEffectiveAPS = 1 / effectiveDelayRounded
+			maxEffectivePredictiveAPS = 1 / effectiveDelay
+		else
+			scaledHoverDelay = hoverDelay * durationMod
+			baseTimeForAllProjectiles = timePerProjectile * projectileCount
+			effectiveDelay = scaledHoverDelay + baseTimeForAllProjectiles
+			maxEffectiveAPS = 1 / effectiveDelay
+		end
 		local currentAPS = output.Speed
+		local projectilesFired = projectileCount
+		local missingProjectiles = 0
+		local volleyDamageRatio = 1
+		local currentInc, neededInc, additionalInc
+
+		if activeSkill.skillPart == 1 and currentAPS and currentAPS > 0 and timePerProjectile > 0 then
+			if currentAPS > maxEffectiveAPS then
+				if useLegacyDpsCalc then
+					volleyDamageRatio = maxEffectiveAPS / currentAPS
+					skillData.dpsMultiplier = (skillData.dpsMultiplier or projectileCount) * volleyDamageRatio
+				else
+					local castInterval = 1 / currentAPS
+					projectilesFired = m_max(0, m_min(projectileCount, m_floor((castInterval - scaledHoverDelay) / timePerProjectile)))
+					missingProjectiles = projectileCount - projectilesFired
+
+					local moreDamagePerProj = skillData.damagePerProjectile or 0
+					local fullVolleyDamageWeight = projectileCount + (moreDamagePerProj / 100) * projectileCount * (projectileCount - 1) / 2
+					local effectiveVolleyDamageWeight = projectilesFired + (moreDamagePerProj / 100) * projectilesFired * (projectilesFired - 1) / 2
+					if fullVolleyDamageWeight > 0 then
+						volleyDamageRatio = effectiveVolleyDamageWeight / fullVolleyDamageWeight
+						skillData.dpsMultiplier = (skillData.dpsMultiplier or projectileCount) * volleyDamageRatio
+					else
+						skillData.dpsMultiplier = 0
+						volleyDamageRatio = 0
+					end
+
+					if projectilesFired > 1 then
+						output.KineticFusilladeAvgMoreMult = moreDamagePerProj * (projectilesFired - 1) / 2
+					else
+						output.KineticFusilladeAvgMoreMult = 0
+					end
+				end
+			end
+		end
+
+		if currentAPS and currentAPS > 0 then
+			currentInc = activeSkill.skillModList:Sum("INC", activeSkill.skillCfg, "Speed")
+			neededInc = ((maxEffectiveAPS / currentAPS) * (1 + currentInc / 100) - 1) * 100
+			additionalInc = neededInc - currentInc
+		end
 
 		output.KineticFusilladeMaxEffectiveAPS = maxEffectiveAPS
 
 		if breakdown then
 			local breakdownAPS = {}
-			t_insert(breakdownAPS, s_format("^8Base hover delay:^7 %.1fs", hoverDelay))
-			t_insert(breakdownAPS, s_format("^8Base delay between projectiles:^7 %.2fs", baseDelayBetweenProjectiles))
-			t_insert(breakdownAPS, s_format("^8Base time for^7 %d added ^8projectiles:^7 %.2fs x %d = %.1fs", (projectileCount - 1), baseDelayBetweenProjectiles, (projectileCount - 1), baseTimeForAllProjectiles))
-			t_insert(breakdownAPS, s_format("^8Duration modifier:^7 %.4f", durationMod))
-			t_insert(breakdownAPS, "")
-			t_insert(breakdownAPS, s_format("^6Lockstep"))
-			t_insert(breakdownAPS, s_format("^8Effective delay:^7 (%.1f + %.2f) x %.4f = %.4fs", hoverDelay, baseTimeForAllProjectiles, durationMod, effectiveDelay))
-			t_insert(breakdownAPS, s_format("^8Rounded up to nearest server tick^7 = %.4fs", effectiveDelayRounded))
-			t_insert(breakdownAPS, s_format("^8Max effective attack rate:^7 1 / %.4f = %.2f", effectiveDelayRounded, maxEffectiveAPS))
-			if currentAPS then
-				local currentInc = activeSkill.skillModList:Sum("INC", activeSkill.skillCfg, "Speed")
-				local neededInc = ((maxEffectiveAPS / currentAPS) * (1 + currentInc / 100) - 1) * 100
-				local additionalInc = neededInc - currentInc
-				local neededPredictiveInc = ((maxEffectivePredictiveAPS / currentAPS) * (1 + currentInc / 100) - 1) * 100
-				local additionalPredictiveInc = neededPredictiveInc - currentInc
-				if currentAPS > maxEffectiveAPS then
-					t_insert(breakdownAPS, s_format("^1Current attack rate (%.2f) exceeds max effective rate!", currentAPS))
-					t_insert(breakdownAPS, s_format("^1Reduce attack speed by at least^7 %d%% ^1", math.ceil(-additionalInc)))
-					t_insert(breakdownAPS, s_format("^1DPS is reduced by %.1f%%", (1 - maxEffectiveAPS / currentAPS) * 100))
-				else
-					t_insert(breakdownAPS, s_format("^2Current attack rate (%.2f) is within effective limits", currentAPS))
-					t_insert(breakdownAPS, s_format("^2You can add up to^7 %d%% ^2increased attack speed", math.floor(additionalInc)))
-				end
+			if useLegacyDpsCalc then
+				t_insert(breakdownAPS, "^8Legacy mode enabled")
+				t_insert(breakdownAPS, s_format("^8Base hover delay:^7 %.1fs", hoverDelay))
+				t_insert(breakdownAPS, s_format("^8Base delay between projectiles:^7 %.2fs", baseDelayBetweenProjectiles))
+				t_insert(breakdownAPS, s_format("^8Base time for^7 %d added ^8projectiles:^7 %.2fs x %d = %.1fs", (projectileCount - 1), baseDelayBetweenProjectiles, (projectileCount - 1), baseTimeForAllProjectiles))
+				t_insert(breakdownAPS, s_format("^8Duration modifier:^7 %.4f", durationMod))
 				t_insert(breakdownAPS, "")
-				t_insert(breakdownAPS, s_format("^6Predictive"))
+				t_insert(breakdownAPS, s_format("^6Lockstep"))
 				t_insert(breakdownAPS, s_format("^8Effective delay:^7 (%.1f + %.2f) x %.4f = %.4fs", hoverDelay, baseTimeForAllProjectiles, durationMod, effectiveDelay))
-				t_insert(breakdownAPS, s_format("^8Max effective attack rate:^7 1 / %.4f = %.2f", effectiveDelay, maxEffectivePredictiveAPS))
-				if currentAPS > maxEffectivePredictiveAPS then
-					t_insert(breakdownAPS, s_format("^1Current attack rate (%.2f) exceeds max effective rate!", currentAPS))
-					t_insert(breakdownAPS, s_format("^1Reduce attack speed by at least^7 %d%% ^1", math.ceil(-additionalPredictiveInc)))
-					t_insert(breakdownAPS, s_format("^1DPS is reduced by %.1f%%", (1 - maxEffectivePredictiveAPS / currentAPS) * 100))
+				t_insert(breakdownAPS, s_format("^8Rounded up to nearest server tick^7 = %.4fs", effectiveDelayRounded))
+				t_insert(breakdownAPS, s_format("^8Max effective attack rate:^7 1 / %.4f = %.2f", effectiveDelayRounded, maxEffectiveAPS))
+			else
+				t_insert(breakdownAPS, s_format("^1(These calculations are speculative and best-effort)"))
+				t_insert(breakdownAPS, s_format("^8Base hover delay:^7 %.3fs", hoverDelay))
+				t_insert(breakdownAPS, s_format("^8Base delay between projectiles:^7 %.3fs", baseDelayBetweenProjectiles))
+				t_insert(breakdownAPS, s_format("^8Base time for^7 %d ^8projectiles:^7 %.3fs x %d = %.3fs", projectileCount, timePerProjectile, projectileCount, baseTimeForAllProjectiles))
+				t_insert(breakdownAPS, s_format("^8Duration modifier:^7 %.4f", durationMod))
+				t_insert(breakdownAPS, s_format("^8Effective delay:^7 %.3f + %.3f = %.4fs", scaledHoverDelay, baseTimeForAllProjectiles, effectiveDelay))
+				t_insert(breakdownAPS, s_format("^8Max effective attack rate:^7 1 / %.4f = %.2f", effectiveDelay, maxEffectiveAPS))
+			end
+			if currentAPS and currentAPS > 0 then
+				t_insert(breakdownAPS, "")
+				if useLegacyDpsCalc then
+					local neededPredictiveInc = ((maxEffectivePredictiveAPS / currentAPS) * (1 + currentInc / 100) - 1) * 100
+					local additionalPredictiveInc = neededPredictiveInc - currentInc
+					if currentAPS > maxEffectiveAPS then
+						t_insert(breakdownAPS, s_format("^1Current attack rate (%.2f) exceeds max effective rate!", currentAPS))
+						t_insert(breakdownAPS, s_format("^1Reduce attack speed by at least^7 %d%% ^1for full volleys", math.ceil(-additionalInc)))
+						t_insert(breakdownAPS, s_format("^1DPS is reduced by %.1f%%", (1 - maxEffectiveAPS / currentAPS) * 100))
+					else
+						t_insert(breakdownAPS, s_format("^2Current attack rate (%.2f) is within effective limits", currentAPS))
+						t_insert(breakdownAPS, s_format("^2You can add up to^7 %d%% ^2increased attack speed", math.floor(additionalInc)))
+					end
+					t_insert(breakdownAPS, "")
+					t_insert(breakdownAPS, s_format("^6Predictive"))
+					t_insert(breakdownAPS, s_format("^8Effective delay:^7 (%.1f + %.2f) x %.4f = %.4fs", hoverDelay, baseTimeForAllProjectiles, durationMod, effectiveDelay))
+					t_insert(breakdownAPS, s_format("^8Max effective attack rate:^7 1 / %.4f = %.2f", effectiveDelay, maxEffectivePredictiveAPS))
+					if currentAPS > maxEffectivePredictiveAPS then
+						t_insert(breakdownAPS, s_format("^1Current attack rate (%.2f) exceeds max effective rate!", currentAPS))
+						t_insert(breakdownAPS, s_format("^1Reduce attack speed by at least^7 %d%% ^1", math.ceil(-additionalPredictiveInc)))
+						t_insert(breakdownAPS, s_format("^1DPS is reduced by %.1f%%", (1 - maxEffectivePredictiveAPS / currentAPS) * 100))
+					else
+						t_insert(breakdownAPS, s_format("^2Current attack rate (%.2f) is within effective limits", currentAPS))
+						t_insert(breakdownAPS, s_format("^2You can add up to^7 %d%% ^2increased attack speed", math.floor(additionalPredictiveInc)))
+					end
 				else
-					t_insert(breakdownAPS, s_format("^2Current attack rate (%.2f) is within effective limits", currentAPS))
-					t_insert(breakdownAPS, s_format("^2You can add up to^7 %d%% ^2increased attack speed", math.floor(additionalPredictiveInc)))
+					if currentAPS > maxEffectiveAPS then
+						t_insert(breakdownAPS, s_format("^1Current attack rate (%.2f) exceeds max effective rate!", currentAPS))
+						t_insert(breakdownAPS, s_format("^1You currently fire^7 %d/%d ^1projectiles per volley", projectilesFired, projectileCount))
+						t_insert(breakdownAPS, s_format("^1You lose^7 %d ^1projectiles per volley", missingProjectiles))
+						t_insert(breakdownAPS, s_format("^1Reduce attack speed by at least^7 %d%% ^1for full volleys", math.ceil(-additionalInc)))
+						t_insert(breakdownAPS, s_format("^1Volley damage retained:^7 %.1f%%", volleyDamageRatio * 100))
+						t_insert(breakdownAPS, s_format("^1DPS is reduced by %.1f%%", (1 - volleyDamageRatio) * 100))
+					else
+						t_insert(breakdownAPS, s_format("^2Current attack rate (%.2f) is within effective limits", currentAPS))
+						t_insert(breakdownAPS, s_format("^2You can add up to^7 %d%% ^2increased attack speed", math.floor(additionalInc)))
+					end
 				end
 			end
 			breakdown.KineticFusilladeMaxEffectiveAPS = breakdownAPS
-		end
-
-		-- Adjust dpsMultiplier if attacking too fast (only for "All Projectiles" mode)
-		if activeSkill.skillPart == 1 then
-			if currentAPS and currentAPS > maxEffectiveAPS then
-				local efficiencyRatio = maxEffectiveAPS / currentAPS
-				local originalMultiplier = skillData.dpsMultiplier or output.ProjectileCount
-				skillData.dpsMultiplier = originalMultiplier * efficiencyRatio
-			end
 		end
 	end,
 	statMap = {
