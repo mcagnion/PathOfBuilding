@@ -100,6 +100,9 @@ local eldritchModSlots = {
 
 local MAX_FILTERS = 35
 
+-- Forward declaration: used by SetSavedOptions before table initialization below.
+local currencyTable
+
 local function logToFile(...)
 	ConPrintf(...)
 end
@@ -707,7 +710,7 @@ function TradeQueryGeneratorClass:OnFrame()
 	end
 end
 
-local currencyTable = {
+currencyTable = {
 	{ name = "Chaos Orb Equivalent", id = nil },
 	{ name = "Chaos Orb", id = "chaos" },
 	{ name = "Divine Orb", id = "divine" },
