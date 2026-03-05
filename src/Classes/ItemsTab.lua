@@ -1092,6 +1092,32 @@ function ItemsTabClass:Load(xml, dbFileName)
 				}
 				t_insert(self.tradeQuery.statSortSelectionList, statSort)
 			end
+		elseif node.elem == "TradeQueryOptions" then
+			local tradeQuery = self.tradeQuery
+			if node.attrib.itemSortSelectionIndex then
+				tradeQuery.pbItemSortSelectionIndex = m_min(m_max(tonumber(node.attrib.itemSortSelectionIndex) or tradeQuery.pbItemSortSelectionIndex or 1, 1), 4)
+			end
+			if node.attrib.maxFetchPages then
+				tradeQuery.maxFetchPages = m_min(m_max(tonumber(node.attrib.maxFetchPages) or tradeQuery.maxFetchPages or tradeQuery.maxFetchPerSearchDefault, 1), 10)
+			end
+			tradeQuery.tradeQueryRequests.maxFetchPerSearch = 10 * (tradeQuery.maxFetchPages or tradeQuery.maxFetchPerSearchDefault)
+			if node.attrib.enchantInSort then
+				tradeQuery.enchantInSort = node.attrib.enchantInSort == "true"
+			end
+			if node.attrib.realm then
+				tradeQuery.pbRealm = node.attrib.realm
+			end
+			if node.attrib.league then
+				tradeQuery.pbLeague = node.attrib.league
+			end
+			if node.attrib.tradeStatusIndex then
+				tradeQuery.tradeStatusIndex = m_min(
+					m_max(tonumber(node.attrib.tradeStatusIndex) or tradeQuery.tradeStatusIndex or 1, 1),
+					#tradeQuery.tradeStatusOptions
+				)
+			end
+			tradeQuery.tradeStatusOption = tradeQuery.tradeStatusOptions[tradeQuery.tradeStatusIndex].option
+			tradeQuery.tradeQueryRequests:SetStatusOption(tradeQuery.tradeStatusOption)
 		end
 	end
 	if not self.itemSetOrderList[1] then
@@ -1193,6 +1219,20 @@ function ItemsTabClass:Save(xml)
 			end
 		end
 		t_insert(xml, parent)
+	end
+	if self.tradeQuery then
+		local options = {
+			elem = "TradeQueryOptions",
+			attrib = {
+				itemSortSelectionIndex = tostring(self.tradeQuery.pbItemSortSelectionIndex or 1),
+				maxFetchPages = tostring(self.tradeQuery.maxFetchPages or self.tradeQuery.maxFetchPerSearchDefault or 2),
+				enchantInSort = tostring(self.tradeQuery.enchantInSort == true),
+				tradeStatusIndex = tostring(self.tradeQuery.tradeStatusIndex or 1),
+				realm = self.tradeQuery.pbRealm or "",
+				league = self.tradeQuery.pbLeague or "",
+			}
+		}
+		t_insert(xml, options)
 	end
 end
 

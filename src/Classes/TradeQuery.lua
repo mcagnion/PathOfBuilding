@@ -34,6 +34,10 @@ local TradeQueryClass = newClass("TradeQuery", function(self, itemsTab)
 	-- default set of trade item sort selection
 	self.slotTables = { }
 	self.pbItemSortSelectionIndex = 1
+	self.maxFetchPerSearchDefault = 2
+	self.maxFetchPages = self.maxFetchPerSearchDefault
+	self.enchantInSort = false
+	self.queryOptionState = { }
 	self.pbCurrencyConversion = { }
 	self.currencyConversionTradeMap = { }
 	self.lastCurrencyConversionRequest = 0
@@ -42,12 +46,19 @@ local TradeQueryClass = newClass("TradeQuery", function(self, itemsTab)
 	self.pbRealm = ""
 	self.pbRealmIndex = 1
 	self.pbLeagueIndex = 1
+	self.tradeStatusIndex = 1
+	self.tradeStatusOptions = {
+		{ label = "Instant Buyout", option = "securable" },
+		{ label = "In Person Trade", option = "online" },
+	}
+	self.tradeStatusOption = self.tradeStatusOptions[self.tradeStatusIndex].option
 	-- table holding all realm/league pairs. (allLeagues[realm] = [league.id,...])
 	self.allLeagues = {}
 	-- realm id-text table to pair realm name with API parameter
 	self.realmIds = {}
 
 	self.tradeQueryRequests = new("TradeQueryRequests")
+	self.tradeQueryRequests:SetStatusOption(self.tradeStatusOption)
 	main.onFrameFuncs["TradeQueryRequests"] = function()
 		self.tradeQueryRequests:ProcessQueue()
 	end
@@ -134,6 +145,16 @@ function TradeQueryClass:ConvertCurrencyToChaos(currency, amount)
 		ConPrintf("Unhandled Currency Conversion: '" .. currency:lower() .. "'")
 		return nil
 	end
+end
+
+function TradeQueryClass:GetTradeStatusOption()
+	if self.tradeStatusOption then
+		return self.tradeStatusOption
+	end
+	if self.tradeStatusOptions and self.tradeStatusOptions[self.tradeStatusIndex or 1] then
+		return self.tradeStatusOptions[self.tradeStatusIndex or 1].option
+	end
+	return "online"
 end
 
 -- Method to pull down and interpret the PoE.Ninja JSON endpoint data
@@ -276,19 +297,18 @@ You can click this button to enter your POESESSID.
 - You can generate weighted search URLs but have to visit the trade site and manually import items.
 - You can only generate weighted searches for public leagues. (Generated searches can be modified
 on trade site to work on other leagues and realms)]]
-
 -- Fetches Box
-	self.maxFetchPerSearchDefault = 2
+	local fetchPages = self.maxFetchPages or self.maxFetchPerSearchDefault
 	self.controls.fetchCountEdit = new("EditControl", {"TOPRIGHT", nil, "TOPRIGHT"}, {-12, 19, 154, row_height}, "", "Fetch Pages", "%D", 3, function(buf)
 		self.maxFetchPages = m_min(m_max(tonumber(buf) or self.maxFetchPerSearchDefault, 1), 10)
 		self.tradeQueryRequests.maxFetchPerSearch = 10 * self.maxFetchPages
 		self.controls.fetchCountEdit.focusValue = self.maxFetchPages
 	end)
-	self.controls.fetchCountEdit.focusValue = self.maxFetchPerSearchDefault
-	self.tradeQueryRequests.maxFetchPerSearch = 10 * self.maxFetchPerSearchDefault
-	self.controls.fetchCountEdit:SetText(tostring(self.maxFetchPages or self.maxFetchPerSearchDefault))
+	self.controls.fetchCountEdit.focusValue = fetchPages
+	self.tradeQueryRequests.maxFetchPerSearch = 10 * fetchPages
+	self.controls.fetchCountEdit:SetText(tostring(fetchPages))
 	function self.controls.fetchCountEdit:OnFocusLost()
-		self:SetText(tostring(self.focusValue))
+		self:SetText(tostring(self.focusValue or self.maxFetchPerSearchDefault))
 	end
 	self.controls.fetchCountEdit.tooltipFunc = function(tooltip)
 		tooltip:Clear()
@@ -345,13 +365,27 @@ Highest Weight - Displays the order retrieved from trade]]
 	self.controls.itemSortSelectionLabel = new("LabelControl", {"TOPRIGHT", self.controls.itemSortSelection, "TOPLEFT"}, {-4, 0, 60, 16}, "^7Sort By:")
 
 	-- Use Enchant in DPS sorting
-	self.controls.enchantInSort = new("CheckBoxControl", {"TOPRIGHT",self.controls.fetchCountEdit,"TOPLEFT"}, {-8, 0, row_height}, "Include Enchants:", function(state)
+	self.controls.enchantInSort = new("CheckBoxControl", {"TOPRIGHT",self.controls.fetchCountEdit,"TOPLEFT"}, {-8, 0, row_height}, nil, function(state)
 		self.enchantInSort = state
 		for row_idx, _ in pairs(self.resultTbl) do
 			self:UpdateControlsWithItems(row_idx)
 		end
-	end)
+	end, nil, self.enchantInSort)
 	self.controls.enchantInSort.tooltipText = "This includes enchants in sorting that occurs after trade results have been retrieved"
+	self.controls.enchantInSortLabel = new("LabelControl", {"RIGHT", self.controls.enchantInSort, "LEFT"}, {0, 0, 0, row_height - 4}, "^7Enchants:")
+
+	local tradeModeList = { }
+	for _, entry in ipairs(self.tradeStatusOptions) do
+		t_insert(tradeModeList, entry.label)
+	end
+	self.controls.tradeModeSelect = new("DropDownControl", {"RIGHT", self.controls.enchantInSortLabel, "LEFT"}, {0, 0, 120, row_height}, tradeModeList, function(index, value)
+		self.tradeStatusIndex = index
+		self.tradeStatusOption = self.tradeStatusOptions[index].option
+		self.tradeQueryRequests:SetStatusOption(self.tradeStatusOption)
+	end)
+	self.controls.tradeModeSelect:SetSel(self.tradeStatusIndex)
+	self.controls.tradeModeSelect.tooltipText = "Choose whether searches target Instant Buyout or in-person whisper trades."
+	self.controls.tradeModeLabel = new("LabelControl", {"RIGHT", self.controls.tradeModeSelect, "LEFT"}, {-2, 0, 0, row_height - 4}, "^7Trade:")
 
 	-- Realm selection
 	self.controls.realmLabel = new("LabelControl", {"LEFT", self.controls.setSelect, "RIGHT"}, {18, 0, 20, row_height - 4}, "^7Realm:")
@@ -360,6 +394,17 @@ Highest Weight - Displays the order retrieved from trade]]
 		self.pbRealm = self.realmIds[value]
 		local function setLeagueDropList()
 			self.itemsTab.leagueDropList = copyTable(self.allLeagues[self.pbRealm])
+			if self.pbLeague then
+				for leagueIndex, leagueName in ipairs(self.itemsTab.leagueDropList) do
+					if leagueName == self.pbLeague then
+						self.pbLeagueIndex = leagueIndex
+						break
+					end
+				end
+			end
+			if not self.pbLeagueIndex or self.pbLeagueIndex > #self.itemsTab.leagueDropList then
+				self.pbLeagueIndex = 1
+			end
 			self.controls.league:SetList(self.itemsTab.leagueDropList)
 			-- invalidate selIndex to trigger select function call in the SetSel
 			self.controls.league.selIndex = nil
@@ -406,7 +451,7 @@ Highest Weight - Displays the order retrieved from trade]]
 		return #self.controls.league.list > 1
 	end
 
-	if self.pbRealm == "" then
+	if not self.realmsLoaded then
 		self:UpdateRealms()
 	end
 
@@ -1090,19 +1135,31 @@ end
 function TradeQueryClass:UpdateRealms()
 	local function setRealmDropList()
 		self.realmDropList = {}
+		if self.realmIds["PC"] then
+			t_insert(self.realmDropList, "PC")
+		end
 		for realm, _ in pairs(self.realmIds) do
-			-- place PC as the first entry
-			if realm == "PC" then
-				t_insert(self.realmDropList, 1, realm)
-			else
+			if realm ~= "PC" then
 				t_insert(self.realmDropList, realm)
 			end
+		end
+		if self.pbRealm and self.pbRealm ~= "" then
+			for index, realm in ipairs(self.realmDropList) do
+				if self.realmIds[realm] == self.pbRealm then
+					self.pbRealmIndex = index
+					break
+				end
+			end
+		end
+		if not self.pbRealmIndex or self.pbRealmIndex > #self.realmDropList then
+			self.pbRealmIndex = 1
 		end
 		self.controls.realm:SetList(self.realmDropList)
 		-- invalidate selIndex to trigger select function call in the SetSel
 		-- DropDownControl doesn't check if the inner list has changed so selecting the first item doesn't count as an update after list refresh
 		self.controls.realm.selIndex = nil
 		self.controls.realm:SetSel(self.pbRealmIndex)
+		self.realmsLoaded = true
 	end
 
 	if main.POESESSID and main.POESESSID ~= "" then

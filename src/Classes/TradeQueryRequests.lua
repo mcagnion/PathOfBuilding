@@ -16,7 +16,28 @@ local TradeQueryRequestsClass = newClass("TradeQueryRequests", function(self, ra
 		["fetch"] = {},
 	}
 	self.hostName = "https://www.pathofexile.com/"
+	self.statusOption = "securable"
 end)
+
+local function normalizeStatusOption(option)
+	if option == "securable" or option == "online" then
+		return option
+	elseif option == "available" then
+		return "online"
+	end
+	return nil
+end
+
+function TradeQueryRequestsClass:SetStatusOption(option)
+	local normalized = normalizeStatusOption(option)
+	if normalized then
+		self.statusOption = normalized
+	end
+end
+
+function TradeQueryRequestsClass:GetStatusOption()
+	return self.statusOption or "online"
+end
 
 ---Main routine for processing request queue
 function TradeQueryRequestsClass:ProcessQueue()
@@ -377,7 +398,13 @@ function TradeQueryRequestsClass:FetchSearchQueryHTML(realm, league, queryId, ca
 			else
 				query.sort = { price = "asc"}
 			end
-			query.query.status = { option = query.query.status} -- works either way?
+			local statusOption = self:GetStatusOption()
+			if type(query.query.status) == "table" and query.query.status.option then
+				statusOption = normalizeStatusOption(query.query.status.option) or statusOption
+			elseif type(query.query.status) == "string" then
+				statusOption = normalizeStatusOption(query.query.status) or statusOption
+			end
+			query.query.status = { option = statusOption }
 			local queryStr = dkjson.encode(query)
 			callback(queryStr, errMsg)
 		end,

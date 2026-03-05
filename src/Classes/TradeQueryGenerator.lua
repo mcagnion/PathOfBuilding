@@ -7,6 +7,7 @@
 local dkjson = require "dkjson"
 local curl = require("lcurl.safe")
 local m_max = math.max
+local m_min = math.min
 local s_format = string.format
 local t_insert = table.insert
 
@@ -931,16 +932,16 @@ function TradeQueryGeneratorClass:FinishQuery()
 	-- Generate trade query str and open in browser
 	local filters = 0
 	local queryTable = {
-		query = {
-			filters = self.calcContext.special.queryFilters or {
-				type_filters = {
-					filters = {
-						category = { option = self.calcContext.itemCategoryQueryStr },
-						rarity = { option = "nonunique" }
+			query = {
+				filters = self.calcContext.special.queryFilters or {
+					type_filters = {
+						filters = {
+							category = { option = self.calcContext.itemCategoryQueryStr },
+							rarity = { option = "nonunique" }
+						}
 					}
-				}
-			},
-			status = { option = "available" },
+				},
+				status = { option = self.queryTab:GetTradeStatusOption() },
 			stats = {
 				{
 					type = "weight",
