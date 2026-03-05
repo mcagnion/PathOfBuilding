@@ -515,10 +515,10 @@ Highest Weight - Displays the order retrieved from trade]]
 	end)
 	self.controls.pbNotice = new("LabelControl",  {"BOTTOMRIGHT", nil, "BOTTOMRIGHT"}, {-row_height - pane_margins_vertical - row_vertical_padding, -pane_margins_vertical, 300, row_height}, "")
 
-	self.controls.findAllButton = new("ButtonControl", {"BOTTOMRIGHT", nil, "BOTTOMRIGHT"}, {-pane_margins_horizontal, -pane_margins_vertical, 240, row_height}, "Find All", function()
-		self:FindAllBestItems()
+	self.controls.findAllButton = new("ButtonControl", {"BOTTOMRIGHT", nil, "BOTTOMRIGHT"}, {-pane_margins_horizontal, -pane_margins_vertical, 240, row_height}, "Find Multiple", function()
+		self:OpenFindMultiplePopup()
 	end)
-	self.controls.findAllButton.tooltipText = "Open query options once, then launch searches for all slots."
+	self.controls.findAllButton.tooltipText = "Select slot filters, then launch searches with one query-options popup."
 
 	-- used in PopupDialog:Draw()
 	local function scrollBarFunc()
@@ -779,6 +779,7 @@ function TradeQueryClass:UpdateControlsWithItems(row_idx)
 		amount = self.resultTbl[row_idx][pb_index].amount,
 	}
 	self.controls.fullPrice.label = "Total Price: " .. self:GetTotalPriceString()
+	self:UpdateBestUpgradeLabel()
 	local dropdownLabels = {}
 	for result_index = 1, #self.resultTbl[row_idx] do
 		local pb_index = self.sortedResultTbl[row_idx][result_index].index
@@ -797,6 +798,87 @@ function TradeQueryClass:SetFetchResultReturn(row_idx, index)
 			amount = self.resultTbl[row_idx][index].amount,
 		}
 		self.controls.fullPrice.label = "Total Price: " .. self:GetTotalPriceString()
+		self:UpdateBestUpgradeLabel()
+	end
+end
+
+function TradeQueryClass:GetUpgradeCandidates()
+	local currentMode = self.itemSortSelectionList[self.pbItemSortSelectionIndex]
+	local evalMode = currentMode
+	if evalMode ~= self.sortModes.StatValue and evalMode ~= self.sortModes.StatValuePrice then
+		evalMode = self.sortModes.StatValuePrice
+	end
+
+	local ranked = { }
+	for row_idx, _ in pairs(self.resultTbl) do
+		local sortedItems, errMsg = self:SortFetchResults(row_idx, evalMode)
+		local modeUsed = evalMode
+		if errMsg == "MissingConversionRates" and evalMode == self.sortModes.StatValuePrice then
+			sortedItems, errMsg = self:SortFetchResults(row_idx, self.sortModes.StatValue)
+			modeUsed = self.sortModes.StatValue
+		end
+		if not errMsg and sortedItems and sortedItems[1] and sortedItems[1].outputAttr then
+			t_insert(ranked, { row_idx = row_idx, score = sortedItems[1].outputAttr, mode = modeUsed })
+		end
+	end
+
+	t_sort(ranked, function(a, b)
+		return a.score > b.score
+	end)
+	return ranked
+end
+
+function TradeQueryClass:UpdateBestUpgradeLabel()
+	local ranked = self:GetUpgradeCandidates()
+	local bestScore = ranked[1] and ranked[1].score or nil
+	local worstScore = ranked[#ranked] and ranked[#ranked].score or nil
+
+	-- Apply per-slot coloring and tooltips from global ranking.
+	local rankByRow = { }
+	for rank, candidate in ipairs(ranked) do
+		rankByRow[candidate.row_idx] = rank
+	end
+	for row_idx, slotTbl in ipairs(self.slotTables) do
+		local nameControl = self.controls["name"..row_idx]
+		if nameControl then
+			local baseColor = slotTbl.unique and colorCodes.UNIQUE or "^7"
+			local rank = rankByRow[row_idx]
+			local rowScoreTooltip = nil
+			if rank then
+				local candidate = ranked[rank]
+				local scoreColor = "^7"
+				if candidate.score < 0 then
+					scoreColor = colorCodes.NEGATIVE
+				elseif bestScore and worstScore then
+					local scoreRange = bestScore - worstScore
+					local normalized = scoreRange > 0 and ((candidate.score - worstScore) / scoreRange) or 1
+					if normalized >= 0.75 then
+						scoreColor = colorCodes.POSITIVE
+					elseif normalized >= 0.40 then
+						scoreColor = colorCodes.MAGIC
+					end
+				end
+				nameControl.label = scoreColor .. slotTbl.slotName
+				rowScoreTooltip = s_format("Rank %d - Score %.3f (%s)", rank, candidate.score, candidate.mode)
+			else
+				nameControl.label = baseColor .. slotTbl.slotName
+			end
+
+			local bestButton = self.controls["bestButton"..row_idx]
+			if bestButton then
+				local baseBestTooltip = "Creates a weighted search to find the highest Stat Value items for this slot."
+				if rowScoreTooltip then
+					bestButton.tooltipText = rowScoreTooltip .. "\n" .. baseBestTooltip
+				else
+					bestButton.tooltipText = baseBestTooltip
+				end
+			end
+
+			local changeButton = self.controls["changeButton"..row_idx]
+			if changeButton then
+				changeButton.tooltipText = rowScoreTooltip or "Search this slot again."
+			end
+		end
 	end
 end
 
@@ -992,6 +1074,7 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 		self.resultTbl[row_idx] = nil
 		self.totalPrice[row_idx] = nil
 		self.controls.fullPrice.label = "Total Price: " .. self:GetTotalPriceString()
+		self:UpdateBestUpgradeLabel()
 	end)
 	controls["changeButton"..row_idx].shown = function() return self.resultTbl[row_idx] end
 	local dropdownLabels = {}
@@ -1150,12 +1233,82 @@ function TradeQueryClass:UpdateRealms()
 	end
 end
 
-function TradeQueryClass:FindAllBestItems()
+function TradeQueryClass:OpenFindMultiplePopup()
+	self.findMultipleOptions = self.findMultipleOptions or {
+		ignoreFlasks = true,
+		ignoreJewels = false,
+		ignoreUniqueItems = false,
+	}
+	local controls = { }
+	local popupWidth = 430
+	local labelX = 24
+	local checkX = 300
+	controls.ignoreFlasksLabel = new("LabelControl", {"TOPLEFT", nil, "TOPLEFT"}, {labelX, 32, 0, 16}, "^7Ignore Flask slots")
+	controls.ignoreFlasks = new("CheckBoxControl", {"TOPLEFT", nil, "TOPLEFT"}, {checkX, 30, 18}, "", function() end)
+	controls.ignoreFlasks.state = self.findMultipleOptions.ignoreFlasks
+	controls.ignoreJewelsLabel = new("LabelControl", {"TOPLEFT", nil, "TOPLEFT"}, {labelX, 60, 0, 16}, "^7Ignore Jewel slots")
+	controls.ignoreJewels = new("CheckBoxControl", {"TOPLEFT", nil, "TOPLEFT"}, {checkX, 58, 18}, "", function() end)
+	controls.ignoreJewels.state = self.findMultipleOptions.ignoreJewels
+	controls.ignoreUniqueItemsLabel = new("LabelControl", {"TOPLEFT", nil, "TOPLEFT"}, {labelX, 88, 0, 16}, "^7Ignore slots with unique items")
+	controls.ignoreUniqueItems = new("CheckBoxControl", {"TOPLEFT", nil, "TOPLEFT"}, {checkX, 86, 18}, "", function() end)
+	controls.ignoreUniqueItems.state = self.findMultipleOptions.ignoreUniqueItems
+
+	controls.start = new("ButtonControl", {"BOTTOM", nil, "BOTTOM"}, {-45, -10, 80, 20}, "Run", function()
+		self.findMultipleOptions.ignoreFlasks = controls.ignoreFlasks.state
+		self.findMultipleOptions.ignoreJewels = controls.ignoreJewels.state
+		self.findMultipleOptions.ignoreUniqueItems = controls.ignoreUniqueItems.state
+		main:ClosePopup()
+		self:FindAllBestItems(self.findMultipleOptions)
+	end)
+	controls.cancel = new("ButtonControl", {"BOTTOM", nil, "BOTTOM"}, {45, -10, 80, 20}, "Cancel", function()
+		main:ClosePopup()
+	end)
+
+	main:OpenPopup(popupWidth, 176, "Find Multiple", controls)
+end
+
+function TradeQueryClass:ShouldSkipFindMultipleRow(row_idx, slotTbl, activeSlot, options)
+	if not activeSlot then
+		return true
+	end
+	if self.resultTbl[row_idx] then
+		return true
+	end
+
+	local activeSlotName = activeSlot.slotName or ""
+	if options.ignoreFlasks and activeSlotName:find("Flask") then
+		return true
+	end
+
+	local isJewelSlot = slotTbl.nodeId ~= nil
+		or activeSlotName:find("Jewel") ~= nil
+		or (slotTbl.slotName and slotTbl.slotName:find("Jewel") ~= nil)
+	if options.ignoreJewels and isJewelSlot then
+		return true
+	end
+
+	local isUnique = slotTbl.unique == true
+	if not isUnique and options.ignoreUniqueItems and activeSlot.selItemId and self.itemsTab.items[activeSlot.selItemId] then
+		local equippedItem = self.itemsTab.items[activeSlot.selItemId]
+		isUnique = equippedItem.rarity == "UNIQUE" or equippedItem.rarity == "RELIC"
+	end
+	if options.ignoreUniqueItems and isUnique then
+		return true
+	end
+
+	return false
+end
+
+function TradeQueryClass:FindAllBestItems(options)
+	options = options or self.findMultipleOptions or {
+		ignoreFlasks = true,
+		ignoreJewels = false,
+		ignoreUniqueItems = false,
+	}
 	local pendingQueries = { }
 	for row_idx, slotTbl in ipairs(self.slotTables) do
 		local activeSlot = slotTbl.nodeId and self.itemsTab.sockets[slotTbl.nodeId] or self.itemsTab.slots[slotTbl.slotName]
-		local isFlaskSlot = activeSlot and activeSlot.slotName and activeSlot.slotName:find("Flask")
-		if activeSlot and not isFlaskSlot and not self.resultTbl[row_idx] then
+		if not self:ShouldSkipFindMultipleRow(row_idx, slotTbl, activeSlot, options) then
 			t_insert(pendingQueries, {
 				slot = activeSlot,
 				context = { slotTbl = slotTbl, controls = self.controls, row_idx = row_idx },
