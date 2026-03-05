@@ -27,6 +27,7 @@ local TradeQueryClass = newClass("TradeQuery", function(self, itemsTab)
 	self.resultTbl = { }
 	self.sortedResultTbl = { }
 	self.itemIndexTbl = { }
+	self.slotScoreCache = { }
 	-- tooltip acceleration tables
 	self.onlyWeightedBaseOutput = { }
 	self.lastComparedWeightList = { }
@@ -758,12 +759,15 @@ end
 -- Method to update controls after a search is completed
 function TradeQueryClass:UpdateControlsWithItems(row_idx)
 	local sortMode = self.itemSortSelectionList[self.pbItemSortSelectionIndex]
+	local resolvedSortMode = sortMode
 	local sortedItems, errMsg = self:SortFetchResults(row_idx, sortMode)
 	if errMsg == "MissingConversionRates" then
 		self:SetNotice(self.controls.pbNotice, "^4Price sorting is not available, falling back to Stat Value sort.")
 		sortedItems, errMsg = self:SortFetchResults(row_idx, self.sortModes.StatValue)
+		resolvedSortMode = self.sortModes.StatValue
 	end
 	if errMsg then
+		self.slotScoreCache[row_idx] = nil
 		self:SetNotice(self.controls.pbNotice, "Error: " .. errMsg)
 		return
 	else
@@ -771,6 +775,10 @@ function TradeQueryClass:UpdateControlsWithItems(row_idx)
 	end
 
 	self.sortedResultTbl[row_idx] = sortedItems
+	self.slotScoreCache[row_idx] = {
+		score = sortedItems[1] and sortedItems[1].outputAttr or nil,
+		mode = resolvedSortMode,
+	}
 	local pb_index = self.sortedResultTbl[row_idx][1].index
 	self.itemIndexTbl[row_idx] = pb_index
 	self.controls["priceButton".. row_idx].tooltipText = "Sorted by " .. self.itemSortSelectionList[self.pbItemSortSelectionIndex]
@@ -803,22 +811,10 @@ function TradeQueryClass:SetFetchResultReturn(row_idx, index)
 end
 
 function TradeQueryClass:GetUpgradeCandidates()
-	local currentMode = self.itemSortSelectionList[self.pbItemSortSelectionIndex]
-	local evalMode = currentMode
-	if evalMode ~= self.sortModes.StatValue and evalMode ~= self.sortModes.StatValuePrice then
-		evalMode = self.sortModes.StatValuePrice
-	end
-
 	local ranked = { }
-	for row_idx, _ in pairs(self.resultTbl) do
-		local sortedItems, errMsg = self:SortFetchResults(row_idx, evalMode)
-		local modeUsed = evalMode
-		if errMsg == "MissingConversionRates" and evalMode == self.sortModes.StatValuePrice then
-			sortedItems, errMsg = self:SortFetchResults(row_idx, self.sortModes.StatValue)
-			modeUsed = self.sortModes.StatValue
-		end
-		if not errMsg and sortedItems and sortedItems[1] and sortedItems[1].outputAttr then
-			t_insert(ranked, { row_idx = row_idx, score = sortedItems[1].outputAttr, mode = modeUsed })
+	for row_idx, scoreInfo in pairs(self.slotScoreCache) do
+		if scoreInfo and scoreInfo.score then
+			t_insert(ranked, { row_idx = row_idx, score = scoreInfo.score, mode = scoreInfo.mode })
 		end
 	end
 
@@ -1073,6 +1069,7 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 		self.sortedResultTbl[row_idx] = nil
 		self.resultTbl[row_idx] = nil
 		self.totalPrice[row_idx] = nil
+		self.slotScoreCache[row_idx] = nil
 		self.controls.fullPrice.label = "Total Price: " .. self:GetTotalPriceString()
 		self:UpdateBestUpgradeLabel()
 	end)
@@ -1249,7 +1246,7 @@ function TradeQueryClass:OpenFindMultiplePopup()
 	controls.ignoreJewelsLabel = new("LabelControl", {"TOPLEFT", nil, "TOPLEFT"}, {labelX, 60, 0, 16}, "^7Ignore Jewel slots")
 	controls.ignoreJewels = new("CheckBoxControl", {"TOPLEFT", nil, "TOPLEFT"}, {checkX, 58, 18}, "", function() end)
 	controls.ignoreJewels.state = self.findMultipleOptions.ignoreJewels
-	controls.ignoreUniqueItemsLabel = new("LabelControl", {"TOPLEFT", nil, "TOPLEFT"}, {labelX, 88, 0, 16}, "^7Ignore slots with unique items")
+	controls.ignoreUniqueItemsLabel = new("LabelControl", {"TOPLEFT", nil, "TOPLEFT"}, {labelX, 88, 0, 16}, "^7Ignore slots where equipped item is unique")
 	controls.ignoreUniqueItems = new("CheckBoxControl", {"TOPLEFT", nil, "TOPLEFT"}, {checkX, 86, 18}, "", function() end)
 	controls.ignoreUniqueItems.state = self.findMultipleOptions.ignoreUniqueItems
 
@@ -1282,7 +1279,9 @@ function TradeQueryClass:ShouldSkipFindMultipleRow(row_idx, slotTbl, activeSlot,
 
 	local isJewelSlot = slotTbl.nodeId ~= nil
 		or activeSlotName:find("Jewel") ~= nil
+		or activeSlotName:find("Abyss") ~= nil
 		or (slotTbl.slotName and slotTbl.slotName:find("Jewel") ~= nil)
+		or (slotTbl.slotName and slotTbl.slotName:find("Abyss") ~= nil)
 	if options.ignoreJewels and isJewelSlot then
 		return true
 	end
@@ -1299,12 +1298,7 @@ function TradeQueryClass:ShouldSkipFindMultipleRow(row_idx, slotTbl, activeSlot,
 	return false
 end
 
-function TradeQueryClass:FindAllBestItems(options)
-	options = options or self.findMultipleOptions or {
-		ignoreFlasks = true,
-		ignoreJewels = false,
-		ignoreUniqueItems = false,
-	}
+function TradeQueryClass:BuildFindMultiplePendingQueries(options)
 	local pendingQueries = { }
 	for row_idx, slotTbl in ipairs(self.slotTables) do
 		local activeSlot = slotTbl.nodeId and self.itemsTab.sockets[slotTbl.nodeId] or self.itemsTab.slots[slotTbl.slotName]
@@ -1315,6 +1309,56 @@ function TradeQueryClass:FindAllBestItems(options)
 			})
 		end
 	end
+	return pendingQueries
+end
+
+function TradeQueryClass:ExecuteFindMultiplePendingQuery(pending, skipPopup, onDone)
+	self.tradeQueryGenerator:RequestQuery(pending.slot, pending.context, self.statSortSelectionList, function(context, query, errMsg)
+		if errMsg then
+			self:SetNotice(context.controls.pbNotice, colorCodes.NEGATIVE .. errMsg)
+			onDone()
+			return
+		end
+		self:SetNotice(context.controls.pbNotice, "")
+
+		if main.POESESSID == nil or main.POESESSID == "" then
+			local url = self.tradeQueryRequests:buildUrl(self.hostName .. "trade/search", self.pbRealm, self.pbLeague)
+			url = url .. "?q=" .. urlEncode(query)
+			self.controls["uri"..context.row_idx]:SetText(url, true)
+			onDone()
+			return
+		end
+
+		context.controls["priceButton"..context.row_idx].label = "Searching..."
+		self.tradeQueryRequests:SearchWithQueryWeightAdjusted(self.pbRealm, self.pbLeague, query,
+			function(items, fetchErrMsg)
+				if fetchErrMsg then
+					self:SetNotice(context.controls.pbNotice, colorCodes.NEGATIVE .. fetchErrMsg)
+				else
+					self:SetNotice(context.controls.pbNotice, "")
+					self.resultTbl[context.row_idx] = items
+					self:UpdateControlsWithItems(context.row_idx)
+				end
+				context.controls["priceButton"..context.row_idx].label = "Price Item"
+				onDone()
+			end,
+			{
+				callbackQueryId = function(queryId)
+					local url = self.tradeQueryRequests:buildUrl(self.hostName .. "trade/search", self.pbRealm, self.pbLeague, queryId)
+					self.controls["uri"..context.row_idx]:SetText(url, true)
+				end
+			}
+		)
+	end, skipPopup)
+end
+
+function TradeQueryClass:FindAllBestItems(options)
+	options = options or self.findMultipleOptions or {
+		ignoreFlasks = true,
+		ignoreJewels = false,
+		ignoreUniqueItems = false,
+	}
+	local pendingQueries = self:BuildFindMultiplePendingQueries(options)
 
 	if #pendingQueries == 0 then
 		self:SetNotice(self.controls.pbNotice, colorCodes.POSITIVE .. "No pending slots to search.")
@@ -1326,44 +1370,9 @@ function TradeQueryClass:FindAllBestItems(options)
 		if not pending then
 			return
 		end
-
-		self.tradeQueryGenerator:RequestQuery(pending.slot, pending.context, self.statSortSelectionList, function(context, query, errMsg)
-			if errMsg then
-				self:SetNotice(context.controls.pbNotice, colorCodes.NEGATIVE .. errMsg)
-				processPending(index + 1, true)
-				return
-			end
-			self:SetNotice(context.controls.pbNotice, "")
-
-			if main.POESESSID == nil or main.POESESSID == "" then
-				local url = self.tradeQueryRequests:buildUrl(self.hostName .. "trade/search", self.pbRealm, self.pbLeague)
-				url = url .. "?q=" .. urlEncode(query)
-				self.controls["uri"..context.row_idx]:SetText(url, true)
-				processPending(index + 1, true)
-				return
-			end
-
-			context.controls["priceButton"..context.row_idx].label = "Searching..."
-			self.tradeQueryRequests:SearchWithQueryWeightAdjusted(self.pbRealm, self.pbLeague, query,
-				function(items, fetchErrMsg)
-					if fetchErrMsg then
-						self:SetNotice(context.controls.pbNotice, colorCodes.NEGATIVE .. fetchErrMsg)
-					else
-						self:SetNotice(context.controls.pbNotice, "")
-						self.resultTbl[context.row_idx] = items
-						self:UpdateControlsWithItems(context.row_idx)
-					end
-					context.controls["priceButton"..context.row_idx].label = "Price Item"
-					processPending(index + 1, true)
-				end,
-				{
-					callbackQueryId = function(queryId)
-						local url = self.tradeQueryRequests:buildUrl(self.hostName .. "trade/search", self.pbRealm, self.pbLeague, queryId)
-						self.controls["uri"..context.row_idx]:SetText(url, true)
-					end
-				}
-			)
-		end, skipPopup)
+		self:ExecuteFindMultiplePendingQuery(pending, skipPopup, function()
+			processPending(index + 1, true)
+		end)
 	end
 
 	-- Show query options once, then reuse saved options for remaining rows.
