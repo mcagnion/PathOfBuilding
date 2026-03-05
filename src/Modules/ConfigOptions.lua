@@ -498,6 +498,10 @@ return {
 	{ var = "OverloadedIntensity", type = "count", label = "# of Overloaded Intensity:", ifSkill = "Overloaded Intensity", apply = function(val, modList, enemyModList)
 		modList:NewMod("Multiplier:OverloadedIntensity", "BASE", val, "Config")
 	end },
+	{ label = "Kinetic Fusillade:", ifSkill = "Kinetic Fusillade" },
+	{ var = "kineticFusilladeLegacyDpsCalc", type = "check", label = "Use legacy DPS calculation?", ifSkill = "Kinetic Fusillade", tooltip = "Uses the previous linear scaling when attack speed exceeds max effective APS.\nDisable to use the newer projectile-based volley calculation.", apply = function(val, modList, enemyModList)
+		modList:NewMod("SkillData", "LIST", { key = "kineticFusilladeLegacyDpsCalc", value = true }, "Config", { type = "SkillName", skillName = "Kinetic Fusillade" })
+	end },
 	{ label = "Link Skills:", ifSkill = { "Destructive Link", "Flame Link", "Intuitive Link", "Protective Link", "Soul Link", "Vampiric Link" } },
 	{ var = "multiplierLinkedTargets", type = "count", label = "# of linked Targets:", ifSkill = { "Destructive Link", "Flame Link", "Intuitive Link", "Protective Link", "Soul Link", "Vampiric Link" }, apply = function(val, modList, enemyModList)
 		modList:NewMod("Multiplier:LinkedTargets", "BASE", val, "Config")
