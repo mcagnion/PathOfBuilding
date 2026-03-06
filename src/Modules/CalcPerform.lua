@@ -3444,6 +3444,9 @@ function calcs.perform(env, skipEHP)
 	if not calcs.mirages(env) then
 		calcs.offence(env, env.player, env.player.mainSkill)
 	end
+	if not skipEHP then
+		calcs.buildDefenceEstimations(env, env.player)
+	end
 
 	if env.minion then
 		calcs.defence(env, env.minion)
@@ -3452,6 +3455,9 @@ function calcs.perform(env, skipEHP)
 		end
 		calcs.triggers(env, env.minion)
 		calcs.offence(env, env.minion, env.minion.mainSkill)
+		if not skipEHP then
+			calcs.buildDefenceEstimations(env, env.minion)
+		end
 	end
 
 	 -- Export modifiers to enemy conditions and stats for party tab
