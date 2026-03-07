@@ -3062,7 +3062,7 @@ function calcs.buildDefenceEstimations(env, actor)
 	end
 
 	-- effective hit pool with sustained recovery between damaging hits
-	if damageCategoryConfig ~= "DamageOverTime" and ehpRegenDamageIn then
+	if env.configInput.EnableEHPRecoveryCalcs and damageCategoryConfig ~= "DamageOverTime" and ehpRegenDamageIn then
 		output["EHPRecoveryHitChance"] = nil
 		output["EHPRecoveryDamagingHitInterval"] = nil
 		output["EHPRecoveryHitsSurvived"] = nil
