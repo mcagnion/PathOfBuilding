@@ -341,7 +341,7 @@ Highest Stat Value - Sort from highest to lowest Stat Value change of equipping 
 Highest Stat Value / Price - Sorts from highest to lowest Stat Value per currency
 Lowest Price - Sorts from lowest to highest price of retrieved items
 Highest Weight - Displays the order retrieved from trade]]
-	self.controls.itemSortSelection:SetSel(self.pbItemSortSelectionIndex)
+	self.controls.itemSortSelection:SetSel(self.pbItemSortSelectionIndex, true)
 	self.controls.itemSortSelectionLabel = new("LabelControl", {"TOPRIGHT", self.controls.itemSortSelection, "TOPLEFT"}, {-4, 0, 60, 16}, "^7Sort By:")
 
 	-- Use Enchant in DPS sorting
@@ -514,6 +514,10 @@ Highest Weight - Displays the order retrieved from trade]]
 		self:PullPoENinjaCurrencyConversion(self.pbLeague)
 	end)
 	self.controls.pbNotice = new("LabelControl",  {"BOTTOMRIGHT", nil, "BOTTOMRIGHT"}, {-row_height - pane_margins_vertical - row_vertical_padding, -pane_margins_vertical, 300, row_height}, "")
+	self.controls.fullPrice.label = "Total Price: " .. self:GetTotalPriceString()
+	for row_idx, _ in pairs(self.resultTbl) do
+		self:UpdateControlsWithItems(row_idx)
+	end
 
 	-- used in PopupDialog:Draw()
 	local function scrollBarFunc()
