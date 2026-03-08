@@ -441,6 +441,13 @@ function calcs.initEnv(build, mode, override, specEnv)
 		enemyDB = env.enemyDB
 	end
 
+	env.configInput = override.configInput or build.configTab.input
+	env.configPlaceholder = override.configPlaceholder or build.configTab.placeholder
+	env.enemyLevel = override.enemyLevel or build.configTab.enemyLevel or m_min(data.misc.MaxEnemyLevel, build.characterLevel)
+	if env.enemy then
+		env.enemy.level = env.enemyLevel
+	end
+
 	-- Set buff mode
 	local buffMode
 	if mode == "CALCS" then
@@ -558,8 +565,8 @@ function calcs.initEnv(build, mode, override, specEnv)
 		enemyDB:NewMod("Condition:AgainstDamageOverTime", "FLAG", true, "Base", ModFlag.Dot, { type = "ActorCondition", actor = "player", var = "Combat" })
 
 		-- Add mods from the config tab
-		env.modDB:AddList(build.configTab.modList)
-		env.enemyDB:AddList(build.configTab.enemyModList)
+		env.modDB:AddList(override.configModList or build.configTab.modList)
+		env.enemyDB:AddList(override.enemyConfigModList or build.configTab.enemyModList)
 
 		-- Add mods from the party tab
 		env.enemyDB:AddList(build.partyTab.enemyModList)
@@ -840,7 +847,7 @@ function calcs.initEnv(build, mode, override, specEnv)
 			for _, slot in ipairs(build.itemsTab.orderedSlots) do
 				local slotName = slot.slotName
 				if items[slotName] then
-					local srcList = items[slotName].modList or items[slotName].slotModList[slot.slotNum]
+					local srcList = items[slotName].modList or (items[slotName].slotModList and items[slotName].slotModList[slot.slotNum]) or {}
 					for _, mod in ipairs(srcList) do
 						-- checks if it disables another slot
 						for _, tag in ipairs(mod) do
@@ -1057,7 +1064,7 @@ function calcs.initEnv(build, mode, override, specEnv)
 				elseif item.name:match("Kalandra's Touch") then
 					local otherRing = items[(slotName == "Ring 1" and "Ring 2") or (slotName == "Ring 2" and "Ring 1")]
 					if otherRing and not otherRing.name:match("Kalandra's Touch") then
-						for _, mod in ipairs(otherRing.modList or otherRing.slotModList[slot.slotNum] or {}) do
+						for _, mod in ipairs(otherRing.modList or (otherRing.slotModList and otherRing.slotModList[slot.slotNum]) or {}) do
 							-- Filter out SocketedIn type mods
 							for _, tag in ipairs(mod) do
 								if tag.type == "SocketedIn" then
