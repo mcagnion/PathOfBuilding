@@ -726,6 +726,22 @@ local modNameList = {
 	["to scorch enemies"] = "EnemyScorchChance",
 	["to inflict brittle"] = "EnemyBrittleChance",
 	["to sap enemies"] = "EnemySapChance",
+	["to blind"] = "EnemyBlindChance",
+	["to blind enemies"] = "EnemyBlindChance",
+	["to blind enemies on hit"] = "EnemyBlindChance",
+	["to blind enemies with attacks"] = { "EnemyBlindChance", flags = ModFlag.Attack },
+	["to blind enemies on hit with attacks"] = { "EnemyBlindChance", flags = ModFlag.Attack },
+	["to blind enemies with melee weapons"] = { "EnemyBlindChance", flags = ModFlag.Melee },
+	["to blind enemies on hit with melee weapons"] = { "EnemyBlindChance", flags = ModFlag.Melee },
+	["to blind with hits against bleeding enemies"] = {
+		"EnemyBlindChance",
+		flags = ModFlag.Hit,
+		tag = { type = "ActorCondition", actor = "enemy", var = "Bleeding" },
+	},
+	["blind chance"] = "EnemyBlindChance",
+	["to intimidate enemies for 4 seconds on hit"] = "EnemyIntimidateChance",
+	["to intimidate enemies for 4 seconds on hit with attacks"] = { "EnemyIntimidateChance", flags = ModFlag.Attack },
+	["to intimidate for 4 seconds on hit"] = "EnemyIntimidateChance",
 	["effect of scorch"] = "EnemyScorchEffect",
 	["effect of sap"] = "EnemySapEffect",
 	["effect of brittle"] = "EnemyBrittleEffect",
@@ -4869,6 +4885,14 @@ local specialModList = {
 	["hits that stun enemies have culling strike"] = { flag("Condition:maceMasteryStunCullSpecced") },
 	-- Intimidate
 	["permanently intimidate enemies on block"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Intimidated") }, { type = "Condition", var = "BlockedRecently" }) },
+	["(%d+)%% chance to intimidate enemies for (%d+) seconds on hit"] = function(num, _) return {
+		mod("EnemyIntimidateChance", "BASE", num)
+	} end,
+	["(%d+)%% chance to intimidate enemies for (%d+) seconds on hit with attacks"] = function(num, _) return {
+		mod("EnemyIntimidateChance", "BASE", num, nil, ModFlag.Attack)
+	} end,
+	["intimidate enemies for (%d+) seconds on hit"] = { mod("EnemyIntimidateChance", "BASE", 100) },
+	["intimidate enemies for (%d+) seconds on hit with attacks"] = { mod("EnemyIntimidateChance", "BASE", 100, nil, ModFlag.Attack) },
 	["with a murderous eye jewel socketed, intimidate enemies for (%d) seconds on hit with attacks"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Intimidated") }, { type = "Condition", var = "HaveMurderousEyeJewelIn{SlotName}" }) },
 	["enemies taunted by your warcries are intimidated"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Intimidated", { type = "Condition", var = "Taunted" }) }, { type = "Condition", var = "UsedWarcryRecently" }) },
 	["intimidate enemies for (%d+) seconds on block while holding a shield"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Intimidated") }, { type = "Condition", var = "BlockedRecently" }, { type = "Condition", var = "UsingShield" }) },
