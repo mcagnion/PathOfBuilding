@@ -3906,6 +3906,11 @@ function calcs.offence(env, actor, activeSkill)
 		else
 			output.KnockbackChanceOnCrit = skillModList:Sum("BASE", cfg, "EnemyKnockbackChance")
 		end
+		if not skillFlags.hit then
+			output.MaimChanceOnCrit = 0
+		else
+			output.MaimChanceOnCrit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyMaimChance"))
+		end
 		cfg.skillCond["CriticalStrike"] = false
 		if not skillFlags.attack or skillModList:Flag(cfg, "CannotBleed") then
 			output.BleedChanceOnHit = 0
@@ -3963,6 +3968,11 @@ function calcs.offence(env, actor, activeSkill)
 		else
 			output.BlindChanceOnHit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyBlindChance"))
 			output.BlindChanceOnCrit = output.BlindChanceOnHit
+		end
+		if not skillFlags.hit then
+			output.MaimChanceOnHit = 0
+		else
+			output.MaimChanceOnHit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyMaimChance"))
 		end
 		if not skillFlags.hit then
 			output.IntimidateChanceOnHit = 0
@@ -5234,6 +5244,11 @@ function calcs.offence(env, actor, activeSkill)
 			+ output.BlindChanceOnCrit * output.CritChance / 100
 			+ enemyDB:Sum("BASE", nil, "SelfBlindChance")
 		)
+		output.MaimChance = m_min(
+			100,
+			output.MaimChanceOnHit * (1 - output.CritChance / 100)
+			+ output.MaimChanceOnCrit * output.CritChance / 100
+		)
 		output.IntimidateChance = m_min(
 			100,
 			output.IntimidateChanceOnHit * (1 - output.CritChance / 100)
@@ -5408,6 +5423,7 @@ function calcs.offence(env, actor, activeSkill)
 		combineStat("SapEffectMod", "AVERAGE")
 		combineStat("SapDuration", "AVERAGE")
 		combineStat("BlindChance", "AVERAGE")
+		combineStat("MaimChance", "AVERAGE")
 		combineStat("IntimidateChance", "AVERAGE")
 		combineStat("ImpaleChance", "AVERAGE")
 		combineStat("ImpaleStoredDamage", "AVERAGE")

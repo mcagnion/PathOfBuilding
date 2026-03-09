@@ -40,6 +40,7 @@ local manualEnemyConditionHintsByVar = {
 
 local enemyConditionChanceStatMap = {
 	Bleeding = { "BleedChance" },
+	Maimed = { "MaimChance" },
 	Poisoned = { "PoisonChance" },
 	Ignited = { "IgniteChancePerHit", "IgniteChance" },
 	Burning = { "IgniteChancePerHit", "IgniteChance" },
@@ -318,6 +319,11 @@ local function getConditionEffectLines(build, enemyCondition)
 		return {
 			"^7Current bleed DPS: " .. formatValue(bleedDPS, 1),
 			bleedDuration > 0 and "^8Duration: " .. formatSeconds(bleedDuration, 2) or nil,
+		}
+	end
+	if enemyCondition == "Maimed" then
+		return {
+			"^7Maimed enemies have 30% reduced Movement Speed.",
 		}
 	end
 	if enemyCondition == "Poisoned" then

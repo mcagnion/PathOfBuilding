@@ -738,6 +738,19 @@ local modNameList = {
 		tag = { type = "ActorCondition", actor = "enemy", var = "Bleeding" },
 	},
 	["blind chance"] = "EnemyBlindChance",
+	["to maim"] = "EnemyMaimChance",
+	["to maim enemies"] = "EnemyMaimChance",
+	["to maim on hit"] = "EnemyMaimChance",
+	["to maim enemies on hit"] = "EnemyMaimChance",
+	["to maim enemies with attacks"] = { "EnemyMaimChance", flags = ModFlag.Attack },
+	["to maim enemies on hit with attacks"] = { "EnemyMaimChance", flags = ModFlag.Attack },
+	["to maim with attacks"] = { "EnemyMaimChance", flags = ModFlag.Attack },
+	["to maim with hits against blinded enemies"] = {
+		"EnemyMaimChance",
+		flags = ModFlag.Hit,
+		tag = { type = "ActorCondition", actor = "enemy", var = "Blinded" },
+	},
+	["maim chance"] = "EnemyMaimChance",
 	["to intimidate enemies for 4 seconds on hit"] = "EnemyIntimidateChance",
 	["to intimidate enemies for 4 seconds on hit with attacks"] = { "EnemyIntimidateChance", flags = ModFlag.Attack },
 	["to intimidate for 4 seconds on hit"] = "EnemyIntimidateChance",
@@ -4867,8 +4880,37 @@ local specialModList = {
 	["culling strike against marked enemy"] = { mod("CullPercent", "MAX", 10, { type = "ActorCondition", actor = "enemy", var = "Marked" }) },
 	["nearby allies have culling strike"] = { mod("ExtraAura", "LIST", {onlyAllies = true, mod = mod("CullPercent", "MAX", 10) }) },
 	["hits that stun enemies have culling strike"] = { flag("Condition:maceMasteryStunCullSpecced") },
-	-- Intimidate
+	-- Maim / Intimidate
 	["permanently intimidate enemies on block"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Intimidated") }, { type = "Condition", var = "BlockedRecently" }) },
+	["(%d+)%% chance to maim on hit"] = function(num) return {
+		mod("EnemyMaimChance", "BASE", num)
+	} end,
+	["(%d+)%% chance to maim enemies on hit"] = function(num) return {
+		mod("EnemyMaimChance", "BASE", num)
+	} end,
+	["(%d+)%% chance to maim enemies with main hand hits"] = function(num) return {
+		mod("EnemyMaimChance", "BASE", num, nil, ModFlag.MainHand)
+	} end,
+	["(%d+)%% chance to maim enemies on critical strike with attacks"] = function(num) return {
+		mod("EnemyMaimChance", "BASE", num, nil, ModFlag.Attack, { type = "Condition", var = "CriticalStrike" })
+	} end,
+	["attacks have (%d+)%% chance to maim on hit"] = function(num) return {
+		mod("EnemyMaimChance", "BASE", num, nil, ModFlag.Attack)
+	} end,
+	["attack hits have (%d+)%% chance to maim"] = function(num) return {
+		mod("EnemyMaimChance", "BASE", num, nil, ModFlag.Attack)
+	} end,
+	["attack hits against blinded enemies have (%d+)%% chance to maim"] = function(num) return {
+		mod("EnemyMaimChance", "BASE", num, nil, bor(ModFlag.Attack, ModFlag.Hit), { type = "ActorCondition", actor = "enemy", var = "Blinded" })
+	} end,
+	["projectiles from attacks have (%d+)%% chance to maim on hit while you have a bestial minion"] = function(num) return {
+		mod("EnemyMaimChance", "BASE", num, nil, bor(ModFlag.Attack, ModFlag.Projectile), { type = "Condition", var = "HaveBestialMinion" })
+	} end,
+	["maim enemies for (%d+) seconds on hit"] = { mod("EnemyMaimChance", "BASE", 100) },
+	["maim enemies for (%d+) seconds on hit with attacks"] = { mod("EnemyMaimChance", "BASE", 100, nil, ModFlag.Attack) },
+	["minions have (%d+)%% chance to maim enemies on hit with attacks"] = function(num) return {
+		mod("MinionModifier", "LIST", { mod = mod("EnemyMaimChance", "BASE", num, nil, ModFlag.Attack) })
+	} end,
 	["(%d+)%% chance to intimidate enemies for (%d+) seconds on hit"] = function(num, _) return {
 		mod("EnemyIntimidateChance", "BASE", num)
 	} end,
