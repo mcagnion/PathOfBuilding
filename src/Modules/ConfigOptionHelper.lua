@@ -63,6 +63,21 @@ local configVarElementMap = {
 	conditionEnemyLightningExposure = "Lightning",
 }
 
+local coveredConfigMap = {
+	conditionEnemyCoveredInAsh = {
+		modName = "CoveredInAshEffect",
+		label = "Covered in Ash",
+		effectTooltip = "^7When enabled, applies 20% increased Fire Damage taken and 20% less Movement Speed.",
+		triggerCondition = "Ignited",
+	},
+	conditionEnemyCoveredInFrost = {
+		modName = "CoveredInFrostEffect",
+		label = "Covered in Frost",
+		effectTooltip = "^7When enabled, applies 20% increased Cold Damage taken and 50% less Critical Strike Chance.",
+		triggerCondition = "Frozen",
+	},
+}
+
 local configVarChargeMap = {
 	usePowerCharges = {
 		actor = "player",
@@ -313,6 +328,16 @@ local function collectDirectEnemyModifierSourceMods(build, targetName)
 	return out
 end
 
+local function collectEffectSourceMods(build, targetName)
+	local out = { }
+	forEachRelevantMod(build, function(mod)
+		if mod and mod.name == targetName and mod.source ~= "Base" then
+			t_insert(out, mod)
+		end
+	end)
+	return out
+end
+
 local function getConditionEffectLines(build, enemyCondition)
 	if enemyCondition == "Bleeding" then
 		local bleedDPS = getMaxActorStat(build, "BleedDPS")
@@ -455,6 +480,26 @@ end
 
 local function getChargeConfig(build, varName)
 	return configVarChargeMap[varName]
+end
+
+local function getCoveredConfig(varName)
+	return coveredConfigMap[varName]
+end
+
+local function hasCoveredSource(build, varName)
+	local coveredConfig = getCoveredConfig(varName)
+	if not coveredConfig then
+		return false
+	end
+	return #collectEffectSourceMods(build, coveredConfig.modName) > 0
+end
+
+local function getCoveredChanceData(build, varName)
+	local coveredConfig = getCoveredConfig(varName)
+	if not coveredConfig or not coveredConfig.triggerCondition then
+		return
+	end
+	return getConditionApplyChanceInOneSecond(build, coveredConfig.triggerCondition)
 end
 
 local function getChargeSourceMatches(build, varName)
@@ -854,6 +899,10 @@ function helper.formatConfigVarEffectTooltip(build, varName)
 		end
 		return "^7When enabled, applies -" .. formatValue(exposure, 0) .. "% " .. element .. " Resistance."
 	end
+	local coveredConfig = getCoveredConfig(varName)
+	if coveredConfig then
+		return coveredConfig.effectTooltip
+	end
 	local chargeConfig = getChargeConfig(build, varName)
 	local output = getActorOutput(build, chargeConfig and chargeConfig.actor)
 	if not chargeConfig or not output then
@@ -902,6 +951,41 @@ function helper.formatConfigVarChanceTooltip(build, varName)
 		end
 		return out
 	end
+	local coveredConfig = getCoveredConfig(varName)
+	if coveredConfig then
+		local chanceData = getCoveredChanceData(build, varName)
+		if not chanceData then
+			return hasCoveredSource(build, varName) and "^8Source detected." or nil
+		end
+		local out = "^7Estimated apply chance within 1s: "
+			.. formatValue(chanceData.combined * 100, 1) .. "%"
+			.. " ^8(" .. coveredConfig.triggerCondition .. ")"
+		local details = { }
+		if chanceData.playerChancePerHit and chanceData.playerAttempts then
+			t_insert(
+				details,
+				"Player "
+					.. formatValue(chanceData.playerChancePerHit * 100, 1)
+					.. "%/hit, "
+					.. formatValue(chanceData.playerAttempts, 2)
+					.. " effective hits/s"
+			)
+		end
+		if chanceData.minionChancePerHit and chanceData.minionAttempts then
+			t_insert(
+				details,
+				"Minion "
+					.. formatValue(chanceData.minionChancePerHit * 100, 1)
+					.. "%/hit, "
+					.. formatValue(chanceData.minionAttempts, 2)
+					.. " effective hits/s"
+			)
+		end
+		if #details > 0 then
+			out = out .. "\n^8" .. t_concat(details, " | ")
+		end
+		return out
+	end
 	local chargeConfig = getChargeConfig(build, varName)
 	if not chargeConfig then
 		return
@@ -922,6 +1006,31 @@ function helper.getConfigVarRecommendationData(build, configInput, varName)
 			return
 		end
 		local chanceData = getExposureChanceData(build, element)
+		if chanceData and chanceData.combined >= 0.75 then
+			return {
+				level = "strong",
+				chance = chanceData.combined,
+			}
+		end
+		if chanceData and chanceData.combined >= 0.35 then
+			return {
+				level = "medium",
+				chance = chanceData.combined,
+			}
+		end
+		return {
+			level = "soft",
+		}
+	end
+	local coveredConfig = getCoveredConfig(varName)
+	if coveredConfig then
+		if not configInput or configInput[varName] then
+			return
+		end
+		if not hasCoveredSource(build, varName) then
+			return
+		end
+		local chanceData = getCoveredChanceData(build, varName)
 		if chanceData and chanceData.combined >= 0.75 then
 			return {
 				level = "strong",
