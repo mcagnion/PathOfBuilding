@@ -42,6 +42,7 @@ local enemyConditionChanceStatMap = {
 	Bleeding = { "BleedChance" },
 	Maimed = { "MaimChance" },
 	Poisoned = { "PoisonChance" },
+	Hindered = { "HinderChance" },
 	Ignited = { "IgniteChancePerHit", "IgniteChance" },
 	Burning = { "IgniteChancePerHit", "IgniteChance" },
 	Frozen = { "FreezeChance" },
@@ -324,6 +325,12 @@ local function getConditionEffectLines(build, enemyCondition)
 	if enemyCondition == "Maimed" then
 		return {
 			"^7Maimed enemies have 30% reduced Movement Speed.",
+		}
+	end
+	if enemyCondition == "Hindered" then
+		return {
+			"^7Hinder is a movement speed debuff.",
+			"^8Its exact slow amount depends on the source.",
 		}
 	end
 	if enemyCondition == "Poisoned" then

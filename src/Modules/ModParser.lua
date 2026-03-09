@@ -739,6 +739,11 @@ local modNameList = {
 		tag = { type = "ActorCondition", actor = "enemy", var = "Bleeding" },
 	},
 	["blind chance"] = "EnemyBlindChance",
+	["to hinder enemies on hit"] = "EnemyHinderChance",
+	["to hinder on hit"] = "EnemyHinderChance",
+	["to hinder enemies on hit with spells"] = { "EnemyHinderChance", flags = ModFlag.Spell },
+	["to hinder on hit with spells"] = { "EnemyHinderChance", flags = ModFlag.Spell },
+	["hinder chance"] = "EnemyHinderChance",
 	["to maim"] = "EnemyMaimChance",
 	["to maim enemies"] = "EnemyMaimChance",
 	["to maim on hit"] = "EnemyMaimChance",
@@ -4896,8 +4901,24 @@ local specialModList = {
 	["culling strike against marked enemy"] = { mod("CullPercent", "MAX", 10, { type = "ActorCondition", actor = "enemy", var = "Marked" }) },
 	["nearby allies have culling strike"] = { mod("ExtraAura", "LIST", {onlyAllies = true, mod = mod("CullPercent", "MAX", 10) }) },
 	["hits that stun enemies have culling strike"] = { flag("Condition:maceMasteryStunCullSpecced") },
-	-- Maim / Intimidate
+	-- Hinder / Maim / Intimidate
 	["permanently intimidate enemies on block"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Intimidated") }, { type = "Condition", var = "BlockedRecently" }) },
+	["(%d+)%% chance to hinder enemies on hit with spells"] = function(num) return {
+		mod("EnemyHinderChance", "BASE", num, nil, ModFlag.Spell)
+	} end,
+	["spell hits have (%d+)%% chance to hinder cursed enemies"] = function(num) return {
+		mod("EnemyHinderChance", "BASE", num, nil, ModFlag.Spell, 0, { type = "ActorCondition", actor = "enemy", var = "Cursed" })
+	} end,
+	["chaos spells have (%d+)%% chance to hinder enemies on hit"] = function(num) return {
+		mod("EnemyHinderChance", "BASE", num, nil, ModFlag.Spell, KeywordFlag.Chaos)
+	} end,
+	["hinder enemies on hit with spells"] = { mod("EnemyHinderChance", "BASE", 100, nil, ModFlag.Spell) },
+	["minions have (%d+)%% chance to hinder enemies on hit with spells"] = function(num) return {
+		mod("MinionModifier", "LIST", { mod = mod("EnemyHinderChance", "BASE", num, nil, ModFlag.Spell) })
+	} end,
+	["minions hinder enemies on hit with spells"] = {
+		mod("MinionModifier", "LIST", { mod = mod("EnemyHinderChance", "BASE", 100, nil, ModFlag.Spell) })
+	},
 	["(%d+)%% chance to maim on hit"] = function(num) return {
 		mod("EnemyMaimChance", "BASE", num)
 	} end,
