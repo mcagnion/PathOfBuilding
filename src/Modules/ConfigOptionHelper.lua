@@ -36,6 +36,7 @@ local ailmentSourceLabels = {
 local manualEnemyConditionHintsByVar = {
 	conditionEnemyChilled = { "Chilled", "ChilledByYourHits", "ChilledByYou" },
 	conditionEnemyBlinded = { "Blinded" },
+	conditionEnemyDebilitated = { "Debilitated" },
 }
 
 local enemyConditionChanceStatMap = {
@@ -46,6 +47,7 @@ local enemyConditionChanceStatMap = {
 	Taunted = { "TauntChance" },
 	Unnerved = { "UnnerveChance" },
 	Crushed = { "CrushChance" },
+	Debilitated = { "DebilitateChance" },
 	Ignited = { "IgniteChancePerHit", "IgniteChance" },
 	Burning = { "IgniteChancePerHit", "IgniteChance" },
 	Frozen = { "FreezeChance" },
@@ -375,6 +377,11 @@ local function getConditionEffectLines(build, enemyCondition)
 	if enemyCondition == "Crushed" then
 		return {
 			"^7Crushed enemies have 15% reduced Physical Damage Reduction.",
+		}
+	end
+	if enemyCondition == "Debilitated" then
+		return {
+			"^7Debilitated enemies deal 10% less damage and have 20% less Movement Speed.",
 		}
 	end
 	if enemyCondition == "Poisoned" then
