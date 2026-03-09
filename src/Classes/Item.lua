@@ -1042,12 +1042,13 @@ end
 
 function ItemClass:BuildRaw()
 	local rawLines = { }
+	local displayBaseName = self.baseName or self.name or self.title or "Unknown Item"
 	t_insert(rawLines, "Rarity: " .. self.rarity)
-	if self.title then
+	if self.title and self.baseName then
 		t_insert(rawLines, self.title)
 		t_insert(rawLines, self.baseName)
 	else
-		t_insert(rawLines, (self.namePrefix or "") .. self.baseName .. (self.nameSuffix or ""))
+		t_insert(rawLines, (self.namePrefix or "") .. displayBaseName .. (self.nameSuffix or ""))
 	end
 	if self.armourData then
 		for _, type in ipairs({ "Armour", "Evasion", "EnergyShield", "Ward" }) do
