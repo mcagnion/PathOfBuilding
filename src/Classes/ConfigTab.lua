@@ -1086,9 +1086,14 @@ function ConfigTabClass:BuildModListsForState(input, placeholder)
 end
 
 function ConfigTabClass:BuildModList()
+	local modList = new("ModList")
+	self.modList = modList
+	local enemyModList = new("ModList")
+	self.enemyModList = enemyModList
 	local input = self.configSets[self.activeConfigSetId].input
 	local placeholder = self.configSets[self.activeConfigSetId].placeholder
-	self.modList, self.enemyModList, self.enemyLevel = self:BuildModListsForState(input, placeholder)
+	self:UpdateLevel() -- enemy level handled here because it's needed to correctly set boss stats
+	self:ApplyConfigStateToModLists(input, placeholder, modList, enemyModList)
 end
 
 function ConfigTabClass:GetConfigTooltipTargetValue(varData, ...)
