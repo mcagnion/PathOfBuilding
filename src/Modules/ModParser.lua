@@ -750,6 +750,11 @@ local modNameList = {
 	["to taunt enemies on hit with attacks"] = { "EnemyTauntChance", flags = ModFlag.Attack },
 	["to taunt on hit with attacks"] = { "EnemyTauntChance", flags = ModFlag.Attack },
 	["taunt chance"] = "EnemyTauntChance",
+	["to unnerve enemies for 4 seconds on hit"] = "EnemyUnnerveChance",
+	["to unnerve for 4 seconds on hit"] = "EnemyUnnerveChance",
+	["to unnerve enemies for 4 seconds on hit with spells"] = { "EnemyUnnerveChance", flags = ModFlag.Spell },
+	["to unnerve for 4 seconds on hit with spells"] = { "EnemyUnnerveChance", flags = ModFlag.Spell },
+	["unnerve chance"] = "EnemyUnnerveChance",
 	["to maim"] = "EnemyMaimChance",
 	["to maim enemies"] = "EnemyMaimChance",
 	["to maim on hit"] = "EnemyMaimChance",
@@ -4892,7 +4897,7 @@ local specialModList = {
 	["culling strike against marked enemy"] = { mod("CullPercent", "MAX", 10, { type = "ActorCondition", actor = "enemy", var = "Marked" }) },
 	["nearby allies have culling strike"] = { mod("ExtraAura", "LIST", {onlyAllies = true, mod = mod("CullPercent", "MAX", 10) }) },
 	["hits that stun enemies have culling strike"] = { flag("Condition:maceMasteryStunCullSpecced") },
-	-- Hinder / Taunt / Maim / Intimidate
+	-- Hinder / Taunt / Unnerve / Maim / Intimidate
 	["permanently intimidate enemies on block"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Intimidated") }, { type = "Condition", var = "BlockedRecently" }) },
 	["(%d+)%% chance to hinder enemies on hit with spells"] = function(num) return {
 		mod("EnemyHinderChance", "BASE", num, nil, ModFlag.Spell)
@@ -4930,6 +4935,27 @@ local specialModList = {
 	["socketed golem skills have (%d+)%% chance to taunt on hit"] = function(num) return {
 		mod("ExtraSkillMod", "LIST", { mod = mod("EnemyTauntChance", "BASE", num) }, { type = "SocketedIn", slotName = "{SlotName}", keyword = "golem" })
 	} end,
+	["(%d+)%% chance to unnerve enemies for (%d+) seconds on hit"] = function(num, _) return {
+		mod("EnemyUnnerveChance", "BASE", num)
+	} end,
+	["(%d+)%% chance to unnerve enemies for (%d+) seconds on hit with spells"] = function(num, _) return {
+		mod("EnemyUnnerveChance", "BASE", num, nil, ModFlag.Spell)
+	} end,
+	["unnerve enemies for (%d+) seconds on hit"] = { mod("EnemyUnnerveChance", "BASE", 100) },
+	["spells unnerve enemies for (%d+) seconds on hit"] = { mod("EnemyUnnerveChance", "BASE", 100, nil, ModFlag.Spell) },
+	["spells triggered by arcanist brand unnerve enemies on hit for (%d+) seconds"] = {
+		mod("EnemyUnnerveChance", "BASE", 100, nil, ModFlag.Spell, { type = "SkillName", skillName = "Arcanist Brand", includeTransfigured = true })
+	},
+	["attacks inflict unnerve on critical strike for (%d+) seconds"] = {
+		mod("EnemyUnnerveChance", "BASE", 100, nil, ModFlag.Attack, { type = "Condition", var = "CriticalStrike" })
+	},
+	["enemies taunted by your warcries are unnerved"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Unnerved", { type = "Condition", var = "Taunted" }) }, { type = "Condition", var = "UsedWarcryRecently" }) },
+	["enemies you curse are unnerved"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Unnerved", { type = "Condition", var = "Cursed" }) }) },
+	["nearby enemies are unnerved"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Unnerved") }) },
+	["summoned arbalists have (%d+)%% chance to unnerve for (%d+) seconds on hit"] = function(num, _) return {
+		mod("MinionModifier", "LIST", { mod = mod("EnemyUnnerveChance", "BASE", num) }, { type = "SkillName", skillName = "Summon Arbalists" })
+	} end,
+	["unnerve enemies for (%d+) seconds on hit with wands"] = { mod("EnemyUnnerveChance", "BASE", 100, nil, ModFlag.Wand) },
 	["(%d+)%% chance to maim on hit"] = function(num) return {
 		mod("EnemyMaimChance", "BASE", num)
 	} end,

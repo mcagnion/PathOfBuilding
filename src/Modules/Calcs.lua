@@ -172,6 +172,9 @@ local function getPowerReportEnemyConditionCandidates(env)
 		if hasChance("TauntChance") then
 			candidates.Taunted = true
 		end
+		if hasChance("UnnerveChance") then
+			candidates.Unnerved = true
+		end
 		if hasChance("MaimChance") then
 			candidates.Maimed = true
 		end

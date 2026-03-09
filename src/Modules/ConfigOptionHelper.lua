@@ -44,6 +44,7 @@ local enemyConditionChanceStatMap = {
 	Poisoned = { "PoisonChance" },
 	Hindered = { "HinderChance" },
 	Taunted = { "TauntChance" },
+	Unnerved = { "UnnerveChance" },
 	Ignited = { "IgniteChancePerHit", "IgniteChance" },
 	Burning = { "IgniteChancePerHit", "IgniteChance" },
 	Frozen = { "FreezeChance" },
@@ -338,6 +339,11 @@ local function getConditionEffectLines(build, enemyCondition)
 		return {
 			"^7Taunt-dependent modifiers will apply while this enemy is taunted.",
 			"^8Enemy targeting behaviour is not modelled here.",
+		}
+	end
+	if enemyCondition == "Unnerved" then
+		return {
+			"^7Unnerved enemies take 10% increased Spell Damage.",
 		}
 	end
 	if enemyCondition == "Poisoned" then
