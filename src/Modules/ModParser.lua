@@ -743,6 +743,13 @@ local modNameList = {
 	["to hinder enemies on hit with spells"] = { "EnemyHinderChance", flags = ModFlag.Spell },
 	["to hinder on hit with spells"] = { "EnemyHinderChance", flags = ModFlag.Spell },
 	["hinder chance"] = "EnemyHinderChance",
+	["to taunt"] = "EnemyTauntChance",
+	["to taunt enemies"] = "EnemyTauntChance",
+	["to taunt on hit"] = "EnemyTauntChance",
+	["to taunt enemies on hit"] = "EnemyTauntChance",
+	["to taunt enemies on hit with attacks"] = { "EnemyTauntChance", flags = ModFlag.Attack },
+	["to taunt on hit with attacks"] = { "EnemyTauntChance", flags = ModFlag.Attack },
+	["taunt chance"] = "EnemyTauntChance",
 	["to maim"] = "EnemyMaimChance",
 	["to maim enemies"] = "EnemyMaimChance",
 	["to maim on hit"] = "EnemyMaimChance",
@@ -4885,7 +4892,7 @@ local specialModList = {
 	["culling strike against marked enemy"] = { mod("CullPercent", "MAX", 10, { type = "ActorCondition", actor = "enemy", var = "Marked" }) },
 	["nearby allies have culling strike"] = { mod("ExtraAura", "LIST", {onlyAllies = true, mod = mod("CullPercent", "MAX", 10) }) },
 	["hits that stun enemies have culling strike"] = { flag("Condition:maceMasteryStunCullSpecced") },
-	-- Hinder / Maim / Intimidate
+	-- Hinder / Taunt / Maim / Intimidate
 	["permanently intimidate enemies on block"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Intimidated") }, { type = "Condition", var = "BlockedRecently" }) },
 	["(%d+)%% chance to hinder enemies on hit with spells"] = function(num) return {
 		mod("EnemyHinderChance", "BASE", num, nil, ModFlag.Spell)
@@ -4903,6 +4910,26 @@ local specialModList = {
 	["minions hinder enemies on hit with spells"] = {
 		mod("MinionModifier", "LIST", { mod = mod("EnemyHinderChance", "BASE", 100, nil, ModFlag.Spell) })
 	},
+	["(%d+)%% chance to taunt on hit"] = function(num) return {
+		mod("EnemyTauntChance", "BASE", num)
+	} end,
+	["(%d+)%% chance to taunt enemies on hit with attacks"] = function(num) return {
+		mod("EnemyTauntChance", "BASE", num, nil, ModFlag.Attack)
+	} end,
+	["(%d+)%% chance to taunt enemies on projectile hit"] = function(num) return {
+		mod("EnemyTauntChance", "BASE", num, nil, ModFlag.Projectile)
+	} end,
+	["taunt on hit"] = { mod("EnemyTauntChance", "BASE", 100) },
+	["taunt enemies on hit with attacks"] = { mod("EnemyTauntChance", "BASE", 100, nil, ModFlag.Attack) },
+	["minions have (%d+)%% chance to taunt on hit with attacks"] = function(num) return {
+		mod("MinionModifier", "LIST", { mod = mod("EnemyTauntChance", "BASE", num, nil, ModFlag.Attack) })
+	} end,
+	["raised zombies have (%d+)%% chance to taunt enemies on hit"] = function(num) return {
+		mod("MinionModifier", "LIST", { mod = mod("EnemyTauntChance", "BASE", num) }, { type = "SkillName", skillName = "Raise Zombie", includeTransfigured = true })
+	} end,
+	["socketed golem skills have (%d+)%% chance to taunt on hit"] = function(num) return {
+		mod("ExtraSkillMod", "LIST", { mod = mod("EnemyTauntChance", "BASE", num) }, { type = "SocketedIn", slotName = "{SlotName}", keyword = "golem" })
+	} end,
 	["(%d+)%% chance to maim on hit"] = function(num) return {
 		mod("EnemyMaimChance", "BASE", num)
 	} end,
