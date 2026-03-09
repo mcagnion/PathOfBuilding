@@ -3934,6 +3934,11 @@ function calcs.offence(env, actor, activeSkill)
 			output.HinderChanceOnCrit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyHinderChance"))
 		end
 		if not skillFlags.hit then
+			output.TauntChanceOnCrit = 0
+		else
+			output.TauntChanceOnCrit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyTauntChance"))
+		end
+		if not skillFlags.hit then
 			output.MaimChanceOnCrit = 0
 		else
 			output.MaimChanceOnCrit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyMaimChance"))
@@ -4000,6 +4005,11 @@ function calcs.offence(env, actor, activeSkill)
 			output.HinderChanceOnHit = 0
 		else
 			output.HinderChanceOnHit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyHinderChance"))
+		end
+		if not skillFlags.hit then
+			output.TauntChanceOnHit = 0
+		else
+			output.TauntChanceOnHit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyTauntChance"))
 		end
 		if not skillFlags.hit then
 			output.MaimChanceOnHit = 0
@@ -5284,6 +5294,11 @@ function calcs.offence(env, actor, activeSkill)
 			output.HinderChanceOnHit * (1 - output.CritChance / 100)
 			+ output.HinderChanceOnCrit * output.CritChance / 100
 		)
+		output.TauntChance = m_min(
+			100,
+			output.TauntChanceOnHit * (1 - output.CritChance / 100)
+			+ output.TauntChanceOnCrit * output.CritChance / 100
+		)
 		output.MaimChance = m_min(
 			100,
 			output.MaimChanceOnHit * (1 - output.CritChance / 100)
@@ -5464,6 +5479,7 @@ function calcs.offence(env, actor, activeSkill)
 		combineStat("SapDuration", "AVERAGE")
 		combineStat("BlindChance", "AVERAGE")
 		combineStat("HinderChance", "AVERAGE")
+		combineStat("TauntChance", "AVERAGE")
 		combineStat("MaimChance", "AVERAGE")
 		combineStat("IntimidateChance", "AVERAGE")
 		combineStat("ImpaleChance", "AVERAGE")

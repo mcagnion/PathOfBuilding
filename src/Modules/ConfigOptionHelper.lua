@@ -43,6 +43,7 @@ local enemyConditionChanceStatMap = {
 	Maimed = { "MaimChance" },
 	Poisoned = { "PoisonChance" },
 	Hindered = { "HinderChance" },
+	Taunted = { "TauntChance" },
 	Ignited = { "IgniteChancePerHit", "IgniteChance" },
 	Burning = { "IgniteChancePerHit", "IgniteChance" },
 	Frozen = { "FreezeChance" },
@@ -331,6 +332,12 @@ local function getConditionEffectLines(build, enemyCondition)
 		return {
 			"^7Hinder is a movement speed debuff.",
 			"^8Its exact slow amount depends on the source.",
+		}
+	end
+	if enemyCondition == "Taunted" then
+		return {
+			"^7Taunt-dependent modifiers will apply while this enemy is taunted.",
+			"^8Enemy targeting behaviour is not modelled here.",
 		}
 	end
 	if enemyCondition == "Poisoned" then
