@@ -62,4 +62,67 @@ describe("TradeQuery Currency Conversion", function()
             assert.are.equal(result, "5 chaos, 10 div")
         end)
     end)
+
+    describe("UpdateControlsWithItems", function()
+        -- Pass: Keeps populated dropdown after refresh and only updates its list once
+        -- Fail: Dropdown becomes empty, indicating duplicate SetList-style refresh that wipes the assigned table
+        it("does not wipe result dropdown contents during refresh", function()
+            local orig_sort = mock_tradeQuery.SortFetchResults
+            local orig_notice = mock_tradeQuery.SetNotice
+            local orig_upgrade = mock_tradeQuery.UpdateBestUpgradeLabel
+            local orig_fetch_return = mock_tradeQuery.SetFetchResultReturn
+
+            local set_list_calls = 0
+            local dropdownControl = {
+                list = {},
+                selIndex = nil,
+                SetList = function(self, textList)
+                    set_list_calls = set_list_calls + 1
+                    if textList then
+                        wipeTable(self.list)
+                        self.list = textList
+                    end
+                end
+            }
+
+            mock_tradeQuery.controls = {
+                resultDropdown1 = dropdownControl,
+                priceButton1 = {},
+                fullPrice = {},
+                pbNotice = {},
+            }
+            mock_tradeQuery.resultTbl = {
+                [1] = {
+                    {
+                        currency = "chaos",
+                        amount = 5,
+                        item_string = "Rarity: RARE\nBehemoth Hold\nGold Ring",
+                    }
+                }
+            }
+            mock_tradeQuery.totalPrice = {}
+            mock_tradeQuery.itemIndexTbl = {}
+            mock_tradeQuery.sortedResultTbl = {}
+            mock_tradeQuery.itemSortSelectionList = { "Stat Value" }
+            mock_tradeQuery.pbItemSortSelectionIndex = 1
+            mock_tradeQuery.SortFetchResults = function()
+                return { { index = 1 } }, nil
+            end
+            mock_tradeQuery.SetNotice = function() end
+            mock_tradeQuery.UpdateBestUpgradeLabel = function() end
+            mock_tradeQuery.SetFetchResultReturn = function() end
+
+            mock_tradeQuery:UpdateControlsWithItems(1)
+
+            assert.are.equal(set_list_calls, 1)
+            assert.are.equal(#dropdownControl.list, 1)
+            assert.are.equal(dropdownControl.selIndex, 1)
+            assert.are.equal(dropdownControl.list[1], colorCodes.RARE .. "Behemoth Hold, Gold Ring")
+
+            mock_tradeQuery.SortFetchResults = orig_sort
+            mock_tradeQuery.SetNotice = orig_notice
+            mock_tradeQuery.UpdateBestUpgradeLabel = orig_upgrade
+            mock_tradeQuery.SetFetchResultReturn = orig_fetch_return
+        end)
+    end)
 end)

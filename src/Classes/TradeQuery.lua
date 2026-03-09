@@ -1262,7 +1262,7 @@ function TradeQueryClass:UpdateControlsWithItems(row_idx)
 		self.controls["resultDropdown".. row_idx].selIndex = 1
 		self.controls["resultDropdown".. row_idx]:SetList(dropdownLabels)
 	end
-		self:SetFetchResultReturn(row_idx, self.itemIndexTbl[row_idx])
+	self:SetFetchResultReturn(row_idx, self.itemIndexTbl[row_idx])
 end
 
 -- Method to set the current result return in the pane based of an index
