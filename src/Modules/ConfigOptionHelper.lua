@@ -69,13 +69,13 @@ local coveredConfigMap = {
 	conditionEnemyCoveredInAsh = {
 		modName = "CoveredInAshEffect",
 		label = "Covered in Ash",
-		effectTooltip = "^7When enabled, applies 20% increased Fire Damage taken and 20% less Movement Speed.",
+		effectTooltip = "^7When enabled, enemies take 20% increased Fire Damage and have 20% less Movement Speed.",
 		triggerCondition = "Ignited",
 	},
 	conditionEnemyCoveredInFrost = {
 		modName = "CoveredInFrostEffect",
 		label = "Covered in Frost",
-		effectTooltip = "^7When enabled, applies 20% increased Cold Damage taken and 50% less Critical Strike Chance.",
+		effectTooltip = "^7When enabled, enemies take 20% increased Cold Damage and have 50% less Critical Strike Chance.",
 		triggerCondition = "Frozen",
 	},
 }
@@ -348,7 +348,7 @@ local function getConditionEffectLines(build, enemyCondition)
 			return
 		end
 		return {
-			"^7Current bleed DPS: " .. formatValue(bleedDPS, 1),
+			"^7Current Bleed DPS: " .. formatValue(bleedDPS, 1),
 			bleedDuration > 0 and "^8Duration: " .. formatSeconds(bleedDuration, 2) or nil,
 		}
 	end
@@ -360,7 +360,7 @@ local function getConditionEffectLines(build, enemyCondition)
 	if enemyCondition == "Hindered" then
 		return {
 			"^7Hinder is a movement speed debuff.",
-			"^8Its exact slow amount depends on the source.",
+			"^8The exact slow effect depends on the source.",
 		}
 	end
 	if enemyCondition == "Taunted" then
@@ -391,7 +391,7 @@ local function getConditionEffectLines(build, enemyCondition)
 		if poisonDPS <= 0 and totalPoisonDPS <= 0 then
 			return
 		end
-		local poisonLine = "^7Current poison DPS: " .. formatValue(poisonDPS > 0 and poisonDPS or totalPoisonDPS, 1)
+		local poisonLine = "^7Current Poison DPS: " .. formatValue(poisonDPS > 0 and poisonDPS or totalPoisonDPS, 1)
 		if totalPoisonDPS > poisonDPS and poisonDPS > 0 then
 			poisonLine = poisonLine .. " ^8(single " .. formatValue(poisonDPS, 1)
 				.. ", stacked " .. formatValue(totalPoisonDPS, 1) .. ")"
@@ -407,13 +407,13 @@ local function getConditionEffectLines(build, enemyCondition)
 		local igniteDuration = getMaxActorStat(build, "IgniteDuration")
 		local out = { }
 		if igniteDPS > 0 then
-			t_insert(out, "^7Current ignite DPS: " .. formatValue(igniteDPS, 1))
+			t_insert(out, "^7Current Ignite DPS: " .. formatValue(igniteDPS, 1))
 			if igniteDuration > 0 then
 				t_insert(out, "^8Duration: " .. formatSeconds(igniteDuration, 2))
 			end
 		end
 		if enemyCondition == "Burning" and burningGroundDPS > 0 then
-			t_insert(out, "^7Burning ground DPS: " .. formatValue(burningGroundDPS, 1))
+			t_insert(out, "^7Burning Ground DPS: " .. formatValue(burningGroundDPS, 1))
 		end
 		return #out > 0 and out or nil
 	end
@@ -701,7 +701,7 @@ function helper.formatConditionRecommendationHintTooltip(build, configInput, ifC
 	if not recommendation then
 		return
 	end
-	return "^7Suggestion: source detected; enable when this condition is reliably active."
+	return "^7Suggestion: a source was detected; enable this when uptime is reliable."
 end
 
 function helper.collectEnemyConditionMods(build, ifEnemyCond)
@@ -766,7 +766,7 @@ function helper.formatConditionChanceTooltip(build, ifEnemyCond)
 	if not chanceData then
 		return
 	end
-	local out = "^7Estimated apply chance within 1s: "
+	local out = "^7Estimated chance to apply within 1 second: "
 		.. roundTo(chanceData.combined * 100, 1) .. "%"
 	if type(ifEnemyCond) == "table" and bestCondition then
 		out = out .. " ^8(" .. bestCondition .. ")"
@@ -850,13 +850,13 @@ function helper.formatConditionRecommendationTooltip(build, configInput, ifEnemy
 	end
 	if recommendation.level == "strong" and recommendation.chance then
 		return "^2Suggestion: enable this option (" ..
-			roundTo(recommendation.chance * 100, 1) .. "% within 1s)."
+			roundTo(recommendation.chance * 100, 1) .. "% within 1 second)."
 	end
 	if recommendation.level == "medium" and recommendation.chance then
 		return "^7Suggestion: consider enabling this option (" ..
-			roundTo(recommendation.chance * 100, 1) .. "% within 1s)."
+			roundTo(recommendation.chance * 100, 1) .. "% within 1 second)."
 	end
-	return "^7Suggestion: source detected; enable when uptime is reliable."
+	return "^7Suggestion: a source was detected; enable this when uptime is reliable."
 end
 
 function helper.hasFlagSource(build, ifFlag)
@@ -904,7 +904,7 @@ function helper.formatConfigVarEffectTooltip(build, varName)
 		if not exposure then
 			return
 		end
-		return "^7When enabled, applies -" .. formatValue(exposure, 0) .. "% " .. element .. " Resistance."
+		return "^7When enabled, applies -" .. formatValue(exposure, 0) .. "% to " .. element .. " Resistance."
 	end
 	local coveredConfig = getCoveredConfig(varName)
 	if coveredConfig then
@@ -930,7 +930,7 @@ function helper.formatConfigVarChanceTooltip(build, varName)
 		if not chanceData then
 			return
 		end
-		local out = "^7Estimated apply chance within 1s: "
+		local out = "^7Estimated chance to apply within 1 second: "
 			.. formatValue(chanceData.combined * 100, 1) .. "%"
 		local details = { }
 		if chanceData.player then
@@ -962,9 +962,9 @@ function helper.formatConfigVarChanceTooltip(build, varName)
 	if coveredConfig then
 		local chanceData = getCoveredChanceData(build, varName)
 		if not chanceData then
-			return hasCoveredSource(build, varName) and "^8Source detected." or nil
+			return hasCoveredSource(build, varName) and "^8A source was detected." or nil
 		end
-		local out = "^7Estimated apply chance within 1s: "
+		local out = "^7Estimated chance to apply within 1 second: "
 			.. formatValue(chanceData.combined * 100, 1) .. "%"
 			.. " ^8(" .. coveredConfig.triggerCondition .. ")"
 		local details = { }
@@ -999,7 +999,7 @@ function helper.formatConfigVarChanceTooltip(build, varName)
 	end
 	local matches = getChargeSourceMatches(build, varName)
 	if matches then
-		return "^7Detected charge generation sources: " .. t_concat(matches, ", ")
+		return "^7Detected charge generation: " .. t_concat(matches, ", ")
 	end
 end
 
@@ -1079,14 +1079,14 @@ function helper.formatConfigVarRecommendationTooltip(build, configInput, varName
 	end
 	if recommendation.level == "strong" and recommendation.chance then
 		return "^2Suggestion: enable this option (" ..
-			formatValue(recommendation.chance * 100, 1) .. "% within 1s)."
+			formatValue(recommendation.chance * 100, 1) .. "% within 1 second)."
 	end
 	if recommendation.level == "medium" and recommendation.chance then
 		return "^7Suggestion: consider enabling this option (" ..
-			formatValue(recommendation.chance * 100, 1) .. "% within 1s)."
+			formatValue(recommendation.chance * 100, 1) .. "% within 1 second)."
 	end
 	if recommendation.level == "soft" then
-		return "^7Suggestion: source detected; enable when uptime is reliable."
+		return "^7Suggestion: a source was detected; enable this when uptime is reliable."
 	end
 end
 
