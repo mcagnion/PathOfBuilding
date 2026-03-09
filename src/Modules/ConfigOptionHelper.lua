@@ -45,6 +45,7 @@ local enemyConditionChanceStatMap = {
 	Hindered = { "HinderChance" },
 	Taunted = { "TauntChance" },
 	Unnerved = { "UnnerveChance" },
+	Crushed = { "CrushChance" },
 	Ignited = { "IgniteChancePerHit", "IgniteChance" },
 	Burning = { "IgniteChancePerHit", "IgniteChance" },
 	Frozen = { "FreezeChance" },
@@ -344,6 +345,11 @@ local function getConditionEffectLines(build, enemyCondition)
 	if enemyCondition == "Unnerved" then
 		return {
 			"^7Unnerved enemies take 10% increased Spell Damage.",
+		}
+	end
+	if enemyCondition == "Crushed" then
+		return {
+			"^7Crushed enemies have 15% reduced Physical Damage Reduction.",
 		}
 	end
 	if enemyCondition == "Poisoned" then

@@ -755,6 +755,10 @@ local modNameList = {
 	["to unnerve enemies for 4 seconds on hit with spells"] = { "EnemyUnnerveChance", flags = ModFlag.Spell },
 	["to unnerve for 4 seconds on hit with spells"] = { "EnemyUnnerveChance", flags = ModFlag.Spell },
 	["unnerve chance"] = "EnemyUnnerveChance",
+	["to crush on hit"] = "EnemyCrushChance",
+	["to crush for 2 seconds on hit"] = "EnemyCrushChance",
+	["to crush enemies for 4 seconds on hit"] = "EnemyCrushChance",
+	["crush chance"] = "EnemyCrushChance",
 	["to maim"] = "EnemyMaimChance",
 	["to maim enemies"] = "EnemyMaimChance",
 	["to maim on hit"] = "EnemyMaimChance",
@@ -4897,7 +4901,7 @@ local specialModList = {
 	["culling strike against marked enemy"] = { mod("CullPercent", "MAX", 10, { type = "ActorCondition", actor = "enemy", var = "Marked" }) },
 	["nearby allies have culling strike"] = { mod("ExtraAura", "LIST", {onlyAllies = true, mod = mod("CullPercent", "MAX", 10) }) },
 	["hits that stun enemies have culling strike"] = { flag("Condition:maceMasteryStunCullSpecced") },
-	-- Hinder / Taunt / Unnerve / Maim / Intimidate
+	-- Hinder / Taunt / Unnerve / Crush / Maim / Intimidate
 	["permanently intimidate enemies on block"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Intimidated") }, { type = "Condition", var = "BlockedRecently" }) },
 	["(%d+)%% chance to hinder enemies on hit with spells"] = function(num) return {
 		mod("EnemyHinderChance", "BASE", num, nil, ModFlag.Spell)
@@ -4956,6 +4960,19 @@ local specialModList = {
 		mod("MinionModifier", "LIST", { mod = mod("EnemyUnnerveChance", "BASE", num) }, { type = "SkillName", skillName = "Summon Arbalists" })
 	} end,
 	["unnerve enemies for (%d+) seconds on hit with wands"] = { mod("EnemyUnnerveChance", "BASE", 100, nil, ModFlag.Wand) },
+	["(%d+)%% chance to crush on hit"] = function(num) return {
+		mod("EnemyCrushChance", "BASE", num)
+	} end,
+	["(%d+)%% chance to crush for (%d+) seconds on hit"] = function(num, _) return {
+		mod("EnemyCrushChance", "BASE", num)
+	} end,
+	["(%d+)%% chance to crush enemies for (%d+) seconds on hit"] = function(num, _) return {
+		mod("EnemyCrushChance", "BASE", num)
+	} end,
+	["crush on hit"] = { mod("EnemyCrushChance", "BASE", 100) },
+	["summoned arbalists have (%d+)%% chance to crush on hit"] = function(num) return {
+		mod("MinionModifier", "LIST", { mod = mod("EnemyCrushChance", "BASE", num) }, { type = "SkillName", skillName = "Summon Arbalists" })
+	} end,
 	["(%d+)%% chance to maim on hit"] = function(num) return {
 		mod("EnemyMaimChance", "BASE", num)
 	} end,
