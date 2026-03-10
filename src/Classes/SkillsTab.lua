@@ -85,6 +85,7 @@ local gemUpgradeSourceFilterList = {
 	{ label = "All", value = "ALL" },
 	{ label = "Normal (no corruption)", value = "NATURAL" },
 	{ label = "Corruption", value = "CORRUPTION" },
+	{ label = "Imbued Coin", value = "IMBUED" },
 	{ label = "Vendor Recipe", value = "RECIPE" },
 }
 
@@ -795,7 +796,9 @@ function SkillsTabClass:AddGemUpgradeReportTooltip(tooltip, reportRow)
 
 	tooltip:AddLine(14, string.format("^7%s  |  ^7%s: %s -> %s", reportRow.name, reportRow.upgradeLabel, tostring(reportRow.level), tostring(reportRow.nextLevel)))
 	if reportRow.targetImbuedSupport and data.skills[reportRow.targetImbuedSupport] then
+		tooltip:AddLine(14, string.format("^7Consumes: ^x33FF77%s", reportRow.upgradeLabel))
 		tooltip:AddLine(14, string.format("^7Adds inherent support: ^x33FF77Level 1 %s", data.skills[reportRow.targetImbuedSupport].name))
+		tooltip:AddLine(14, "^7Limit: one imbued gem per equipped item.")
 	end
 	tooltip:AddSeparator(8)
 	local changeCount = self.build:AddStatComparesToTooltip(tooltip, calcBase, upgradedOutput, "^7Applying this upgrade will give you:")
