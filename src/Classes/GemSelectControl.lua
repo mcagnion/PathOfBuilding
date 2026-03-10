@@ -593,6 +593,9 @@ function GemSelectClass:AddGemTooltip(gemInstance)
 		self.tooltip:AddLine(fontSizeTitle, colorCodes.GEM .. altQualMap[gemInstance.qualityId]..grantedEffect.name, "FONTIN SC")
 		self.tooltip:AddSeparator(10)
 		self.tooltip:AddLine(fontSizeBig, "^x7F7F7F" .. gemInstance.gemData.tagString, "FONTIN SC")
+		if gemInstance.imbuedSupport and data.skills[gemInstance.imbuedSupport] then
+			self.tooltip:AddLine(fontSizeBig, colorCodes.CRAFTED .. "Supported by Level 1 " .. data.skills[gemInstance.imbuedSupport].name, "FONTIN SC")
+		end
 		self:AddCommonGemInfo(gemInstance, grantedEffect, true)
 		self.tooltip:AddSeparator(10)
 		self.tooltip:AddLine(fontSizeTitle, colorCodes.GEM .. (gemInstance.gemData.secondaryEffectName or grantedEffectSecondary.name), "FONTIN SC")
@@ -603,6 +606,9 @@ function GemSelectClass:AddGemTooltip(gemInstance)
 		self.tooltip:AddLine(fontSizeTitle, colorCodes.GEM .. altQualMap[gemInstance.qualityId]..grantedEffect.name, "FONTIN SC")
 		self.tooltip:AddSeparator(10)
 		self.tooltip:AddLine(fontSizeBig, "^x7F7F7F" .. gemInstance.gemData.tagString, "FONTIN SC")
+		if gemInstance.imbuedSupport and data.skills[gemInstance.imbuedSupport] then
+			self.tooltip:AddLine(fontSizeBig, colorCodes.CRAFTED .. "Supported by Level 1 " .. data.skills[gemInstance.imbuedSupport].name, "FONTIN SC")
+		end
 		self:AddCommonGemInfo(gemInstance, grantedEffect, true, secondary and secondary.support and secondary)
 	end
 end

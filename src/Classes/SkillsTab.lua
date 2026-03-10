@@ -353,6 +353,7 @@ function SkillsTabClass:LoadSkill(node, skillSetId)
 		gemInstance.enableGlobal1 = not child.attrib.enableGlobal1 or child.attrib.enableGlobal1 == "true"
 		gemInstance.enableGlobal2 = child.attrib.enableGlobal2 == "true"
 		gemInstance.count = tonumber(child.attrib.count) or 1
+		gemInstance.imbuedSupport = child.attrib.imbuedSupport or ""
 		gemInstance.skillPart = tonumber(child.attrib.skillPart)
 		gemInstance.skillPartCalcs = tonumber(child.attrib.skillPartCalcs)
 		gemInstance.skillStageCount = tonumber(child.attrib.skillStageCount)
@@ -463,6 +464,7 @@ function SkillsTabClass:Save(xml)
 					enableGlobal1 = tostring(gemInstance.enableGlobal1),
 					enableGlobal2 = tostring(gemInstance.enableGlobal2),
 					count = tostring(gemInstance.count),
+					imbuedSupport = gemInstance.imbuedSupport and gemInstance.imbuedSupport ~= "" and tostring(gemInstance.imbuedSupport) or nil,
 					skillPart = gemInstance.skillPart and tostring(gemInstance.skillPart),
 					skillPartCalcs = gemInstance.skillPartCalcs and tostring(gemInstance.skillPartCalcs),
 					skillStageCount = gemInstance.skillStageCount and tostring(gemInstance.skillStageCount),

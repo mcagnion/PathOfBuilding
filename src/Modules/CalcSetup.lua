@@ -342,6 +342,26 @@ local function addBestSupport(supportEffect, appliedSupportList, mode)
 	end
 end
 
+local function buildExtraSupportEffect(env, skillId, level, gemData)
+	if not skillId then
+		return nil
+	end
+	local grantedEffect = env.data.skills[skillId]
+	if grantedEffect and not grantedEffect.support then
+		grantedEffect = env.data.skills["Support" .. skillId]
+	end
+	if not grantedEffect then
+		return nil
+	end
+	return {
+		grantedEffect = grantedEffect,
+		gemData = gemData or env.data.gems[env.data.gemForBaseName[grantedEffect.name:lower()] or env.data.gemForBaseName[(grantedEffect.name .. " Support"):lower()]],
+		level = level or 1,
+		quality = 0,
+		enabled = true,
+	}
+end
+
 -- Initialise environment:
 -- 1. Initialises the player and enemy modifier databases
 -- 2. Merges modifiers for all items
@@ -1444,23 +1464,11 @@ function calcs.initEnv(build, mode, override, specEnv)
 				if not group.source then
 					-- Add extra supports from the item this group is socketed in
 					for _, value in ipairs(env.modDB:List(groupCfg, "ExtraSupport")) do
-						local grantedEffect = env.data.skills[value.skillId]
-						-- Some skill gems share the same name as support gems, e.g. Barrage.
-						-- Since a support gem is expected here, if the first lookup returns a skill, then
-						-- prepending "Support" to the skillId will find the support version of the gem.
-						if grantedEffect and not grantedEffect.support then
-							grantedEffect = env.data.skills["Support"..value.skillId]
-						end
-						grantedEffect.fromItem = true
-						if grantedEffect then
+						local supportEffect = buildExtraSupportEffect(env, value.skillId, value.level)
+						if supportEffect then
+							supportEffect.grantedEffect.fromItem = true
 							for _, targetList in ipairs(targetListList) do
-								t_insert(targetList, {
-									grantedEffect = grantedEffect,
-									gemData = env.data.gems[env.data.gemForBaseName[grantedEffect.name:lower()] or env.data.gemForBaseName[(grantedEffect.name .. " Support"):lower()]],
-									level = value.level,
-									quality = 0,
-									enabled = true,
-								})
+								t_insert(targetList, copyTable(supportEffect, true))
 							end
 						end
 					end
@@ -1580,6 +1588,12 @@ function calcs.initEnv(build, mode, override, specEnv)
 								local appliedSupportList = {}
 								if not group.noSupports then
 									appliedSupportList = copyTable(supportLists[group] or supportLists[slotName][group], true)
+									if gemInstance.imbuedSupport and gemInstance.imbuedSupport ~= "" then
+										local imbuedSupport = buildExtraSupportEffect(env, gemInstance.imbuedSupport, 1)
+										if imbuedSupport then
+											addBestSupport(imbuedSupport, appliedSupportList, env.mode)
+										end
+									end
 									-- add displayGemList for tooltip to display all gems linked to active skills
 									group.displayGemList = copyTable(group.gemList, true)
 									-- if skill granted by unique item, go through all support groups in slot
