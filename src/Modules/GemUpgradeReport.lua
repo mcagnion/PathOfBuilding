@@ -6,6 +6,7 @@
 
 local ipairs = ipairs
 local t_insert = table.insert
+local t_sort = table.sort
 local m_abs = math.abs
 local m_floor = math.floor
 local m_max = math.max
@@ -18,10 +19,16 @@ local alternateGemQualityPrefixMap = {
 	Alternate3 = "Phantasmal ",
 }
 
-local nonLegacyAwakened = {
-	["SupportAwakenedEmpower"] = true,
-	["SupportAwakenedEnlighten"] = true,
-	["SupportAwakenedEnhance"] = true,
+local imbuedCoinLabelByColor = {
+	[1] = "CoinOfPower",
+	[2] = "CoinOfSkill",
+	[3] = "CoinOfKnowledge",
+}
+
+local imbuedCoinSortOrder = {
+	CoinOfKnowledge = 1,
+	CoinOfPower = 2,
+	CoinOfSkill = 3,
 }
 
 local upgradeDisplayLabelMap = {
@@ -29,7 +36,9 @@ local upgradeDisplayLabelMap = {
 	Qual = "Quality",
 	["21/23"] = "Corrupt to 21/23",
 	Recipe = "Recipe to 1/20",
-	Imbued = "Imbue",
+	CoinOfKnowledge = "Coin of Knowledge",
+	CoinOfPower = "Coin of Power",
+	CoinOfSkill = "Coin of Skill",
 }
 
 local gemUpgradeReport = { }
@@ -144,10 +153,10 @@ local function isReportableImbuedSupportGem(gemData)
 	if not (gemData and gemData.grantedEffect and gemData.grantedEffect.support) then
 		return false
 	end
-	if gemData.name:match("^Awakened") then
-		return nonLegacyAwakened[gemData.grantedEffectId] == true
+	if gemData.grantedEffect.plusVersionOf then
+		return false
 	end
-	return true
+	return gemData.grantedEffect.levels and gemData.grantedEffect.levels[1] ~= nil
 end
 
 local function slotHasOtherImbuedGem(skillsTab, slotName, sourceGroup, sourceGemIndex)
@@ -174,6 +183,30 @@ local function getGemActiveSkills(socketGroup, gemInstance)
 		end
 	end
 	return activeSkills
+end
+
+local function getUpgradePreviewValue(upgradeLabel, nextValue)
+	if upgradeLabel == "CoinOfKnowledge" or upgradeLabel == "CoinOfPower" or upgradeLabel == "CoinOfSkill" then
+		return "Lvl 1 " .. tostring(nextValue)
+	end
+	return nextValue
+end
+
+local function getImbuedCoinLabel(gemData)
+	local grantedEffect = gemData and gemData.grantedEffect
+	if grantedEffect and imbuedCoinLabelByColor[grantedEffect.color] then
+		return imbuedCoinLabelByColor[grantedEffect.color]
+	end
+	if gemData and gemData.tags then
+		if gemData.tags.intelligence then
+			return "CoinOfKnowledge"
+		elseif gemData.tags.strength then
+			return "CoinOfPower"
+		elseif gemData.tags.dexterity then
+			return "CoinOfSkill"
+		end
+	end
+	return nil
 end
 
 function gemUpgradeReport.Build(skillsTab, currentStat, filters)
@@ -212,7 +245,7 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters)
 			name = name,
 			groupLabel = groupLabel,
 			level = currentValue,
-			nextLevel = nextValue,
+			nextLevel = getUpgradePreviewValue(upgradeLabel, nextValue),
 			curSort = curSort,
 			nextSort = nextSort,
 			delta = delta,
@@ -401,12 +434,11 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters)
 					and not slotHasOtherImbuedGem(skillsTab, socketGroup.slot, socketGroup, gemIndex) then
 					local activeSkills = getGemActiveSkills(socketGroup, gemInstance)
 					if #activeSkills > 0 then
-						local bestSupportGem
-						local bestSupportOutput
-						local bestSupportScore = 0
+						local imbuedSupportEntries = { }
 						for _, supportGemData in pairs(skillsTab.build.data.gems) do
 							local supportGrantedEffect = supportGemData.grantedEffect
 							if isReportableImbuedSupportGem(supportGemData) then
+								local coinLabel = getImbuedCoinLabel(supportGemData)
 								local canSupportGem = false
 								for _, activeSkill in ipairs(activeSkills) do
 									if calcLib.canGrantedEffectSupportActiveSkill(supportGrantedEffect, activeSkill) then
@@ -414,39 +446,51 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters)
 										break
 									end
 								end
-								if canSupportGem then
+								if coinLabel and canSupportGem then
 									gemInstance.imbuedSupport = supportGemData.grantedEffectId
 									local errMsg, output = PCall(calcFunc, nil, useFullDPS)
 									gemInstance.imbuedSupport = ""
 									if not errMsg then
 										local score = lowerIsBetter and -(getStatValue(output, currentStat) - baseValue) or (getStatValue(output, currentStat) - baseValue)
-										if score > bestSupportScore then
-											bestSupportScore = score
-											bestSupportGem = supportGemData
-											bestSupportOutput = output
-										end
+										t_insert(imbuedSupportEntries, {
+											coinLabel = coinLabel,
+											gemData = supportGemData,
+											output = output,
+											score = score,
+										})
 									end
 								end
 							end
 						end
-						if bestSupportGem and bestSupportOutput then
+						t_sort(imbuedSupportEntries, function(a, b)
+							local coinOrderA = imbuedCoinSortOrder[a.coinLabel] or 999
+							local coinOrderB = imbuedCoinSortOrder[b.coinLabel] or 999
+							if coinOrderA ~= coinOrderB then
+								return coinOrderA < coinOrderB
+							end
+							if a.score ~= b.score then
+								return a.score > b.score
+							end
+							return a.gemData.name < b.gemData.name
+						end)
+						for _, imbuedSupportEntry in ipairs(imbuedSupportEntries) do
 							addUpgradeRow(
 								gemType,
 								gemCategory,
-								"CORRUPTION",
-								"Imbued",
+								"IMBUED",
+								imbuedSupportEntry.coinLabel,
 								gemName,
 								groupLabel,
 								"None",
-								bestSupportGem.name,
+								imbuedSupportEntry.gemData.name,
 								0,
-								bestSupportGem.name,
-								bestSupportOutput,
+								imbuedSupportEntry.gemData.name,
+								imbuedSupportEntry.output,
 								socketGroup,
 								gemIndex,
 								currentLevel,
 								currentQuality,
-								bestSupportGem.grantedEffectId
+								imbuedSupportEntry.gemData.grantedEffectId
 							)
 						end
 					end
