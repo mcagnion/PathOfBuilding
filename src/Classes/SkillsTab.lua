@@ -776,13 +776,16 @@ function SkillsTabClass:AddGemUpgradeReportTooltip(tooltip, reportRow)
 
 	local currentLevel = gemInstance.level
 	local currentQuality = gemInstance.quality
+	local currentImbuedSupport = gemInstance.imbuedSupport
 	gemInstance.level = reportRow.targetLevel or gemInstance.level
 	gemInstance.quality = reportRow.targetQuality or gemInstance.quality
+	gemInstance.imbuedSupport = reportRow.targetImbuedSupport or gemInstance.imbuedSupport
 
 	local errMsg, upgradedOutput = PCall(calcFunc, nil, reportRow.useFullDPS)
 
 	gemInstance.level = currentLevel
 	gemInstance.quality = currentQuality
+	gemInstance.imbuedSupport = currentImbuedSupport
 	self:ProcessSocketGroup(socketGroup)
 
 	if errMsg then
@@ -791,6 +794,9 @@ function SkillsTabClass:AddGemUpgradeReportTooltip(tooltip, reportRow)
 	end
 
 	tooltip:AddLine(14, string.format("^7%s  |  ^7%s: %s -> %s", reportRow.name, reportRow.upgradeLabel, tostring(reportRow.level), tostring(reportRow.nextLevel)))
+	if reportRow.targetImbuedSupport and data.skills[reportRow.targetImbuedSupport] then
+		tooltip:AddLine(14, string.format("^7Adds inherent support: ^x33FF77Level 1 %s", data.skills[reportRow.targetImbuedSupport].name))
+	end
 	tooltip:AddSeparator(8)
 	local changeCount = self.build:AddStatComparesToTooltip(tooltip, calcBase, upgradedOutput, "^7Applying this upgrade will give you:")
 	if changeCount == 0 then
