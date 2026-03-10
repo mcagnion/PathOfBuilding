@@ -31,16 +31,6 @@ local imbuedCoinSortOrder = {
 	CoinOfSkill = 3,
 }
 
-local upgradeDisplayLabelMap = {
-	Lvl = "Level +1",
-	Qual = "Quality",
-	["21/23"] = "Corrupt to 21/23",
-	Recipe = "Recipe to 1/20",
-	CoinOfKnowledge = "Coin of Knowledge",
-	CoinOfPower = "Coin of Power",
-	CoinOfSkill = "Coin of Skill",
-}
-
 local gemUpgradeReport = { }
 
 local function getOutputAttr(skillsTab, output, stat)
@@ -192,6 +182,37 @@ local function getUpgradePreviewValue(upgradeLabel, nextValue)
 	return nextValue
 end
 
+local function getUpgradeDisplayLabel(sourceType, upgradeLabel)
+	if upgradeLabel == "Lvl" then
+		if sourceType == "CORRUPTION" then
+			return "Corrupt (Vaal Orb)"
+		end
+		return "Level Up"
+	end
+	if upgradeLabel == "Qual" then
+		if sourceType == "CORRUPTION" then
+			return "Corrupt (Vaal Orb)"
+		end
+		return "Quality Upgrade"
+	end
+	if upgradeLabel == "21/23" then
+		return "Double Corrupt (Locus)"
+	end
+	if upgradeLabel == "Recipe" then
+		return "GCP Recipe"
+	end
+	if upgradeLabel == "CoinOfKnowledge" then
+		return "Coin of Knowledge"
+	end
+	if upgradeLabel == "CoinOfPower" then
+		return "Coin of Power"
+	end
+	if upgradeLabel == "CoinOfSkill" then
+		return "Coin of Skill"
+	end
+	return upgradeLabel
+end
+
 local function getImbuedCoinLabel(gemData)
 	local grantedEffect = gemData and gemData.grantedEffect
 	if grantedEffect and imbuedCoinLabelByColor[grantedEffect.color] then
@@ -241,7 +262,7 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters)
 			type = gemType,
 			gemCategory = gemCategory,
 			sourceType = sourceType,
-			upgradeLabel = upgradeDisplayLabelMap[upgradeLabel] or upgradeLabel,
+			upgradeLabel = getUpgradeDisplayLabel(sourceType, upgradeLabel),
 			name = name,
 			groupLabel = groupLabel,
 			level = currentValue,
@@ -348,15 +369,11 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters)
 						end
 					end
 					if nextQuality and nextOutput then
-						local qualityUpgradeLabel = "Quality"
-						if nextQuality > currentQuality then
-							qualityUpgradeLabel = s_format("Quality +%d", nextQuality - currentQuality)
-						end
 						addUpgradeRow(
 							gemType,
 							gemCategory,
 							nextQuality <= 20 and "NATURAL" or "CORRUPTION",
-							qualityUpgradeLabel,
+							"Qual",
 							gemName,
 							groupLabel,
 							s_format("%d/%d", currentLevel, currentQuality),
@@ -372,7 +389,7 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters)
 					end
 				end
 
-				if not isCorrupted and maxLevel == 21 and (currentLevel < 21 or currentQuality < 23) then
+				if not isCorrupted and maxLevel == 21 and currentLevel == naturalMaxLevel and currentQuality == 20 then
 					gemInstance.level = 21
 					gemInstance.quality = 23
 					local errMsg, output = PCall(calcFunc, nil, useFullDPS)

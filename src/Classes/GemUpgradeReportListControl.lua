@@ -20,13 +20,12 @@ local GemUpgradeReportListClass = newClass("GemUpgradeReportListControl", "ListC
 	self.ListControl(anchor, rect, 16, "VERTICAL", false)
 
 	local width = rect[3]
-	self.deltaColumn = { width = width * 0.17, label = "Delta", sortable = true }
+	self.deltaColumn = { width = width * 0.22, label = "Delta", sortable = true }
 	self.colList = {
-		{ width = width * 0.13, label = "Change", sortable = true },
-		{ width = width * 0.19, label = "Gem", sortable = true },
-		{ width = width * 0.19, label = "Socket Group", sortable = true },
-		{ width = width * 0.07, label = "Cur", sortable = true },
-		{ width = width * 0.07, label = "Next", sortable = true },
+		{ width = width * 0.18, label = "Change", sortable = true },
+		{ width = width * 0.16, label = "Gem", sortable = true },
+		{ width = width * 0.06, label = "Cur", sortable = true },
+		{ width = width * 0.26, label = "Next", sortable = true },
 		self.deltaColumn,
 		{ width = width * 0.12, label = "Improvement", sortable = true },
 	}
@@ -40,7 +39,7 @@ function GemUpgradeReportListClass:SetReport(stat, report)
 	self.deltaColumn.label = stat and (stat.label .. " Delta") or "Delta"
 	self.list = report or { }
 	self.label = #self.list > 0 and "Hover for delta details, double-click to jump to gem" or "No gem can be upgraded for this report."
-	self:ReSort(6)
+	self:ReSort(5)
 	self:SelectIndex(1)
 end
 
@@ -61,13 +60,6 @@ function GemUpgradeReportListClass:ReSort(colIndex)
 		end)
 	elseif colIndex == 3 then
 		t_sort(self.list, function(a, b)
-			if a.groupLabel == b.groupLabel then
-				return a.score > b.score
-			end
-			return a.groupLabel < b.groupLabel
-		end)
-	elseif colIndex == 4 then
-		t_sort(self.list, function(a, b)
 			if a.level == b.level then
 				return a.score > b.score
 			end
@@ -76,7 +68,7 @@ function GemUpgradeReportListClass:ReSort(colIndex)
 			end
 			return compareMixed(a.level, b.level)
 		end)
-	elseif colIndex == 5 then
+	elseif colIndex == 4 then
 		t_sort(self.list, function(a, b)
 			if a.nextLevel == b.nextLevel then
 				return a.score > b.score
@@ -86,7 +78,7 @@ function GemUpgradeReportListClass:ReSort(colIndex)
 			end
 			return compareMixed(a.nextLevel, b.nextLevel)
 		end)
-	elseif colIndex == 7 then
+	elseif colIndex == 6 then
 		t_sort(self.list, function(a, b)
 			if a.improvementPct == b.improvementPct then
 				return a.score > b.score
@@ -118,10 +110,9 @@ end
 function GemUpgradeReportListClass:GetRowValue(column, index, report)
 	return column == 1 and report.upgradeLabel
 		or column == 2 and report.name
-		or column == 3 and report.groupLabel
-		or column == 4 and report.level
-		or column == 5 and report.nextLevel
-		or column == 6 and report.deltaStr
-		or column == 7 and (report.hasImprovementPct and s_format("%+.2f%%", report.improvementPct) or "--")
+		or column == 3 and report.level
+		or column == 4 and report.nextLevel
+		or column == 5 and report.deltaStr
+		or column == 6 and (report.hasImprovementPct and s_format("%+.2f%%", report.improvementPct) or "--")
 		or ""
 end

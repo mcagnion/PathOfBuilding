@@ -86,7 +86,7 @@ local gemUpgradeSourceFilterList = {
 	{ label = "Normal (no corruption)", value = "NATURAL" },
 	{ label = "Corruption", value = "CORRUPTION" },
 	{ label = "Imbued Coin", value = "IMBUED" },
-	{ label = "Vendor Recipe", value = "RECIPE" },
+	{ label = "GCP Recipe", value = "RECIPE" },
 }
 
 local alternateGemQualityList ={
