@@ -1177,4 +1177,118 @@ describe("TestDefence", function()
 		assert.are.equals(0, floor(poolsRemaining.Life))
 		assert.are.equals(0, floor(poolsRemaining.OverkillDamage))
 	end)
+
+	describe("recovery between hits", function()
+		local function buildRecoveryCalcs(opts)
+			opts = opts or {}
+			build.configTab.input.enemyIsBoss = opts.enemyIsBoss or "None"
+			build.configTab.input.enemySpeed = opts.enemySpeed or 100
+			build.configTab.input.EnableEHPRecoveryCalcs = opts.enable == nil and true or opts.enable
+			build.configTab.input.customMods = opts.customMods or ""
+			if opts.skillGroup then
+				build.skillsTab:PasteSocketGroup(opts.skillGroup)
+				build.skillsTab:ProcessSocketGroup(build.skillsTab.socketGroupList[#build.skillsTab.socketGroupList])
+			end
+			build.configTab:BuildModList()
+			runCallback("OnFrame")
+			return build.calcsTab.calcsOutput
+		end
+
+		it("is disabled by default", function()
+			local output = buildRecoveryCalcs({ enable = false })
+
+			assert.is_nil(output.EHPRecoverySurvivalTime)
+			assert.is_nil(output.EHPRecoveryStatus)
+		end)
+
+		it("increases survival time when life regeneration is added", function()
+			local output = buildRecoveryCalcs()
+			local baseRecovery = output.LifeEHPRecoveryBetweenHits or 0
+			local baseSurvivalTime = output.EHPRecoverySurvivalTime or 0
+
+			output = buildRecoveryCalcs({
+				customMods = [[
+					Regenerate 1000 Life per second
+				]]
+			})
+
+			assert.is_true(output.LifeEHPRecoveryBetweenHits > baseRecovery)
+			assert.is_true(output.EHPRecoverySurvivalTime > baseSurvivalTime)
+		end)
+
+		it("ignores mana recovery when mana is not used as defence", function()
+			local output = buildRecoveryCalcs({
+				customMods = [[
+					+1000 to maximum Mana
+					Regenerate 500 Mana per second
+				]]
+			})
+
+			assert.are.equals(0, output.ManaEHPRecoveryRate)
+			assert.are.equals(0, output.ManaEHPRecoveryBetweenHits)
+		end)
+
+		it("counts mana recovery when mana is used as defence", function()
+			local output = buildRecoveryCalcs({
+				customMods = [[
+					50% of damage is taken from mana before life
+					+1000 to maximum Mana
+					Regenerate 500 Mana per second
+				]]
+			})
+
+			assert.is_true(output.ManaEHPRecoveryRate > 0)
+			assert.is_true(output.ManaEHPRecoveryBetweenHits > 0)
+		end)
+
+		it("only activates energy shield recharge when hits are spaced far enough apart", function()
+			local output = buildRecoveryCalcs({
+				enemySpeed = 100,
+				customMods = [[
+					You have no intelligence
+					+1000 to maximum Energy Shield
+					+60% to all elemental resistances
+				]]
+			})
+
+			assert.are.equals(0, output.EnergyShieldEHPRecoveryRate)
+			assert.are.equals(0, output.EnergyShieldEHPRecoveryBetweenHits)
+
+			output = buildRecoveryCalcs({
+				enemySpeed = 5000,
+				customMods = [[
+					You have no intelligence
+					+1000 to maximum Energy Shield
+					+60% to all elemental resistances
+				]]
+			})
+
+			assert.is_true(output.EnergyShieldEHPRechargeRate > 0)
+			assert.is_true(output.EnergyShieldEHPRecoveryBetweenHits > 0)
+		end)
+
+		it("updates status when recovery fully covers the hit cycle", function()
+			local output = buildRecoveryCalcs({
+				enemySpeed = 100,
+				customMods = [[
+					+940 to maximum life
+					+60% to all elemental resistances
+				]]
+			})
+
+			assert.are.equals("Unsustainable", output.EHPRecoveryStatus)
+
+			output = buildRecoveryCalcs({
+				enemySpeed = 5000,
+				customMods = [[
+					+940 to maximum life
+					+60% to all elemental resistances
+					Regenerate 5000 Life per second
+				]]
+			})
+
+			assert.is_true(output.EHPRecoveryStatus == "Stable" or output.EHPRecoveryStatus == "Likely Stable")
+		end)
+
+	end)
 end)
