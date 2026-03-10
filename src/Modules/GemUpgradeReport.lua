@@ -18,11 +18,18 @@ local alternateGemQualityPrefixMap = {
 	Alternate3 = "Phantasmal ",
 }
 
+local nonLegacyAwakened = {
+	["SupportAwakenedEmpower"] = true,
+	["SupportAwakenedEnlighten"] = true,
+	["SupportAwakenedEnhance"] = true,
+}
+
 local upgradeDisplayLabelMap = {
 	Lvl = "Level +1",
 	Qual = "Quality",
 	["21/23"] = "Corrupt to 21/23",
 	Recipe = "Recipe to 1/20",
+	Imbued = "Imbue",
 }
 
 local gemUpgradeReport = { }
@@ -133,6 +140,42 @@ local function formatDelta(delta, displayStat, lowerIsBetter)
 	return "^7" .. deltaStr
 end
 
+local function isReportableImbuedSupportGem(gemData)
+	if not (gemData and gemData.grantedEffect and gemData.grantedEffect.support) then
+		return false
+	end
+	if gemData.name:match("^Awakened") then
+		return nonLegacyAwakened[gemData.grantedEffectId] == true
+	end
+	return true
+end
+
+local function slotHasOtherImbuedGem(skillsTab, slotName, sourceGroup, sourceGemIndex)
+	if not slotName then
+		return false
+	end
+	for _, socketGroup in ipairs(skillsTab.socketGroupList) do
+		if socketGroup.slot == slotName then
+			for gemIndex, gemInstance in ipairs(socketGroup.gemList) do
+				if not (socketGroup == sourceGroup and gemIndex == sourceGemIndex) and gemInstance.imbuedSupport and gemInstance.imbuedSupport ~= "" then
+					return true
+				end
+			end
+		end
+	end
+	return false
+end
+
+local function getGemActiveSkills(socketGroup, gemInstance)
+	local activeSkills = { }
+	for _, activeSkill in ipairs(socketGroup.displaySkillList or {}) do
+		if activeSkill.activeEffect and activeSkill.activeEffect.srcInstance == gemInstance then
+			t_insert(activeSkills, activeSkill)
+		end
+	end
+	return activeSkills
+end
+
 function gemUpgradeReport.Build(skillsTab, currentStat, filters)
 	local report = { }
 	if not (currentStat and currentStat.stat) then
@@ -150,7 +193,7 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters)
 	local baseValue = getStatValue(calcBase, currentStat)
 	local maxQuality = 23
 
-	local function addUpgradeRow(gemType, gemCategory, sourceType, upgradeLabel, name, groupLabel, currentValue, nextValue, curSort, nextSort, output, socketGroup, gemIndex, targetLevel, targetQuality)
+	local function addUpgradeRow(gemType, gemCategory, sourceType, upgradeLabel, name, groupLabel, currentValue, nextValue, curSort, nextSort, output, socketGroup, gemIndex, targetLevel, targetQuality, targetImbuedSupport)
 		local upgradedValue = getStatValue(output, currentStat)
 		local delta = upgradedValue - baseValue
 		local score = lowerIsBetter and -delta or delta
@@ -181,6 +224,7 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters)
 			gemIndex = gemIndex,
 			targetLevel = targetLevel,
 			targetQuality = targetQuality,
+			targetImbuedSupport = targetImbuedSupport,
 			useFullDPS = useFullDPS,
 		}
 		if isRowAllowedByFilters(reportRow, filters) then
@@ -346,6 +390,65 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters)
 							1,
 							20
 						)
+					end
+				end
+
+				if gemCategory == "ACTIVE"
+					and not isCorrupted
+					and currentLevel == 20
+					and socketGroup.slot
+					and not (gemInstance.imbuedSupport and gemInstance.imbuedSupport ~= "")
+					and not slotHasOtherImbuedGem(skillsTab, socketGroup.slot, socketGroup, gemIndex) then
+					local activeSkills = getGemActiveSkills(socketGroup, gemInstance)
+					if #activeSkills > 0 then
+						local bestSupportGem
+						local bestSupportOutput
+						local bestSupportScore = 0
+						for _, supportGemData in pairs(skillsTab.build.data.gems) do
+							local supportGrantedEffect = supportGemData.grantedEffect
+							if isReportableImbuedSupportGem(supportGemData) then
+								local canSupportGem = false
+								for _, activeSkill in ipairs(activeSkills) do
+									if calcLib.canGrantedEffectSupportActiveSkill(supportGrantedEffect, activeSkill) then
+										canSupportGem = true
+										break
+									end
+								end
+								if canSupportGem then
+									gemInstance.imbuedSupport = supportGemData.grantedEffectId
+									local errMsg, output = PCall(calcFunc, nil, useFullDPS)
+									gemInstance.imbuedSupport = ""
+									if not errMsg then
+										local score = lowerIsBetter and -(getStatValue(output, currentStat) - baseValue) or (getStatValue(output, currentStat) - baseValue)
+										if score > bestSupportScore then
+											bestSupportScore = score
+											bestSupportGem = supportGemData
+											bestSupportOutput = output
+										end
+									end
+								end
+							end
+						end
+						if bestSupportGem and bestSupportOutput then
+							addUpgradeRow(
+								gemType,
+								gemCategory,
+								"CORRUPTION",
+								"Imbued",
+								gemName,
+								groupLabel,
+								"None",
+								bestSupportGem.name,
+								0,
+								bestSupportGem.name,
+								bestSupportOutput,
+								socketGroup,
+								gemIndex,
+								currentLevel,
+								currentQuality,
+								bestSupportGem.grantedEffectId
+							)
+						end
 					end
 				end
 			end
