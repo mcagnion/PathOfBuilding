@@ -3063,10 +3063,12 @@ function calcs.buildDefenceEstimations(env, actor)
 
 	-- effective hit pool with sustained recovery between damaging hits
 	if env.configInput.EnableEHPRecoveryCalcs and damageCategoryConfig ~= "DamageOverTime" and ehpRegenDamageIn then
+		output["EHPRecoveryDamagePerHit"] = nil
 		output["EHPRecoveryHitChance"] = nil
 		output["EHPRecoveryDamagingHitInterval"] = nil
 		output["EHPRecoveryHitsSurvived"] = nil
 		output["EHPRecoverySurvivalTime"] = nil
+		output["EHPRecoveryStatus"] = nil
 		output["NumberOfMitigatedDamagingHitsRegen"] = nil
 		output["TotalNumberOfHitsRegen"] = nil
 		output["TotalEHPRegen"] = nil
@@ -3080,11 +3082,13 @@ function calcs.buildDefenceEstimations(env, actor)
 			output[resource.."EHPNetLossPerHit"] = nil
 		end
 		if breakdown then
+			breakdown["EHPRecoveryDamagePerHit"] = nil
 			breakdown["TotalEHPRegen"] = nil
 			breakdown["EHPRecoveryHitChance"] = nil
 			breakdown["EHPRecoveryDamagingHitInterval"] = nil
 			breakdown["EHPRecoveryHitsSurvived"] = nil
 			breakdown["EHPRecoverySurvivalTime"] = nil
+			breakdown["EHPRecoveryStatus"] = nil
 			for _, resource in ipairs({"Life", "Mana", "EnergyShield"}) do
 				breakdown[resource.."EHPRecoveryRate"] = nil
 				breakdown[resource.."EHPLeechRate"] = nil
@@ -3132,6 +3136,7 @@ function calcs.buildDefenceEstimations(env, actor)
 			do
 				output["EHPRecoveryHitChance"] = hitChance * 100
 				output["EHPRecoveryDamagingHitInterval"] = damagingHitInterval
+				output["EHPRecoveryDamagePerHit"] = 0
 				output["LifeEHPRecoveryRate"] = lifeRegenPerSecond
 				output["LifeEHPLeechRate"] = lifeLeechPerSecond
 				output["LifeEHPRecoupRate"] = lifeRecoupPerSecond
@@ -3147,7 +3152,18 @@ function calcs.buildDefenceEstimations(env, actor)
 				output["EnergyShieldEHPRecoupRate"] = energyShieldRecoupPerSecond
 				output["EnergyShieldEHPRechargeRate"] = energyShieldRechargePerSecond
 				output["EnergyShieldEHPRecoveryBetweenHits"] = recoveryBetweenHits.EnergyShield
+				for _, damageType in ipairs(dmgTypeList) do
+					output["EHPRecoveryDamagePerHit"] = output["EHPRecoveryDamagePerHit"] + (ehpRegenDamageIn[damageType] or 0)
+				end
 				if breakdown then
+					breakdown["EHPRecoveryDamagePerHit"] = {}
+					for _, damageType in ipairs(dmgTypeList) do
+						local damage = ehpRegenDamageIn[damageType] or 0
+						if damage > 0 then
+							t_insert(breakdown["EHPRecoveryDamagePerHit"], s_format("%.1f ^8(%s damage taken per damaging hit)", damage, damageType:lower()))
+						end
+					end
+					t_insert(breakdown["EHPRecoveryDamagePerHit"], s_format("= %.1f ^8(total damage taken per damaging hit)", output["EHPRecoveryDamagePerHit"]))
 					breakdown["EHPRecoveryHitChance"] = copyTable(breakdown["ConfiguredNotHitChance"] or {})
 					t_insert(breakdown["EHPRecoveryHitChance"], s_format("= %.2f%% ^8(chance to take a damaging hit)", output["EHPRecoveryHitChance"]))
 					breakdown["EHPRecoveryDamagingHitInterval"] = {
@@ -3231,19 +3247,49 @@ function calcs.buildDefenceEstimations(env, actor)
 					}, actor)
 				end
 				local poolsAfterRecovery = recoverPoolsByFlat(copyTable(poolsAfterHit), recoveryBetweenHits, actor)
+				local totalLossPerHit = 0
+				local totalNetLossPerHit = 0
+				local hitIterationCap = data.misc.ehpCalcMaxIterationsToCalc
+				local cappedHitsSurvived = output["EHPRecoveryHitsSurvived"] and output["EHPRecoveryHitsSurvived"] >= hitIterationCap
 				for _, resource in ipairs({"Life", "Mana", "EnergyShield"}) do
 					output[resource.."EHPLossPerHit"] = (startPools[resource] or 0) - (poolsAfterHit[resource] or 0)
 					output[resource.."EHPNetLossPerHit"] = (startPools[resource] or 0) - (poolsAfterRecovery[resource] or 0)
+					if resource ~= "Mana" or manaUsedAsDefence then
+						totalLossPerHit = totalLossPerHit + output[resource.."EHPLossPerHit"]
+						totalNetLossPerHit = totalNetLossPerHit + output[resource.."EHPNetLossPerHit"]
+					end
+				end
+				if output["EHPRecoveryHitsSurvived"] == m_huge or totalNetLossPerHit <= 0 then
+					output["EHPRecoveryStatus"] = cappedHitsSurvived and "Likely Stable" or "Stable"
+				elseif totalLossPerHit > 0 and totalNetLossPerHit <= totalLossPerHit * 0.25 then
+					output["EHPRecoveryStatus"] = "Sustainable"
+				else
+					output["EHPRecoveryStatus"] = "Unsustainable"
 				end
 				if breakdown then
 					breakdown["EHPRecoveryHitsSurvived"] = {
 						s_format("%.2f ^8(damaging hits survived with recovery between hits)", output["EHPRecoveryHitsSurvived"]),
 					}
+					if cappedHitsSurvived then
+						t_insert(breakdown["EHPRecoveryHitsSurvived"], s_format("Reached %d-hit simulation cap", hitIterationCap))
+					end
 					breakdown["EHPRecoverySurvivalTime"] = {
 						s_format("%.2f ^8(damaging hits survived)", output["EHPRecoveryHitsSurvived"]),
 						s_format("x %.2fs ^8(time between damaging hits)", damagingHitInterval),
 						s_format("= %.2fs ^8(total survival time)", output["EHPRecoverySurvivalTime"]),
 					}
+					if cappedHitsSurvived then
+						t_insert(breakdown["EHPRecoverySurvivalTime"], s_format("Reached %d-hit simulation cap", hitIterationCap))
+					end
+					breakdown["EHPRecoveryStatus"] = {
+						s_format("%s ^8(status)", output["EHPRecoveryStatus"]),
+						s_format("%.1f ^8(total loss per damaging hit)", totalLossPerHit),
+						s_format("- %.1f ^8(total recovery between damaging hits)", totalLossPerHit - totalNetLossPerHit),
+						s_format("= %.1f ^8(total net loss per damaging hit)", totalNetLossPerHit),
+					}
+					if cappedHitsSurvived then
+						t_insert(breakdown["EHPRecoveryStatus"], 2, s_format("Reached %d-hit simulation cap", hitIterationCap))
+					end
 					breakdown["TotalEHPRegen"] = {
 						s_format("%.2f ^8(total average number of hits you can take with sustained recovery)", output["TotalNumberOfHitsRegen"]),
 						s_format("x %d ^8(total incoming damage)", output["totalEnemyDamageIn"]),
