@@ -136,7 +136,8 @@ local function isReportableImbuedSupportGem(gemData)
 	if not (gemData and gemData.grantedEffect and gemData.grantedEffect.support) then
 		return false
 	end
-	if gemData.grantedEffect.plusVersionOf then
+	-- 3.28 imbues should not suggest legacy awakened-only supports.
+	if gemData.tags and gemData.tags.awakened then
 		return false
 	end
 	return gemData.grantedEffect.levels and gemData.grantedEffect.levels[1] ~= nil
@@ -245,6 +246,7 @@ function gemTradeReport.Build(skillsTab, currentStat, filters)
 				local currentImbuedSupport = gemInstance.imbuedSupport
 				local naturalMaxLevel = gemInstance.gemData.naturalMaxLevel or 0
 				local maxLevel = naturalMaxLevel
+				-- Exceptional line gems do not get the generic +1 corrupted level step.
 				if not grantedEffect.plusVersionOf then
 					maxLevel = maxLevel + 1
 				end

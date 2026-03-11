@@ -124,6 +124,10 @@ local function getSupportState(gemInstance)
 	return s_format("%d/%d", gemInstance.level or 0, m_max(0, gemInstance.quality or 0))
 end
 
+local function isRemovedLegacySupportGem(gemData)
+	return gemData and gemData.tags and gemData.tags.awakened and not gemData.tags.exceptional
+end
+
 function supportReplacementReport.Build(skillsTab, currentStat, filters)
 	local report = { }
 	if not (currentStat and currentStat.stat) then
@@ -182,9 +186,11 @@ function supportReplacementReport.Build(skillsTab, currentStat, filters)
 							and candidateGrantedEffect
 							and candidateGrantedEffect.support
 							and not candidateGrantedEffect.unsupported
+							and not isRemovedLegacySupportGem(candidateGemData)
 							and not existingSupportIds[candidateGemData.grantedEffectId]
 							and calcLib.canGrantedEffectSupportActiveSkill(candidateGrantedEffect, activeSkill) then
 							local candidateMaxLevel = candidateGemData.naturalMaxLevel or 0
+							-- Exceptional line gems do not get the generic +1 corrupted level step.
 							if not candidateGrantedEffect.plusVersionOf then
 								candidateMaxLevel = candidateMaxLevel + 1
 							end
