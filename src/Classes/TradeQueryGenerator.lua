@@ -83,10 +83,12 @@ local tradeStatCategoryIndices = {
 }
 
 local influenceSuffixes = { "_shaper", "_elder", "_adjudicator", "_basilisk", "_crusader", "_eyrie"}
-local influenceDropdownNames = { "None" }
+local INFLUENCE_ANY_INDEX = 1
+local INFLUENCE_NONE_INDEX = 2
+local influenceDropdownNames = { "Any", "None" }
 local hasInfluenceModIds = { }
 for i, curInfluenceInfo in ipairs(itemLib.influenceInfo.default) do
-	influenceDropdownNames[i + 1] = curInfluenceInfo.display
+	influenceDropdownNames[i + INFLUENCE_NONE_INDEX] = curInfluenceInfo.display
 	hasInfluenceModIds[i] = "pseudo.pseudo_has_" .. string.lower(curInfluenceInfo.display) .. "_influence"
 end
 
@@ -102,6 +104,21 @@ local MAX_FILTERS = 35
 
 local function logToFile(...)
 	ConPrintf(...)
+end
+
+local function isSpecificInfluenceSelection(selectionIndex)
+	return selectionIndex and selectionIndex > INFLUENCE_NONE_INDEX
+end
+
+local function isNoInfluenceSelection(selectionIndex)
+	return selectionIndex == INFLUENCE_NONE_INDEX
+end
+
+local function getInfluenceInfoForSelection(selectionIndex)
+	if not isSpecificInfluenceSelection(selectionIndex) then
+		return nil
+	end
+	return itemLib.influenceInfo.default[selectionIndex - INFLUENCE_NONE_INDEX]
 end
 
 local TradeQueryGeneratorClass = newClass("TradeQueryGenerator", function(self, queryTab)
@@ -831,11 +848,13 @@ function TradeQueryGeneratorClass:StartQuery(slot, options)
 	local testItem = new("Item", itemRawStr)
 
 	-- Apply any requests influences
-	if options.influence1 > 1 then
-		testItem[itemLib.influenceInfo.default[options.influence1 - 1].key] = true
+	local influence1 = getInfluenceInfoForSelection(options.influence1)
+	if influence1 then
+		testItem[influence1.key] = true
 	end
-	if options.influence2 > 1 then
-		testItem[itemLib.influenceInfo.default[options.influence2 - 1].key] = true
+	local influence2 = getInfluenceInfoForSelection(options.influence2)
+	if influence2 then
+		testItem[influence2.key] = true
 	end
 
 	-- Calculate base output with a blank item
@@ -951,8 +970,20 @@ function TradeQueryGeneratorClass:FinishQuery()
 	}
 
 	local options = self.calcContext.options
+	local forceNoInfluence = isNoInfluenceSelection(options.influence1) or isNoInfluenceSelection(options.influence2)
+	local influenceFilterCost = 0
+	if forceNoInfluence then
+		influenceFilterCost = #hasInfluenceModIds
+	else
+		if isSpecificInfluenceSelection(options.influence1) then
+			influenceFilterCost = influenceFilterCost + 1
+		end
+		if isSpecificInfluenceSelection(options.influence2) then
+			influenceFilterCost = influenceFilterCost + 1
+		end
+	end
 
-	local num_extra = 2
+	local num_extra = influenceFilterCost
 	if not options.includeMirrored then
 		num_extra = num_extra + 1
 	end
@@ -988,13 +1019,22 @@ function TradeQueryGeneratorClass:FinishQuery()
 
 	local andFilters = { type = "and", filters = { } }
 	local options = self.calcContext.options
-	if options.influence1 > 1 then
-		t_insert(andFilters.filters, { id = hasInfluenceModIds[options.influence1 - 1] })
-		filters = filters + 1
-	end
-	if options.influence2 > 1 then
-		t_insert(andFilters.filters, { id = hasInfluenceModIds[options.influence2 - 1] })
-		filters = filters + 1
+	if forceNoInfluence then
+		local noInfluenceFilters = { type = "not", filters = { } }
+		for _, modId in ipairs(hasInfluenceModIds) do
+			t_insert(noInfluenceFilters.filters, { id = modId })
+			filters = filters + 1
+		end
+		t_insert(queryTable.query.stats, noInfluenceFilters)
+	else
+		if isSpecificInfluenceSelection(options.influence1) then
+			t_insert(andFilters.filters, { id = hasInfluenceModIds[options.influence1 - INFLUENCE_NONE_INDEX] })
+			filters = filters + 1
+		end
+		if isSpecificInfluenceSelection(options.influence2) then
+			t_insert(andFilters.filters, { id = hasInfluenceModIds[options.influence2 - INFLUENCE_NONE_INDEX] })
+			filters = filters + 1
+		end
 	end
 
 	if #andFilters.filters > 0 then
@@ -1144,13 +1184,30 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		controls.jewelTypeLabel = new("LabelControl", {"RIGHT",controls.jewelType,"LEFT"}, {-5, 0, 0, 16}, "Jewel Type:")
 		updateLastAnchor(controls.jewelType)
 	elseif slot and not isAbyssalJewelSlot then
-		controls.influence1 = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 100, 18}, influenceDropdownNames, function(index, value) end)
-		controls.influence1.selIndex = self.lastInfluence1 or 1
+		local function normalizeInfluenceSelections(changedControl)
+			if changedControl == 1 and controls.influence1.selIndex == INFLUENCE_NONE_INDEX and controls.influence2.selIndex ~= INFLUENCE_ANY_INDEX then
+				controls.influence2:SetSel(INFLUENCE_ANY_INDEX)
+			elseif changedControl == 2 and controls.influence2.selIndex == INFLUENCE_NONE_INDEX and controls.influence1.selIndex ~= INFLUENCE_ANY_INDEX then
+				controls.influence1:SetSel(INFLUENCE_ANY_INDEX)
+			elseif controls.influence1.selIndex == INFLUENCE_NONE_INDEX and controls.influence2.selIndex ~= INFLUENCE_ANY_INDEX then
+				controls.influence2:SetSel(INFLUENCE_ANY_INDEX)
+			elseif controls.influence2.selIndex == INFLUENCE_NONE_INDEX and controls.influence1.selIndex ~= INFLUENCE_ANY_INDEX then
+				controls.influence1:SetSel(INFLUENCE_ANY_INDEX)
+			end
+		end
+
+		controls.influence1 = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 100, 18}, influenceDropdownNames, function(index, value)
+			normalizeInfluenceSelections(1)
+		end)
+		controls.influence1.selIndex = self.lastInfluence1 or INFLUENCE_ANY_INDEX
 		controls.influence1Label = new("LabelControl", {"RIGHT",controls.influence1,"LEFT"}, {-5, 0, 0, 16}, "Influence 1:")
 
-		controls.influence2 = new("DropDownControl", {"TOPLEFT",controls.influence1,"BOTTOMLEFT"}, {0, 5, 100, 18}, influenceDropdownNames, function(index, value) end)
-		controls.influence2.selIndex = self.lastInfluence2 or 1
+		controls.influence2 = new("DropDownControl", {"TOPLEFT",controls.influence1,"BOTTOMLEFT"}, {0, 5, 100, 18}, influenceDropdownNames, function(index, value)
+			normalizeInfluenceSelections(2)
+		end)
+		controls.influence2.selIndex = self.lastInfluence2 or INFLUENCE_ANY_INDEX
 		controls.influence2Label = new("LabelControl", {"RIGHT",controls.influence2,"LEFT"}, {-5, 0, 0, 16}, "Influence 2:")
+		normalizeInfluenceSelections()
 		updateLastAnchor(controls.influence2, 46)
 	elseif isAbyssalJewelSlot then
 		controls.jewelType = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 100, 18}, { "Abyss" }, nil)
