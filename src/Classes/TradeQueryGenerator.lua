@@ -1266,6 +1266,7 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 			options.links = tonumber(controls.links.buf)
 		end
 		options.statWeights = statWeights
+		self.requesterContext.includeEldritch = options.includeEldritch == true
 
 		self:StartQuery(slot, options)
 	end)

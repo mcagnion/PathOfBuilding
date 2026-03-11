@@ -1585,7 +1585,8 @@ function ItemsTabClass:DeleteItem(item, deferUndoState)
 	end
 end
 
-local function copyAnointsAndEldritchImplicits(newItem, activeItemSet, items)
+local function copyAnointsAndEldritchImplicits(newItem, activeItemSet, items, options)
+	options = options or { }
 	local newItemType = newItem.base.type
 	if activeItemSet[newItemType] then
 		local currentItem = activeItemSet[newItemType].selItemId and items[activeItemSet[newItemType].selItemId]
@@ -1607,8 +1608,9 @@ local function copyAnointsAndEldritchImplicits(newItem, activeItemSet, items)
 					return
 				end
 			end
+			local shouldOverwriteExistingEldritchImplicits = not options.preserveExistingEldritchImplicits and (newItem.cleansing or newItem.tangle)
 			if main.migrateEldritchImplicits and isValueInTable(eldritchBaseTypes, newItem.base.type) and isValueInTable(eldritchRarities, newItem.rarity)
-				and #newItem.implicitModLines == 0 and not newItem.corrupted and (currentItem.cleansing or currentItem.tangle) and currentItem.implicitModLines then
+				and (#newItem.implicitModLines == 0 or shouldOverwriteExistingEldritchImplicits) and not newItem.corrupted and (currentItem.cleansing or currentItem.tangle) and currentItem.implicitModLines then
 					newItem.implicitModLines = currentItem.implicitModLines
 					newItem.tangle = currentItem.tangle
 					newItem.cleansing = currentItem.cleansing
@@ -1618,11 +1620,18 @@ local function copyAnointsAndEldritchImplicits(newItem, activeItemSet, items)
 	end
 end
 
+function ItemsTabClass:ApplyComparisonItemOverrides(item, options)
+	if item and item.base then
+		copyAnointsAndEldritchImplicits(item, self.activeItemSet, self.items, options)
+	end
+	return item
+end
+
 -- Attempt to create a new item from the given item raw text and sets it as the new display item
 function ItemsTabClass:CreateDisplayItemFromRaw(itemRaw, normalise)
 	local newItem = new("Item", itemRaw)
 	if newItem.base then
-		copyAnointsAndEldritchImplicits(newItem, self.activeItemSet, self.items)
+		self:ApplyComparisonItemOverrides(newItem)
 		if normalise then
 			newItem:NormaliseQuality()
 			newItem:BuildModList()
