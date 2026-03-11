@@ -3,13 +3,18 @@
 -- Module: Skills Tab
 -- Skills tab for the current build.
 --
+local dkjson = require "dkjson"
+
+local get_time = os.time
 local pairs = pairs
 local ipairs = ipairs
 local t_insert = table.insert
 local t_remove = table.remove
+local m_ceil = math.ceil
 local m_min = math.min
 local m_max = math.max
 local gemUpgradeReport = LoadModule("Modules/GemUpgradeReport")
+local gemTradeReport = LoadModule("Modules/GemTradeReport")
 
 local groupSlotDropList = {
 	{ label = "None" },
@@ -143,6 +148,9 @@ local SkillsTabClass = newClass("SkillsTab", "UndoHandler", "ControlHost", "Cont
 	end
 	self.controls.gemUpgradeReport = new("ButtonControl", { "LEFT", self.controls.setManage, "RIGHT" }, { 8, 0, 150, 20 }, "Gem Upgrade Report", function()
 		self:OpenGemUpgradePopup()
+	end)
+	self.controls.gemTradeReport = new("ButtonControl", { "LEFT", self.controls.gemUpgradeReport, "RIGHT" }, { 8, 0, 150, 20 }, "Gem Trade Report", function()
+		self:OpenGemTradePopup()
 	end)
 
 	-- Socket group list
@@ -600,6 +608,690 @@ function SkillsTabClass:BuildGemUpgradeReport(currentStat)
 	})
 end
 
+local function getGemTradePriceKey(reportRow, league)
+	return table.concat({
+		league or reportRow.tradeLeague or "",
+		reportRow.tradeGemNameSpec or reportRow.name or "",
+		reportRow.tradeQualityId or "Default",
+		tostring(reportRow.targetLevel or ""),
+		tostring(reportRow.targetQuality or ""),
+		tostring(reportRow.targetImbuedSupport or ""),
+		tostring(reportRow.tradeNaturalMaxLevel or ""),
+	}, "|")
+end
+
+local function formatTradePrice(amount, currency)
+	return tostring(amount) .. " " .. tostring(currency)
+end
+
+local function loadTradeCurrencyConversionFromFile(tradeQuery, league)
+	if not (tradeQuery and league and league ~= "") then
+		return nil
+	end
+	tradeQuery.pbCurrencyConversion = tradeQuery.pbCurrencyConversion or { }
+	if tradeQuery.pbCurrencyConversion[league] then
+		return tradeQuery.pbCurrencyConversion[league]
+	end
+	local valuesFile = io.open("../" .. league .. "_currency_values.json", "r")
+	if not valuesFile then
+		return nil
+	end
+	local lines = valuesFile:read("*a")
+	valuesFile:close()
+	local conversionTable = dkjson.decode(lines)
+	if type(conversionTable) == "table" then
+		tradeQuery.pbCurrencyConversion[league] = conversionTable
+		return conversionTable
+	end
+	return nil
+end
+
+local function tryConvertTradePriceToChaos(tradeQuery, league, currency, amount)
+	if not (currency and amount) then
+		return nil
+	end
+	loadTradeCurrencyConversionFromFile(tradeQuery, league)
+	currency = tostring(currency):lower()
+	if currency == "chaos" then
+		return m_ceil(tonumber(amount) or 0)
+	end
+	local conversionTable = tradeQuery and tradeQuery.pbCurrencyConversion and tradeQuery.pbCurrencyConversion[league]
+	if conversionTable and conversionTable[currency] then
+		return m_ceil((tonumber(amount) or 0) * conversionTable[currency])
+	end
+	return nil
+end
+
+local function getGemTradeStatusOption(tradeQuery)
+	if not tradeQuery then
+		return "securable"
+	end
+	if type(tradeQuery.GetTradeStatusOption) == "function" then
+		local ok, status = pcall(tradeQuery.GetTradeStatusOption, tradeQuery)
+		if ok and type(status) == "string" and status ~= "" then
+			return status
+		end
+	end
+	local status = tradeQuery.tradeStatusOption
+	if type(status) == "table" then
+		status = status.option or status.id or status.value or status.label
+	end
+	if type(status) == "string" and status ~= "" then
+		return status
+	end
+	local statusOptions = tradeQuery.tradeStatusOptions
+	local statusIndex = tradeQuery.tradeStatusIndex
+	if type(statusOptions) == "table" and statusIndex and statusOptions[statusIndex] then
+		local indexedStatus = statusOptions[statusIndex]
+		if type(indexedStatus) == "table" then
+			indexedStatus = indexedStatus.option or indexedStatus.id or indexedStatus.value or indexedStatus.label
+		end
+		if type(indexedStatus) == "string" and indexedStatus ~= "" then
+			return indexedStatus
+		end
+	end
+	return "securable"
+end
+
+local function resolveTradeRealm(tradeQuery)
+	if not tradeQuery then
+		return "pc"
+	end
+	if tradeQuery.pbRealm and tradeQuery.pbRealm ~= "" then
+		return tradeQuery.pbRealm
+	end
+	if tradeQuery.realmIds and tradeQuery.pbRealmIndex and tradeQuery.realmDropList and tradeQuery.realmDropList[tradeQuery.pbRealmIndex] then
+		local realmLabel = tradeQuery.realmDropList[tradeQuery.pbRealmIndex]
+		if realmLabel and tradeQuery.realmIds[realmLabel] then
+			return tradeQuery.realmIds[realmLabel]
+		end
+	end
+	return "pc"
+end
+
+local function resolveTradeLeague(tradeQuery)
+	if not tradeQuery then
+		return "Standard"
+	end
+	if tradeQuery.pbLeague and tradeQuery.pbLeague ~= "" then
+		return tradeQuery.pbLeague
+	end
+	local leagueList = tradeQuery.itemsTab and tradeQuery.itemsTab.leagueDropList or tradeQuery.leagueDropList
+	if leagueList and tradeQuery.pbLeagueIndex and leagueList[tradeQuery.pbLeagueIndex] then
+		return leagueList[tradeQuery.pbLeagueIndex]
+	end
+	if tradeQuery.controls and tradeQuery.controls.league and tradeQuery.controls.league.list then
+		local selIndex = tradeQuery.controls.league.selIndex or tradeQuery.pbLeagueIndex
+		if selIndex and tradeQuery.controls.league.list[selIndex] then
+			return tradeQuery.controls.league.list[selIndex]
+		end
+	end
+	return "Standard"
+end
+
+local function getGemTradeCurrencyButtonState(tradeQuery, league, realm)
+	if realm ~= "pc" then
+		return "Currency Rates are not available", false, "Currency Conversion rates are pulled from PoE Ninja\nThe data is only available for the PC realm."
+	end
+	local conversionTable = loadTradeCurrencyConversionFromFile(tradeQuery, league)
+	local updateTime = conversionTable and conversionTable.updateTime or nil
+	if not updateTime then
+		return "Get Currency Conversion Rates", true, "Currency Conversion rates are pulled from PoE Ninja\nUpdates are limited to once per hour and not necessary more than once per day"
+	end
+	local age = get_time() - updateTime
+	if age < 3600 then
+		return "Currency Rates are very recent", false, "Conversion Rates are less than an hour old (" .. tostring(age) .. " seconds old)"
+	elseif age < 24 * 3600 then
+		return "Currency Rates are recent", true, "Currency Conversion rates are pulled from PoE Ninja\nUpdates are limited to once per hour and not necessary more than once per day"
+	end
+	return "Update Currency Conversion Rates", true, "Currency Conversion rates are pulled from PoE Ninja\nUpdates are limited to once per hour and not necessary more than once per day"
+end
+
+local function buildGemTradeLeagueList(tradeQuery)
+	local leagueList = { }
+	local knownLeagues = { }
+	local realm = resolveTradeRealm(tradeQuery)
+	local allLeagues = tradeQuery and tradeQuery.allLeagues and tradeQuery.allLeagues[realm]
+	if allLeagues then
+		for _, league in ipairs(allLeagues) do
+			if type(league) == "string" and league ~= "" and not knownLeagues[league] then
+				knownLeagues[league] = true
+				t_insert(leagueList, league)
+			end
+		end
+	end
+	local sourceList = tradeQuery and ((tradeQuery.itemsTab and tradeQuery.itemsTab.leagueDropList) or tradeQuery.leagueDropList) or { }
+	for _, league in ipairs(sourceList or { }) do
+		if type(league) == "string" and league ~= "" and not knownLeagues[league] then
+			knownLeagues[league] = true
+			t_insert(leagueList, league)
+		end
+	end
+	local resolvedLeague = resolveTradeLeague(tradeQuery)
+	if resolvedLeague ~= "" and not knownLeagues[resolvedLeague] then
+		t_insert(leagueList, 1, resolvedLeague)
+	end
+	if #leagueList == 0 then
+		t_insert(leagueList, "Standard")
+	end
+	return leagueList
+end
+
+local function sortTradeLeaguesForPopup(leagues)
+	local sortedLeagues = { }
+	for _, league in ipairs(leagues or { }) do
+		if league ~= "Standard" and league ~= "Ruthless" and league ~= "Hardcore" and league ~= "Hardcore Ruthless" then
+			t_insert(sortedLeagues, league)
+		end
+	end
+	t_insert(sortedLeagues, "Standard")
+	t_insert(sortedLeagues, "Hardcore")
+	t_insert(sortedLeagues, "Ruthless")
+	t_insert(sortedLeagues, "Hardcore Ruthless")
+	return sortedLeagues
+end
+
+local function getGemTradeCacheDisplay(cacheEntry)
+	if not cacheEntry then
+		return "--", "--"
+	end
+	if cacheEntry.state == "done" then
+		return cacheEntry.priceText or "--", nil
+	elseif cacheEntry.state == "pending" or cacheEntry.state == "metadata" then
+		return "Fetching...", "Fetching..."
+	elseif cacheEntry.state == "queued" then
+		return "Fetch needed", "Fetch needed"
+	elseif cacheEntry.state == "skipped" then
+		return "Unsupported", "Unsupported"
+	elseif cacheEntry.state == "not_found" then
+		return "No listings", "--"
+	elseif cacheEntry.state == "error" then
+		return "Request failed", "--"
+	end
+	return "--", "--"
+end
+
+local function isResolvedGemTradePriceText(priceText)
+	return priceText
+		and priceText ~= "--"
+		and priceText ~= "Fetching..."
+		and priceText ~= "Fetch needed"
+		and priceText ~= "Unsupported"
+		and priceText ~= "No listings"
+		and priceText ~= "Request failed"
+end
+
+function SkillsTabClass:EnsureGemTradeImbuedSupportStats(controls, refreshReport)
+	local state = self.gemTradeImbuedSupportStats
+	if state and state.byGrantedEffectId then
+		return state.byGrantedEffectId
+	end
+	if state and state.loading then
+		return nil, "loading"
+	end
+
+	state = { loading = true }
+	self.gemTradeImbuedSupportStats = state
+	local popupSession = self.gemTradePopupSession or 0
+	local tradeQuery = self.build and self.build.itemsTab and self.build.itemsTab.tradeQuery
+	local hostName = tradeQuery and tradeQuery.hostName or "https://www.pathofexile.com/"
+	launch:DownloadPage(hostName .. "api/trade/data/stats", function(response, errMsg)
+		state.loading = false
+		if errMsg then
+			state.errorText = "Failed to load imbued trade metadata."
+		else
+			local obj = dkjson.decode(response.body)
+			local byName = { }
+			for _, section in ipairs(obj and obj.result or { }) do
+				if section.id == "imbued" then
+					for _, entry in ipairs(section.entries or { }) do
+						local supportName = entry.text and entry.text:match("^Supported by Level 1 (.+)$")
+						if supportName and entry.id then
+							byName[supportName:lower()] = entry.id
+						end
+					end
+					break
+				end
+			end
+			state.byGrantedEffectId = { }
+			for grantedEffectId, skillData in pairs(data.skills) do
+				if skillData.name and byName[skillData.name:lower()] then
+					state.byGrantedEffectId[grantedEffectId] = byName[skillData.name:lower()]
+				end
+			end
+			if next(state.byGrantedEffectId) == nil then
+				state.errorText = "No imbued trade metadata found."
+			end
+		end
+		if self.gemTradePopupSession == popupSession and refreshReport then
+			refreshReport(false, self.gemTradePricePendingPrime)
+		end
+	end)
+	if controls and controls.priceStatus then
+		controls.priceStatus.label = "^7Prices: loading imbued trade data..."
+	end
+	return nil, "loading"
+end
+
+function SkillsTabClass:GetGemTradeQueryContext(selectedLeague)
+	local tradeQuery = self.build and self.build.itemsTab and self.build.itemsTab.tradeQuery
+	if not (tradeQuery and tradeQuery.tradeQueryRequests) then
+		return nil, "Trader is unavailable."
+	end
+	local realm = resolveTradeRealm(tradeQuery)
+	local league = selectedLeague or resolveTradeLeague(tradeQuery)
+	return {
+		tradeQuery = tradeQuery,
+		realm = realm,
+		league = league,
+		status = getGemTradeStatusOption(tradeQuery),
+	}
+end
+
+function SkillsTabClass:BuildGemTradePriceQuery(reportRow, queryContext)
+	if not reportRow.tradeGemNameSpec or reportRow.tradeGemNameSpec == "" then
+		return nil, "Missing gem name."
+	end
+	if reportRow.tradeQualityId and reportRow.tradeQualityId ~= "Default" then
+		return nil, "Alt quality pricing is not supported yet."
+	end
+
+	local queryTable = {
+		query = {
+			status = { option = queryContext.status },
+			type = reportRow.tradeGemNameSpec,
+		},
+		sort = { price = "asc" },
+		engine = "new",
+	}
+	if reportRow.targetImbuedSupport then
+		local statId = queryContext.imbuedSupportStatIds and queryContext.imbuedSupportStatIds[reportRow.targetImbuedSupport]
+		if not statId then
+			return nil, "Missing imbued support trade stat."
+		end
+		queryTable.query.stats = {
+			{
+				type = "and",
+				filters = {
+					{ id = statId, disabled = false, value = { } },
+				},
+			},
+		}
+	else
+		local miscFilters = { }
+		if reportRow.targetLevel then
+			miscFilters.gem_level = { min = reportRow.targetLevel, max = reportRow.targetLevel }
+		end
+		if reportRow.targetQuality and reportRow.targetQuality > 0 then
+			miscFilters.quality = { min = reportRow.targetQuality, max = reportRow.targetQuality }
+		end
+		if (reportRow.targetLevel or 0) > (reportRow.tradeNaturalMaxLevel or math.huge) or (reportRow.targetQuality or 0) > 20 then
+			miscFilters.corrupted = { option = "true" }
+		end
+		queryTable.query.filters = {
+			type_filters = {
+				filters = {
+					category = { option = "gem" },
+				},
+			},
+			misc_filters = {
+				filters = miscFilters,
+			},
+		}
+	end
+	return dkjson.encode(queryTable)
+end
+
+function SkillsTabClass:PrepareGemTradePriceQueue(report, league)
+	self.gemTradePriceCache = self.gemTradePriceCache or { }
+	for _, reportRow in ipairs(report or { }) do
+		if reportRow.sourceType == "TRADE" and reportRow.score > 0 then
+			local priceKey = getGemTradePriceKey(reportRow, league)
+			if not self.gemTradePriceCache[priceKey] then
+				self.gemTradePriceCache[priceKey] = {
+					state = "queued",
+					errorText = "Price not fetched yet. Click Fetch Prices to continue.",
+				}
+			end
+		end
+	end
+end
+
+function SkillsTabClass:ApplyGemTradePriceCache(report, league)
+	local priceCache = self.gemTradePriceCache or { }
+	for _, reportRow in ipairs(report or { }) do
+		if reportRow.sourceType == "TRADE" then
+			local cacheEntry = priceCache[getGemTradePriceKey(reportRow, league)]
+			if cacheEntry then
+				local priceText, valueText = getGemTradeCacheDisplay(cacheEntry)
+				reportRow.priceText = priceText
+				reportRow.priceSort = cacheEntry.priceChaos
+				reportRow.tradeUrl = cacheEntry.tradeUrl
+				reportRow.tradePriceError = cacheEntry.errorText
+				if cacheEntry.priceChaos and cacheEntry.priceChaos > 0 then
+					reportRow.valueSort = reportRow.score / cacheEntry.priceChaos
+					reportRow.valueText = string.format("%.2f", reportRow.valueSort)
+				elseif cacheEntry.state == "done" then
+					reportRow.valueSort = nil
+					reportRow.valueText = "No rates"
+				else
+					reportRow.valueSort = nil
+					reportRow.valueText = valueText or "--"
+				end
+			else
+				reportRow.priceText = "--"
+				reportRow.priceSort = nil
+				reportRow.tradeUrl = nil
+				reportRow.tradePriceError = nil
+				reportRow.valueSort = nil
+				reportRow.valueText = "--"
+			end
+		end
+	end
+end
+
+function SkillsTabClass:UpdateGemTradePriceStatus(controls, report)
+	if not controls or not controls.priceStatus then
+		return
+	end
+	local pending, priced, notFetched, issues = 0, 0, 0, 0
+	local hasQueued = false
+	for _, row in ipairs(report or { }) do
+		if row.sourceType == "TRADE" then
+			if row.priceText == "Fetching..." then
+				pending = pending + 1
+			elseif row.priceText == "Fetch needed" then
+				notFetched = notFetched + 1
+				hasQueued = true
+			elseif isResolvedGemTradePriceText(row.priceText) then
+				priced = priced + 1
+			elseif row.priceText ~= "--" then
+				issues = issues + 1
+			end
+		end
+	end
+	if controls.fetchMore then
+		controls.fetchMore.hasQueued = hasQueued
+	end
+	local league = controls.leagueSelect and controls.leagueSelect.list[controls.leagueSelect.selIndex] or self.gemTradeLeague or "Standard"
+	controls.priceStatus.label = string.format("^7Prices (%s): %d priced, %d fetching, %d not fetched, %d unavailable", league, priced, pending, notFetched, issues)
+end
+
+function SkillsTabClass:EnsureGemTradeLeagueList(controls, refreshReport)
+	local tradeQuery = self.build and self.build.itemsTab and self.build.itemsTab.tradeQuery
+	if not (tradeQuery and tradeQuery.tradeQueryRequests) then
+		return
+	end
+	local realm = resolveTradeRealm(tradeQuery)
+	if tradeQuery.allLeagues and tradeQuery.allLeagues[realm] then
+		return
+	end
+	if self.gemTradeLeagueListLoading then
+		return
+	end
+	self.gemTradeLeagueListLoading = true
+	if controls and controls.priceStatus then
+		controls.priceStatus.label = "^7Prices: loading trade leagues..."
+	end
+	tradeQuery.tradeQueryRequests:FetchLeagues(realm, function(leagues, errMsg)
+		self.gemTradeLeagueListLoading = false
+		if errMsg then
+			if controls and controls.priceStatus then
+				controls.priceStatus.label = "^1Unable to load trade leagues: " .. errMsg
+			end
+			return
+		end
+		tradeQuery.allLeagues = tradeQuery.allLeagues or { }
+		tradeQuery.allLeagues[realm] = sortTradeLeaguesForPopup(leagues)
+		local selectedLeague = controls and controls.leagueSelect and controls.leagueSelect.list[controls.leagueSelect.selIndex] or self.gemTradeLeague or resolveTradeLeague(tradeQuery)
+		local leagueList = buildGemTradeLeagueList(tradeQuery)
+		if controls and controls.leagueSelect then
+			controls.leagueSelect:SetList(leagueList)
+			controls.leagueSelect:SelByValue(selectedLeague, nil)
+			if not controls.leagueSelect.list[controls.leagueSelect.selIndex] then
+				controls.leagueSelect:SetSel(1)
+			end
+			self.gemTradeLeague = controls.leagueSelect.list[controls.leagueSelect.selIndex] or selectedLeague
+		end
+		if refreshReport then
+			refreshReport(false, false)
+		end
+	end)
+end
+
+function SkillsTabClass:UpdateGemTradeCurrencyConversionButton(controls)
+	local tradeQuery = self.build and self.build.itemsTab and self.build.itemsTab.tradeQuery
+	if not (controls and controls.currencyRates and tradeQuery) then
+		return
+	end
+	local selectedLeague = controls.leagueSelect and controls.leagueSelect.list[controls.leagueSelect.selIndex] or self.gemTradeLeague or resolveTradeLeague(tradeQuery)
+	local realm = resolveTradeRealm(tradeQuery)
+	local label, enabled, tooltipText = getGemTradeCurrencyButtonState(tradeQuery, selectedLeague, realm)
+	controls.currencyRates.label = label
+	controls.currencyRates.enabled = enabled
+	controls.currencyRates.tooltipText = tooltipText
+end
+
+function SkillsTabClass:FetchGemTradeCurrencyConversion(controls, refreshReport)
+	local tradeQuery = self.build and self.build.itemsTab and self.build.itemsTab.tradeQuery
+	if not (tradeQuery and tradeQuery.tradeQueryRequests) then
+		if controls and controls.priceStatus then
+			controls.priceStatus.label = "^1Trader is unavailable."
+		end
+		return
+	end
+	local selectedLeague = controls and controls.leagueSelect and controls.leagueSelect.list[controls.leagueSelect.selIndex] or self.gemTradeLeague or resolveTradeLeague(tradeQuery)
+	local realm = resolveTradeRealm(tradeQuery)
+	if realm ~= "pc" then
+		if controls and controls.priceStatus then
+			controls.priceStatus.label = "^1Currency conversion is only available on the PC realm."
+		end
+		return
+	end
+	local now = get_time()
+	local conversionTable = loadTradeCurrencyConversionFromFile(tradeQuery, selectedLeague)
+	local updateTime = conversionTable and conversionTable.updateTime or nil
+	if updateTime and (now - updateTime) < 3600 then
+		self:UpdateGemTradeCurrencyConversionButton(controls)
+		if refreshReport then
+			refreshReport(false, false)
+		end
+		return
+	end
+	if (now - (tradeQuery.lastCurrencyConversionRequest or 0)) < 3600 then
+		self:UpdateGemTradeCurrencyConversionButton(controls)
+		return
+	end
+	if controls and controls.priceStatus then
+		controls.priceStatus.label = "^7Prices: loading currency conversion rates..."
+	end
+	tradeQuery:FetchCurrencyConversionTable(function(data, errMsg)
+		if errMsg then
+			if controls and controls.priceStatus then
+				controls.priceStatus.label = "^1Error: " .. tostring(errMsg)
+			end
+			return
+		end
+		tradeQuery.pbCurrencyConversion = tradeQuery.pbCurrencyConversion or { }
+		tradeQuery.pbCurrencyConversion[selectedLeague] = { }
+		tradeQuery.lastCurrencyConversionRequest = now
+		launch:DownloadPage("https://poe.ninja/api/data/CurrencyRates?league=" .. urlEncode(selectedLeague), function(response, downloadErrMsg)
+			if downloadErrMsg then
+				if controls and controls.priceStatus then
+					controls.priceStatus.label = "^1Error: " .. tostring(downloadErrMsg)
+				end
+				return
+			end
+			local jsonData = dkjson.decode(response.body)
+			if not jsonData then
+				if controls and controls.priceStatus then
+					controls.priceStatus.label = "^1Failed to get PoE Ninja response."
+				end
+				return
+			end
+			for currencyName, chaosEquivalent in pairs(jsonData) do
+				if tradeQuery.currencyConversionTradeMap[currencyName] then
+					tradeQuery.pbCurrencyConversion[selectedLeague][tradeQuery.currencyConversionTradeMap[currencyName]] = chaosEquivalent
+				end
+			end
+			tradeQuery.pbCurrencyConversion[selectedLeague].updateTime = get_time()
+			local valuesFile = io.open("../" .. selectedLeague .. "_currency_values.json", "w")
+			if valuesFile then
+				valuesFile:write(dkjson.encode(tradeQuery.pbCurrencyConversion[selectedLeague]))
+				valuesFile:close()
+			end
+			self:UpdateGemTradeCurrencyConversionButton(controls)
+			if refreshReport then
+				refreshReport(false, false)
+			end
+		end)
+	end)
+end
+
+function SkillsTabClass:PrimeGemTradePrices(report, controls, refreshReport, selectedLeague)
+	local queryContext, errMsg = self:GetGemTradeQueryContext(selectedLeague)
+	if not queryContext then
+		if controls and controls.priceStatus then
+			controls.priceStatus.label = "^1" .. errMsg
+		end
+		return
+	end
+	local hasImbuedRows = false
+	for _, reportRow in ipairs(report or { }) do
+		if reportRow.sourceType == "TRADE" and reportRow.targetImbuedSupport then
+			hasImbuedRows = true
+			break
+		end
+	end
+	if hasImbuedRows then
+		queryContext.imbuedSupportStatIds = self:EnsureGemTradeImbuedSupportStats(controls, refreshReport)
+		if not queryContext.imbuedSupportStatIds then
+			return
+		end
+	end
+
+	self.gemTradePriceCache = self.gemTradePriceCache or { }
+	self.gemTradePricePendingPrime = false
+	local popupSession = self.gemTradePopupSession or 0
+	local fetchLimit = self.gemTradePriceFetchBudget or 0
+	local requestedCount = 0
+	for _, reportRow in ipairs(report or { }) do
+		if reportRow.sourceType == "TRADE" and reportRow.score > 0 then
+			local existingEntry = self.gemTradePriceCache[getGemTradePriceKey(reportRow, queryContext.league)]
+			if existingEntry and existingEntry.fetchAttempted then
+				requestedCount = requestedCount + 1
+			end
+		end
+	end
+	local queued = 0
+	for _, reportRow in ipairs(report or { }) do
+		if reportRow.sourceType == "TRADE" and reportRow.score > 0 then
+			local priceKey = getGemTradePriceKey(reportRow, queryContext.league)
+			local existingEntry = self.gemTradePriceCache[priceKey]
+			if not existingEntry or existingEntry.state == "queued" then
+				local query, queryErr = self:BuildGemTradePriceQuery(reportRow, queryContext)
+				if not query then
+					self.gemTradePriceCache[priceKey] = {
+						state = queryErr == "Alt quality pricing is not supported yet." and "skipped" or "error",
+						errorText = queryErr,
+					}
+				elseif (requestedCount + queued) < fetchLimit then
+					queued = queued + 1
+					local cacheEntry = {
+						state = "pending",
+						fetchAttempted = true,
+					}
+					self.gemTradePriceCache[priceKey] = cacheEntry
+					queryContext.tradeQuery.tradeQueryRequests:SearchWithQuery(
+						queryContext.realm,
+						queryContext.league,
+						query,
+						function(items, callbackErrMsg)
+							if callbackErrMsg then
+								cacheEntry.state = "error"
+								cacheEntry.errorText = callbackErrMsg
+							elseif not items or not items[1] then
+								cacheEntry.state = "not_found"
+								cacheEntry.errorText = "No trade result found."
+							else
+								local bestItem = items[1]
+								cacheEntry.state = "done"
+								cacheEntry.priceText = formatTradePrice(bestItem.amount, bestItem.currency)
+								cacheEntry.priceChaos = tryConvertTradePriceToChaos(queryContext.tradeQuery, queryContext.league, bestItem.currency, bestItem.amount)
+							end
+							if self.gemTradePopupSession == popupSession and refreshReport then
+								refreshReport(false, false)
+							end
+						end,
+						{
+							callbackQueryId = function(queryId)
+								cacheEntry.tradeUrl = queryContext.tradeQuery.tradeQueryRequests:buildUrl(queryContext.tradeQuery.hostName .. "trade/search", queryContext.realm, queryContext.league, queryId)
+							end,
+						}
+					)
+				else
+					self.gemTradePriceCache[priceKey] = {
+						state = "queued",
+						errorText = "Price not fetched yet. Click Fetch Prices to continue.",
+					}
+				end
+			end
+		end
+	end
+	self:UpdateGemTradePriceStatus(controls, report)
+end
+
+function SkillsTabClass:OpenSelectedGemTrade(controls, refreshReport)
+	local reportRow = controls and controls.reportList and controls.reportList.selValue
+	if not reportRow then
+		return
+	end
+	if reportRow.tradeUrl and reportRow.tradeUrl ~= "" then
+		OpenURL(reportRow.tradeUrl)
+		return
+	end
+	local selectedLeague = controls and controls.leagueSelect and controls.leagueSelect.list[controls.leagueSelect.selIndex] or self.gemTradeLeague
+	local queryContext, errMsg = self:GetGemTradeQueryContext(selectedLeague)
+	if not queryContext then
+		if controls and controls.priceStatus then
+			controls.priceStatus.label = "^1" .. errMsg
+		end
+		return
+	end
+	if reportRow.targetImbuedSupport then
+		queryContext.imbuedSupportStatIds = self:EnsureGemTradeImbuedSupportStats(controls, refreshReport)
+		if not queryContext.imbuedSupportStatIds then
+			return
+		end
+	end
+	local query, queryErr = self:BuildGemTradePriceQuery(reportRow, queryContext)
+	if not query then
+		if controls and controls.priceStatus then
+			controls.priceStatus.label = "^1" .. queryErr
+		end
+		return
+	end
+	queryContext.tradeQuery.tradeQueryRequests:SearchWithQuery(
+		queryContext.realm,
+		queryContext.league,
+		query,
+		function(items, callbackErrMsg)
+			if callbackErrMsg and controls and controls.priceStatus then
+				controls.priceStatus.label = "^1" .. callbackErrMsg
+			end
+		end,
+		{
+			callbackQueryId = function(queryId)
+				local url = queryContext.tradeQuery.tradeQueryRequests:buildUrl(queryContext.tradeQuery.hostName .. "trade/search", queryContext.realm, queryContext.league, queryId)
+				if url and url ~= "" then
+					reportRow.tradeUrl = url
+					OpenURL(url)
+				end
+			end,
+		}
+	)
+end
+
 function SkillsTabClass:SelectGemFromUpgradeReport(reportRow, popupsToClose)
 	if not reportRow then
 		return
@@ -731,6 +1423,221 @@ function SkillsTabClass:FindGemUpgradeQualityBreakpoint(gemInstance, reportRow, 
 	return nil
 end
 
+function SkillsTabClass:GetGemUpgradeReportTooltipHelper()
+	if not self.gemUpgradeReportTooltipHelper then
+		self.gemUpgradeReportTooltipHelper = new("GemSelectControl", nil, { 0, 0, 1, 1 }, self, 1, function() end, true)
+	end
+	return self.gemUpgradeReportTooltipHelper
+end
+
+function SkillsTabClass:AddGemUpgradeReportPreviewGemTooltip(tooltip, gemInstance)
+	if not (gemInstance and gemInstance.gemData) then
+		return false
+	end
+	local tooltipHelper = self:GetGemUpgradeReportTooltipHelper()
+	local prevTooltip = tooltipHelper.tooltip
+	local prevCenter = tooltip.center
+	local prevColor = tooltip.color
+	local prevHeader = tooltip.tooltipHeader
+	tooltipHelper.tooltip = tooltip
+	tooltipHelper:AddGemTooltip(gemInstance)
+	tooltipHelper.tooltip = prevTooltip
+	tooltip.center = prevCenter
+	tooltip.color = prevColor
+	tooltip.tooltipHeader = prevHeader
+	return true
+end
+
+local function getGemUpgradeReportDeltaText(delta)
+	if delta > 0 then
+		return " (" .. colorCodes.MAGIC .. "+" .. delta .. "^7)"
+	elseif delta < 0 then
+		return " (" .. colorCodes.WARNING .. delta .. "^7)"
+	end
+	return ""
+end
+
+function SkillsTabClass:RewriteGemUpgradeReportCandidateTooltip(tooltip, startLineIndex, currentGem, candidateGem)
+	if not (tooltip and currentGem and candidateGem) then
+		return
+	end
+
+	local currentLevel = currentGem.level or 0
+	local candidateLevel = candidateGem.level or currentLevel
+	local currentQuality = currentGem.quality or 0
+	local candidateQuality = candidateGem.quality or currentQuality
+	local levelDeltaText = getGemUpgradeReportDeltaText(candidateLevel - currentLevel)
+	local qualityDeltaText = getGemUpgradeReportDeltaText(candidateQuality - currentQuality)
+	local maxText = (candidateGem.gemData and candidateGem.gemData.naturalMaxLevel and candidateLevel >= candidateGem.gemData.naturalMaxLevel) and " (Max)" or ""
+
+	for lineIndex = startLineIndex, #tooltip.lines do
+		local line = tooltip.lines[lineIndex]
+		if line and line.text then
+			if line.text:match("^%^x7F7F7FLevel: ") then
+				line.text = string.format("^x7F7F7FLevel: ^7%d%s%s", candidateLevel, levelDeltaText, maxText)
+			elseif line.text:match("^%^x7F7F7FQuality: ") then
+				line.text = string.format("^x7F7F7FQuality: " .. colorCodes.MAGIC .. "+%d%%^7%s", candidateQuality, qualityDeltaText)
+			end
+		end
+	end
+end
+
+function SkillsTabClass:AddGemUpgradeReportCurrentGemTooltip(tooltip, reportRow)
+	local socketGroup = reportRow and reportRow.socketGroup
+	local gemInstance = socketGroup and socketGroup.gemList and socketGroup.gemList[reportRow.gemIndex]
+	return self:AddGemUpgradeReportPreviewGemTooltip(tooltip, gemInstance)
+end
+
+function SkillsTabClass:AddGemUpgradeReportCandidateGemTooltip(tooltip, reportRow)
+	local socketGroup = reportRow and reportRow.socketGroup
+	local gemInstance = socketGroup and socketGroup.gemList and socketGroup.gemList[reportRow.gemIndex]
+	if not (gemInstance and gemInstance.gemData) then
+		return false
+	end
+
+	local previewGem = copyTable(gemInstance, true)
+	previewGem.level = reportRow.targetLevel or previewGem.level
+	previewGem.quality = reportRow.targetQuality or previewGem.quality
+	previewGem.qualityId = reportRow.tradeQualityId or previewGem.qualityId or "Default"
+	previewGem.imbuedSupport = reportRow.targetImbuedSupport or previewGem.imbuedSupport
+	previewGem.displayEffect = nil
+	local startLineIndex = #tooltip.lines + 1
+	if not self:AddGemUpgradeReportPreviewGemTooltip(tooltip, previewGem) then
+		return false
+	end
+	self:RewriteGemUpgradeReportCandidateTooltip(tooltip, startLineIndex, gemInstance, previewGem)
+	if reportRow.targetImbuedSupport then
+		tooltip:AddSeparator(8)
+		self:AddGemUpgradeReportSupportTooltip(tooltip, reportRow.targetImbuedSupport)
+	end
+	return true
+end
+
+function SkillsTabClass:AddGemUpgradeReportSupportTooltip(tooltip, supportGrantedEffectId)
+	local grantedEffect = supportGrantedEffectId and data.skills[supportGrantedEffectId]
+	local gemId = grantedEffect and data.gemForSkill[grantedEffect]
+	local gemData = gemId and self.build.data.gems[gemId]
+	if not gemData then
+		return false
+	end
+
+	local previewGem = {
+		gemData = gemData,
+		gemId = gemId,
+		skillId = gemData.grantedEffectId,
+		nameSpec = gemData.name,
+		level = 1,
+		quality = 0,
+		qualityId = "Default",
+		enabled = true,
+		count = 1,
+	}
+	return self:AddGemUpgradeReportPreviewGemTooltip(tooltip, previewGem)
+end
+
+function SkillsTabClass:AddGemUpgradeReportMethodTooltip(tooltip, reportRow)
+	tooltip:Clear()
+	tooltip:AddLine(16, "^7Method: ^x33FF77" .. tostring(reportRow.upgradeLabel))
+	if reportRow.sourceType == "TRADE" then
+		tooltip:AddLine(14, "^7Buys a stronger version of the current gem.")
+	elseif reportRow.sourceType == "NATURAL" then
+		tooltip:AddLine(14, "^7Improves the current gem without corruption.")
+	elseif reportRow.sourceType == "CORRUPTION" then
+		tooltip:AddLine(14, "^7Targets a corruption outcome on the current gem.")
+	elseif reportRow.sourceType == "VENDOR" then
+		tooltip:AddLine(14, "^7Transforms the current gem with the vendor recipe.")
+	elseif reportRow.sourceType == "IMBUED" then
+		if reportRow.upgradeLabel == "Coin of Knowledge" then
+			tooltip:AddLine(14, "^7Adds a valid Intelligence support to the current gem.")
+		elseif reportRow.upgradeLabel == "Coin of Power" then
+			tooltip:AddLine(14, "^7Adds a valid Strength support to the current gem.")
+		elseif reportRow.upgradeLabel == "Coin of Skill" then
+			tooltip:AddLine(14, "^7Adds a valid Dexterity support to the current gem.")
+		else
+			tooltip:AddLine(14, "^7Adds an inherent level 1 support to the current gem.")
+		end
+	end
+end
+
+function SkillsTabClass:AddGemUpgradeReportImprovementTooltip(tooltip, reportRow)
+	tooltip:Clear()
+	local sortStatLabel = (self.gemUpgradeSortStat and self.gemUpgradeSortStat.label) or "selected stat"
+	tooltip:AddLine(16, "^7Relative gain for ^x33FF77" .. sortStatLabel)
+	if reportRow.hasImprovementPct then
+		tooltip:AddLine(14, string.format("^7Improvement: ^x33FF77%+.2f%%", reportRow.improvementPct))
+		tooltip:AddLine(14, "^7Absolute delta: " .. tostring(reportRow.deltaStr))
+	else
+		tooltip:AddLine(14, "^7No relative percentage is available for this stat.")
+	end
+end
+
+function SkillsTabClass:AddGemUpgradeReportDeltaTooltip(tooltip, reportRow)
+	tooltip:Clear()
+	if not reportRow or not reportRow.socketGroup then
+		return
+	end
+
+	local socketGroup = reportRow.socketGroup
+	local gemInstance = socketGroup.gemList and socketGroup.gemList[reportRow.gemIndex]
+	if not gemInstance then
+		tooltip:AddLine(14, "^1Unable to find gem for this report row.")
+		return
+	end
+
+	local calcFunc, calcBase = self.build.calcsTab:GetMiscCalculator()
+	if not calcFunc then
+		tooltip:AddLine(14, "^1Unable to calculate upgrade delta.")
+		return
+	end
+
+	local currentLevel = gemInstance.level
+	local currentQuality = gemInstance.quality
+	local currentImbuedSupport = gemInstance.imbuedSupport
+	gemInstance.level = reportRow.targetLevel or gemInstance.level
+	gemInstance.quality = reportRow.targetQuality or gemInstance.quality
+	gemInstance.imbuedSupport = reportRow.targetImbuedSupport or gemInstance.imbuedSupport
+
+	local errMsg, upgradedOutput = PCall(calcFunc, nil, reportRow.useFullDPS)
+
+	gemInstance.level = currentLevel
+	gemInstance.quality = currentQuality
+	gemInstance.imbuedSupport = currentImbuedSupport
+	self:ProcessSocketGroup(socketGroup)
+
+	if errMsg then
+		tooltip:AddLine(14, "^1Unable to calculate delta for this upgrade.")
+		return
+	end
+
+	local changeCount = self.build:AddStatComparesToTooltip(tooltip, calcBase, upgradedOutput, "^7Stat delta:")
+	if changeCount == 0 then
+		tooltip:AddLine(14, "^7No measurable stat change for current config.")
+	end
+end
+
+function SkillsTabClass:AddGemTradePriceTooltip(tooltip, reportRow)
+	tooltip:Clear()
+	tooltip:AddLine(16, "^7Trade price")
+	tooltip:AddLine(14, "^7League: ^x33FF77" .. tostring(self.gemTradeLeague or "Standard"))
+	if isResolvedGemTradePriceText(reportRow.priceText) then
+		tooltip:AddLine(14, "^7Lowest listed price: ^x33FF77" .. tostring(reportRow.priceText))
+	else
+		tooltip:AddLine(14, "^7Status: ^8" .. tostring(reportRow.priceText or "--"))
+	end
+end
+
+function SkillsTabClass:AddGemTradeValueTooltip(tooltip, reportRow)
+	tooltip:Clear()
+	tooltip:AddLine(16, "^7Stat Value / Price")
+	if reportRow.valueSort then
+		tooltip:AddLine(14, "^7Value: ^x33FF77" .. tostring(reportRow.valueText))
+	elseif reportRow.priceSort then
+		tooltip:AddLine(14, "^7Currency conversion rates are required to calculate value.")
+	else
+		tooltip:AddLine(14, "^7Fetch a trade price first to calculate value.")
+	end
+end
+
 function SkillsTabClass:AddGemUpgradeReportTooltip(tooltip, reportRow)
 	if not reportRow or not reportRow.socketGroup then
 		tooltip:Clear()
@@ -774,9 +1681,24 @@ function SkillsTabClass:AddGemUpgradeReportTooltip(tooltip, reportRow)
 	end
 
 	tooltip:AddLine(14, string.format("^7%s  |  ^7%s: %s -> %s", reportRow.name, reportRow.upgradeLabel, tostring(reportRow.level), tostring(reportRow.nextLevel)))
+	if reportRow.sourceType == "TRADE" then
+		tooltip:AddLine(14, "^7Buys a stronger version of the current gem.")
+		if isResolvedGemTradePriceText(reportRow.priceText) then
+			tooltip:AddLine(14, string.format("^7Lowest listed price: ^x33FF77%s", reportRow.priceText))
+		elseif reportRow.tradePriceError then
+			tooltip:AddLine(14, string.format("^7Price status: ^8%s", reportRow.tradePriceError))
+		end
+		if reportRow.valueSort then
+			tooltip:AddLine(14, string.format("^7Stat Value / Price: ^x33FF77%s", reportRow.valueText))
+		end
+	end
 	if reportRow.targetImbuedSupport and data.skills[reportRow.targetImbuedSupport] then
-		tooltip:AddLine(14, string.format("^7Consumes: ^x33FF77%s", reportRow.upgradeLabel))
-		tooltip:AddLine(14, string.format("^7Adds inherent support: ^x33FF77Level 1 %s", data.skills[reportRow.targetImbuedSupport].name))
+		if reportRow.sourceType == "TRADE" then
+			tooltip:AddLine(14, string.format("^7Inherent support: ^x33FF77Level 1 %s", data.skills[reportRow.targetImbuedSupport].name))
+		else
+			tooltip:AddLine(14, string.format("^7Consumes: ^x33FF77%s", reportRow.upgradeLabel))
+			tooltip:AddLine(14, string.format("^7Adds inherent support: ^x33FF77Level 1 %s", data.skills[reportRow.targetImbuedSupport].name))
+		end
 		tooltip:AddLine(14, "^7Limit: one imbued gem per equipped item.")
 	end
 	tooltip:AddSeparator(8)
@@ -834,7 +1756,27 @@ function SkillsTabClass:OpenGemUpgradePopup()
 		if doubleClick then
 			self:SelectGemFromUpgradeReport(reportRow, 1)
 		end
-	end, function(tooltip, reportRow)
+	end, function(tooltip, reportRow, colIndex)
+		if colIndex == 1 then
+			self:AddGemUpgradeReportMethodTooltip(tooltip, reportRow)
+			return
+		elseif colIndex == 2 then
+			tooltip:Clear()
+			if self:AddGemUpgradeReportCurrentGemTooltip(tooltip, reportRow) then
+				return
+			end
+		elseif colIndex == 3 then
+			tooltip:Clear()
+			if self:AddGemUpgradeReportCandidateGemTooltip(tooltip, reportRow) then
+				return
+			end
+		elseif colIndex == 4 then
+			self:AddGemUpgradeReportDeltaTooltip(tooltip, reportRow)
+			return
+		elseif colIndex == 5 then
+			self:AddGemUpgradeReportImprovementTooltip(tooltip, reportRow)
+			return
+		end
 		self:AddGemUpgradeReportTooltip(tooltip, reportRow)
 	end)
 	controls.close = new("ButtonControl", { "TOP", controls.reportList, "BOTTOM" }, { 0, 12, 90, 20 }, "Close", function()
@@ -867,6 +1809,155 @@ function SkillsTabClass:OpenGemUpgradePopup()
 	controls.sourceSelect:SelByValue(self.gemUpgradeSourceFilter, "value")
 	self.gemUpgradeSourceFilter = (controls.sourceSelect.list[controls.sourceSelect.selIndex] or controls.sourceSelect.list[1]).value
 	refreshReport(true)
+end
+
+function SkillsTabClass:OpenGemTradePopup()
+	local controls = { }
+	local refreshReport
+	local rawReportCacheByStat = { }
+	local rawReportCacheRevision = -1
+	local tradeQuery = self.build and self.build.itemsTab and self.build.itemsTab.tradeQuery
+	local leagueList = buildGemTradeLeagueList(tradeQuery)
+	self.gemTradePopupSession = (self.gemTradePopupSession or 0) + 1
+	self.gemTradePriceFetchBudget = 0
+	self.gemTradePricePendingPrime = false
+	controls.sortLabel = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 24, 0, 16 }, "^7Sort by:")
+	controls.sortSelect = new("DropDownControl", { "LEFT", controls.sortLabel, "RIGHT" }, { 8, 0, 220, 20 }, self.gemUpgradeSortStatList, function(index, selected)
+		self.gemUpgradeSortStat = selected or self.gemUpgradeSortStat
+		if refreshReport then
+			self.gemTradePricePendingPrime = false
+			refreshReport(true, false)
+		end
+	end)
+	controls.impactLabel = new("LabelControl", { "LEFT", controls.sortSelect, "RIGHT" }, { 20, 0, 0, 16 }, "^7Impact:")
+	controls.impactSelect = new("DropDownControl", { "LEFT", controls.impactLabel, "RIGHT" }, { 8, 0, 160, 20 }, gemUpgradeImpactFilterList, function(index, selected)
+		self.gemUpgradeImpactFilter = selected and selected.value or self.gemUpgradeImpactFilter
+		if refreshReport then
+			self.gemTradePricePendingPrime = false
+			refreshReport(false, false)
+		end
+	end)
+	controls.leagueLabel = new("LabelControl", { "LEFT", controls.impactSelect, "RIGHT" }, { 20, 0, 0, 16 }, "^7League:")
+	controls.leagueSelect = new("DropDownControl", { "LEFT", controls.leagueLabel, "RIGHT" }, { 8, 0, 200, 20 }, leagueList, function(index, selected)
+		self.gemTradeLeague = selected or self.gemTradeLeague
+		self.gemTradePricePendingPrime = false
+		if refreshReport then
+			refreshReport(false, false)
+		end
+	end)
+	controls.priceStatus = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 52, 0, 16 }, "^7Prices: click Fetch Prices to begin.")
+	controls.reportList = new("GemTradeReportListControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 84, 860, 392 }, function(reportRow, doubleClick)
+		if doubleClick then
+			self:SelectGemFromUpgradeReport(reportRow, 1)
+		end
+	end, function(tooltip, reportRow, colIndex)
+		if colIndex == 1 then
+			tooltip:Clear()
+			if self:AddGemUpgradeReportCurrentGemTooltip(tooltip, reportRow) then
+				return
+			end
+		elseif colIndex == 2 then
+			tooltip:Clear()
+			if self:AddGemUpgradeReportCandidateGemTooltip(tooltip, reportRow) then
+				return
+			end
+		elseif colIndex == 3 then
+			self:AddGemUpgradeReportDeltaTooltip(tooltip, reportRow)
+			return
+		elseif colIndex == 4 then
+			self:AddGemUpgradeReportImprovementTooltip(tooltip, reportRow)
+			return
+		elseif colIndex == 5 then
+			self:AddGemTradePriceTooltip(tooltip, reportRow)
+			return
+		elseif colIndex == 6 then
+			self:AddGemTradeValueTooltip(tooltip, reportRow)
+			return
+		end
+		self:AddGemUpgradeReportTooltip(tooltip, reportRow)
+	end)
+	controls.close = new("ButtonControl", { "TOP", controls.reportList, "BOTTOM" }, { 0, 12, 90, 20 }, "Close", function()
+		main:ClosePopup()
+	end)
+	controls.currencyRates = new("ButtonControl", { "RIGHT", controls.close, "LEFT" }, { -8, 0, 220, 20 }, "Get Currency Conversion Rates", function()
+		self:FetchGemTradeCurrencyConversion(controls, refreshReport)
+	end)
+	controls.fetchMore = new("ButtonControl", { "RIGHT", controls.currencyRates, "LEFT" }, { -8, 0, 110, 20 }, "Fetch Prices", function()
+		self.gemTradePriceFetchBudget = (self.gemTradePriceFetchBudget or 0) + 12
+		self.gemTradePricePendingPrime = true
+		refreshReport(false, true)
+	end)
+	controls.fetchMore.enabled = function()
+		return controls.fetchMore.hasQueued
+	end
+	controls.fetchMore.tooltipFunc = function(tooltip)
+		tooltip:Clear()
+		tooltip.center = true
+		tooltip:AddLine(16, "Fetches prices for the next batch of upgrades in the selected league")
+	end
+	controls.trade = new("ButtonControl", { "LEFT", controls.close, "RIGHT" }, { 8, 0, 90, 20 }, "Open Trade", function()
+		self:OpenSelectedGemTrade(controls, refreshReport)
+	end)
+	controls.trade.enabled = function()
+		local row = controls.reportList and controls.reportList.selValue
+		return row ~= nil
+	end
+	controls.trade.tooltipFunc = function(tooltip)
+		tooltip:Clear()
+		tooltip.center = true
+		tooltip:AddLine(16, "Opens the official trade site for the selected upgrade")
+	end
+	refreshReport = function(forceRebuild, primePrices)
+		local selectedStat = controls.sortSelect.list[controls.sortSelect.selIndex] or self.gemUpgradeSortStat or self.gemUpgradeSortStatList[1]
+		local selectedLeague = controls.leagueSelect and controls.leagueSelect.list[controls.leagueSelect.selIndex] or self.gemTradeLeague or resolveTradeLeague(tradeQuery)
+		self.gemUpgradeSortStat = selectedStat
+		self.gemTradeLeague = selectedLeague
+		if rawReportCacheRevision ~= self.build.outputRevision then
+			rawReportCacheRevision = self.build.outputRevision
+			rawReportCacheByStat = { }
+			forceRebuild = true
+		end
+		local statKey = selectedStat and selectedStat.stat or ""
+		if forceRebuild or not rawReportCacheByStat[statKey] then
+			rawReportCacheByStat[statKey] = gemTradeReport.Build(self, selectedStat)
+		end
+		local filteredReport = gemTradeReport.Filter(rawReportCacheByStat[statKey], {
+			impact = self.gemUpgradeImpactFilter,
+		})
+		local imbuedSupportStatIds = self.gemTradeImbuedSupportStats and self.gemTradeImbuedSupportStats.byGrantedEffectId
+		if imbuedSupportStatIds then
+			local supportedReport = { }
+			for _, reportRow in ipairs(filteredReport) do
+				if not reportRow.targetImbuedSupport or imbuedSupportStatIds[reportRow.targetImbuedSupport] then
+					t_insert(supportedReport, reportRow)
+				end
+			end
+			filteredReport = supportedReport
+		end
+		for _, reportRow in ipairs(filteredReport) do
+			reportRow.tradeLeague = selectedLeague
+		end
+		self:PrepareGemTradePriceQueue(filteredReport, selectedLeague)
+		self:ApplyGemTradePriceCache(filteredReport, selectedLeague)
+		controls.reportList:SetReport(selectedStat, filteredReport)
+		local displayReport = controls.reportList.list or filteredReport
+		self:UpdateGemTradePriceStatus(controls, displayReport)
+		self:UpdateGemTradeCurrencyConversionButton(controls)
+		if primePrices then
+			self:PrimeGemTradePrices(displayReport, controls, refreshReport, selectedLeague)
+		end
+	end
+
+	main:OpenPopup(900, 520, "Gem Trade Report", controls, nil, nil, "close")
+	controls.sortSelect:SelByValue((self.gemUpgradeSortStat and self.gemUpgradeSortStat.stat) or self.sortGemsByDPSField or "CombinedDPS", "stat")
+	self.gemUpgradeSortStat = controls.sortSelect.list[controls.sortSelect.selIndex] or self.gemUpgradeSortStatList[1]
+	controls.impactSelect:SelByValue(self.gemUpgradeImpactFilter, "value")
+	self.gemUpgradeImpactFilter = (controls.impactSelect.list[controls.impactSelect.selIndex] or controls.impactSelect.list[1]).value
+	controls.leagueSelect:SelByValue(self.gemTradeLeague or resolveTradeLeague(tradeQuery), nil)
+	self.gemTradeLeague = controls.leagueSelect.list[controls.leagueSelect.selIndex] or self.gemTradeLeague or resolveTradeLeague(tradeQuery)
+	self:EnsureGemTradeLeagueList(controls, refreshReport)
+	self:UpdateGemTradeCurrencyConversionButton(controls)
+	refreshReport(true, false)
 end
 
 function SkillsTabClass:CopySocketGroup(socketGroup)
