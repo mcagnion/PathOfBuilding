@@ -15,6 +15,7 @@ local m_min = math.min
 local m_max = math.max
 local gemUpgradeReport = LoadModule("Modules/GemUpgradeReport")
 local gemTradeReport = LoadModule("Modules/GemTradeReport")
+local supportReplacementReport = LoadModule("Modules/SupportReplacementReport")
 
 local groupSlotDropList = {
 	{ label = "None" },
@@ -151,6 +152,9 @@ local SkillsTabClass = newClass("SkillsTab", "UndoHandler", "ControlHost", "Cont
 	end)
 	self.controls.gemTradeReport = new("ButtonControl", { "LEFT", self.controls.gemUpgradeReport, "RIGHT" }, { 8, 0, 150, 20 }, "Gem Trade Report", function()
 		self:OpenGemTradePopup()
+	end)
+	self.controls.supportReplacementReport = new("ButtonControl", { "LEFT", self.controls.gemTradeReport, "RIGHT" }, { 8, 0, 175, 20 }, "Support Replacement", function()
+		self:OpenSupportReplacementPopup()
 	end)
 
 	-- Socket group list
@@ -1448,6 +1452,25 @@ function SkillsTabClass:AddGemUpgradeReportPreviewGemTooltip(tooltip, gemInstanc
 	return true
 end
 
+function SkillsTabClass:AddGemUpgradeReportPreviewGemDataTooltip(tooltip, gemData, level, quality, qualityId, imbuedSupport)
+	if not gemData then
+		return false
+	end
+	local previewGem = {
+		gemData = gemData,
+		gemId = gemData.id,
+		skillId = gemData.grantedEffectId,
+		nameSpec = gemData.name,
+		level = level or gemData.naturalMaxLevel or 1,
+		quality = quality or 0,
+		qualityId = qualityId or "Default",
+		imbuedSupport = imbuedSupport,
+		enabled = true,
+		count = 1,
+	}
+	return self:AddGemUpgradeReportPreviewGemTooltip(tooltip, previewGem)
+end
+
 local function getGemUpgradeReportDeltaText(delta)
 	if delta > 0 then
 		return " (" .. colorCodes.MAGIC .. "+" .. delta .. "^7)"
@@ -1520,19 +1543,7 @@ function SkillsTabClass:AddGemUpgradeReportSupportTooltip(tooltip, supportGrante
 	if not gemData then
 		return false
 	end
-
-	local previewGem = {
-		gemData = gemData,
-		gemId = gemId,
-		skillId = gemData.grantedEffectId,
-		nameSpec = gemData.name,
-		level = 1,
-		quality = 0,
-		qualityId = "Default",
-		enabled = true,
-		count = 1,
-	}
-	return self:AddGemUpgradeReportPreviewGemTooltip(tooltip, previewGem)
+	return self:AddGemUpgradeReportPreviewGemDataTooltip(tooltip, gemData, 1, 0, "Default")
 end
 
 function SkillsTabClass:AddGemUpgradeReportMethodTooltip(tooltip, reportRow)
@@ -1635,6 +1646,95 @@ function SkillsTabClass:AddGemTradeValueTooltip(tooltip, reportRow)
 		tooltip:AddLine(14, "^7Currency conversion rates are required to calculate value.")
 	else
 		tooltip:AddLine(14, "^7Fetch a trade price first to calculate value.")
+	end
+end
+
+function SkillsTabClass:AddSupportReplacementSkillTooltip(tooltip, reportRow)
+	tooltip:Clear()
+	tooltip:AddLine(16, "^7Skill: ^x33FF77" .. tostring(reportRow.skillName))
+	if reportRow.groupLabel and reportRow.groupLabel ~= "" then
+		tooltip:AddLine(14, "^7Socket Group: ^x33FF77" .. tostring(reportRow.groupLabel))
+	end
+	tooltip:AddLine(14, "^7The report compares the current support against other valid supports for this skill.")
+end
+
+function SkillsTabClass:AddSupportReplacementCurrentTooltip(tooltip, reportRow)
+	local socketGroup = reportRow and reportRow.socketGroup
+	local gemInstance = socketGroup and socketGroup.gemList and socketGroup.gemList[reportRow.gemIndex]
+	tooltip:Clear()
+	return self:AddGemUpgradeReportPreviewGemTooltip(tooltip, gemInstance)
+end
+
+function SkillsTabClass:AddSupportReplacementCandidateTooltip(tooltip, reportRow)
+	tooltip:Clear()
+	local gemData = reportRow and reportRow.candidateGemId and self.build.data.gems[reportRow.candidateGemId]
+	return self:AddGemUpgradeReportPreviewGemDataTooltip(tooltip, gemData, reportRow.candidateLevel, reportRow.candidateQuality, reportRow.candidateQualityId)
+end
+
+function SkillsTabClass:AddSupportReplacementDeltaTooltip(tooltip, reportRow)
+	tooltip:Clear()
+	if not reportRow or not reportRow.socketGroup then
+		return
+	end
+	local socketGroup = reportRow.socketGroup
+	local gemInstance = socketGroup.gemList and socketGroup.gemList[reportRow.gemIndex]
+	local candidateGemData = reportRow.candidateGemId and self.build.data.gems[reportRow.candidateGemId]
+	if not (gemInstance and candidateGemData) then
+		tooltip:AddLine(14, "^1Unable to find support data for this report row.")
+		return
+	end
+
+	local calcFunc, calcBase = self.build.calcsTab:GetMiscCalculator()
+	if not calcFunc then
+		tooltip:AddLine(14, "^1Unable to calculate support replacement delta.")
+		return
+	end
+
+	local currentGemId = gemInstance.gemId
+	local currentNameSpec = gemInstance.nameSpec
+	local currentSkillId = gemInstance.skillId
+	local currentGemData = gemInstance.gemData
+	local currentGrantedEffect = gemInstance.grantedEffect
+	local currentLevel = gemInstance.level
+	local currentQuality = gemInstance.quality
+	local currentQualityId = gemInstance.qualityId
+	local currentImbuedSupport = gemInstance.imbuedSupport
+	local currentCorrupted = gemInstance.corrupted
+
+	gemInstance.gemId = candidateGemData.id
+	gemInstance.nameSpec = candidateGemData.name
+	gemInstance.skillId = candidateGemData.grantedEffectId
+	gemInstance.gemData = candidateGemData
+	gemInstance.grantedEffect = candidateGemData.grantedEffect
+	gemInstance.level = reportRow.candidateLevel
+	gemInstance.quality = reportRow.candidateQuality
+	gemInstance.qualityId = reportRow.candidateQualityId or "Default"
+	gemInstance.imbuedSupport = nil
+	gemInstance.corrupted = (reportRow.candidateLevel or 0) > (candidateGemData.naturalMaxLevel or 0) or (reportRow.candidateQuality or 0) > 20
+	self:ProcessSocketGroup(socketGroup)
+
+	local errMsg, upgradedOutput = PCall(calcFunc, nil, reportRow.useFullDPS)
+
+	gemInstance.gemId = currentGemId
+	gemInstance.nameSpec = currentNameSpec
+	gemInstance.skillId = currentSkillId
+	gemInstance.gemData = currentGemData
+	gemInstance.grantedEffect = currentGrantedEffect
+	gemInstance.level = currentLevel
+	gemInstance.quality = currentQuality
+	gemInstance.qualityId = currentQualityId
+	gemInstance.imbuedSupport = currentImbuedSupport
+	gemInstance.corrupted = currentCorrupted
+	self:ProcessSocketGroup(socketGroup)
+
+	if errMsg then
+		tooltip:AddLine(14, "^1Unable to calculate support replacement delta.")
+		return
+	end
+
+	local changeCount = self.build:AddStatComparesToTooltip(tooltip, calcBase, upgradedOutput, "^7Stat delta:")
+	if changeCount == 0 then
+		tooltip:AddLine(14, "^7No measurable stat change for current config.")
 	end
 end
 
@@ -1958,6 +2058,80 @@ function SkillsTabClass:OpenGemTradePopup()
 	self:EnsureGemTradeLeagueList(controls, refreshReport)
 	self:UpdateGemTradeCurrencyConversionButton(controls)
 	refreshReport(true, false)
+end
+
+function SkillsTabClass:OpenSupportReplacementPopup()
+	local controls = { }
+	local refreshReport
+	local rawReportCacheByStat = { }
+	local rawReportCacheRevision = -1
+
+	controls.sortLabel = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 24, 0, 16 }, "^7Sort by:")
+	controls.sortSelect = new("DropDownControl", { "LEFT", controls.sortLabel, "RIGHT" }, { 8, 0, 220, 20 }, self.gemUpgradeSortStatList, function(index, selected)
+		self.gemUpgradeSortStat = selected or self.gemUpgradeSortStat
+		if refreshReport then
+			refreshReport(true)
+		end
+	end)
+	controls.impactLabel = new("LabelControl", { "LEFT", controls.sortSelect, "RIGHT" }, { 20, 0, 0, 16 }, "^7Impact:")
+	controls.impactSelect = new("DropDownControl", { "LEFT", controls.impactLabel, "RIGHT" }, { 8, 0, 160, 20 }, gemUpgradeImpactFilterList, function(index, selected)
+		self.gemUpgradeImpactFilter = selected and selected.value or self.gemUpgradeImpactFilter
+		if refreshReport then
+			refreshReport(false)
+		end
+	end)
+	controls.reportList = new("SupportReplacementReportListControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 60, 860, 416 }, function(reportRow, doubleClick)
+		if doubleClick then
+			self:SelectGemFromUpgradeReport(reportRow, 1)
+		end
+	end, function(tooltip, reportRow, colIndex)
+		if colIndex == 1 then
+			self:AddSupportReplacementSkillTooltip(tooltip, reportRow)
+			return
+		elseif colIndex == 2 then
+			if self:AddSupportReplacementCurrentTooltip(tooltip, reportRow) then
+				return
+			end
+		elseif colIndex == 3 then
+			if self:AddSupportReplacementCandidateTooltip(tooltip, reportRow) then
+				return
+			end
+		elseif colIndex == 4 then
+			self:AddSupportReplacementDeltaTooltip(tooltip, reportRow)
+			return
+		elseif colIndex == 5 then
+			self:AddGemUpgradeReportImprovementTooltip(tooltip, reportRow)
+			return
+		end
+	end)
+	controls.close = new("ButtonControl", { "TOP", controls.reportList, "BOTTOM" }, { 0, 12, 90, 20 }, "Close", function()
+		main:ClosePopup()
+	end)
+
+	refreshReport = function(forceRebuild)
+		local selectedStat = controls.sortSelect.list[controls.sortSelect.selIndex] or self.gemUpgradeSortStat or self.gemUpgradeSortStatList[1]
+		self.gemUpgradeSortStat = selectedStat
+		if rawReportCacheRevision ~= self.build.outputRevision then
+			rawReportCacheRevision = self.build.outputRevision
+			rawReportCacheByStat = { }
+			forceRebuild = true
+		end
+		local statKey = selectedStat and selectedStat.stat or ""
+		if forceRebuild or not rawReportCacheByStat[statKey] then
+			rawReportCacheByStat[statKey] = supportReplacementReport.Build(self, selectedStat)
+		end
+		local filteredReport = supportReplacementReport.Filter(rawReportCacheByStat[statKey], {
+			impact = self.gemUpgradeImpactFilter,
+		})
+		controls.reportList:SetReport(selectedStat, filteredReport)
+	end
+
+	main:OpenPopup(900, 520, "Support Replacement Report", controls, nil, nil, "close")
+	controls.sortSelect:SelByValue((self.gemUpgradeSortStat and self.gemUpgradeSortStat.stat) or self.sortGemsByDPSField or "CombinedDPS", "stat")
+	self.gemUpgradeSortStat = controls.sortSelect.list[controls.sortSelect.selIndex] or self.gemUpgradeSortStatList[1]
+	controls.impactSelect:SelByValue(self.gemUpgradeImpactFilter, "value")
+	self.gemUpgradeImpactFilter = (controls.impactSelect.list[controls.impactSelect.selIndex] or controls.impactSelect.list[1]).value
+	refreshReport(true)
 end
 
 function SkillsTabClass:CopySocketGroup(socketGroup)
