@@ -100,6 +100,18 @@ local eldritchModSlots = {
 }
 
 local MAX_FILTERS = 35
+local MAX_AUTO_BASE_SEARCHES = 4
+local AUTO_BASE_OPTION_LABEL = "Auto (Top Bases)"
+local AUTO_BASE_OPTION_ANY_KEY = "any"
+local autoBaseDefenceProfiles = {
+	{ key = AUTO_BASE_OPTION_ANY_KEY, label = "Auto: Any Defence" },
+	{ key = "armour", label = "Auto: STR (Armour)" },
+	{ key = "evasion", label = "Auto: DEX (Evasion)" },
+	{ key = "energy_shield", label = "Auto: INT (Energy Shield)" },
+	{ key = "armour/evasion", label = "Auto: STR/DEX (Armour/Evasion)" },
+	{ key = "armour/energy_shield", label = "Auto: STR/INT (Armour/ES)" },
+	{ key = "evasion/energy_shield", label = "Auto: DEX/INT (Evasion/ES)" },
+}
 local BASE_DEFENCE_PERCENTILE_TRADE_MOD_ID = "pseudo.pseudo_base_defence_percentile"
 local baseDefencePercentileStats = {
 	{ percentileKey = "ArmourBasePercentile", minKey = "ArmourBaseMin", maxKey = "ArmourBaseMax" },
@@ -171,6 +183,70 @@ local function buildBaseDefencePercentileItem(baseName, options, fields, percent
 	return item
 end
 
+local function getBaseDefenceProfile(baseData)
+	if not baseData or not baseData.armour then
+		return nil
+	end
+
+	local parts = { }
+	if baseData.armour.ArmourBaseMin ~= nil or baseData.armour.ArmourBaseMax ~= nil then
+		t_insert(parts, "armour")
+	end
+	if baseData.armour.EvasionBaseMin ~= nil or baseData.armour.EvasionBaseMax ~= nil then
+		t_insert(parts, "evasion")
+	end
+	if baseData.armour.EnergyShieldBaseMin ~= nil or baseData.armour.EnergyShieldBaseMax ~= nil then
+		t_insert(parts, "energy_shield")
+	end
+
+	return #parts > 0 and t_concat(parts, "/") or nil
+end
+
+local function formatBaseDefenceRange(minValue, maxValue, shortLabel)
+	if minValue == nil and maxValue == nil then
+		return nil
+	end
+	return minValue == maxValue and (shortLabel .. " " .. tostring(minValue or maxValue)) or (shortLabel .. " " .. tostring(minValue or 0) .. "-" .. tostring(maxValue or minValue or 0))
+end
+
+local function formatBaseDefenceMaxValue(maxValue, color)
+	if maxValue == nil then
+		return nil
+	end
+	return color .. tostring(maxValue)
+end
+
+local function formatNamedBaseDefenceMaxValue(name, maxValue)
+	if maxValue == nil then
+		return nil
+	end
+	return name .. ": " .. tostring(maxValue)
+end
+
+local function getBaseDefenceRangeParts(baseData)
+	if not baseData or not baseData.armour then
+		return nil
+	end
+
+	local rangeParts = { }
+	local armour = baseData.armour
+	for _, rangeText in pairs({
+		formatBaseDefenceRange(armour.ArmourBaseMin, armour.ArmourBaseMax, "AR"),
+		formatBaseDefenceRange(armour.EvasionBaseMin, armour.EvasionBaseMax, "EV"),
+		formatBaseDefenceRange(armour.EnergyShieldBaseMin, armour.EnergyShieldBaseMax, "ES"),
+		formatBaseDefenceRange(armour.WardBaseMin, armour.WardBaseMax, "Ward"),
+	}) do
+		if rangeText ~= nil then
+			t_insert(rangeParts, rangeText)
+		end
+	end
+	table.sort(rangeParts, function(a, b)
+		local order = { AR = 1, EV = 2, ES = 3, Ward = 4 }
+		return (order[a:match("^(%S+)")] or 99) < (order[b:match("^(%S+)")] or 99)
+	end)
+	return #rangeParts > 0 and rangeParts or nil
+end
+
 local TradeQueryGeneratorClass = newClass("TradeQueryGenerator", function(self, queryTab)
 	self:InitMods()
 	self.queryTab = queryTab
@@ -181,7 +257,7 @@ local TradeQueryGeneratorClass = newClass("TradeQueryGenerator", function(self, 
 	self.lastMaxLevel = nil
 end)
 
-function TradeQueryGeneratorClass:GetSelectableBaseNames(slot, existingItem)
+function TradeQueryGeneratorClass:GetSelectableBaseNames(slot, existingItem, defenceProfile)
 	local baseType = getSlotBaseType(slot, existingItem)
 	if not baseType then
 		return nil
@@ -189,12 +265,238 @@ function TradeQueryGeneratorClass:GetSelectableBaseNames(slot, existingItem)
 
 	local baseNames = { }
 	for baseName, baseData in pairs(self.itemsTab.build.data.itemBases) do
-		if baseData.type == baseType and baseData.armour then
+		if baseData.type == baseType and baseData.armour and (not defenceProfile or getBaseDefenceProfile(baseData) == defenceProfile) then
 			t_insert(baseNames, baseName)
 		end
 	end
 	table.sort(baseNames)
 	return #baseNames > 0 and baseNames or nil
+end
+
+function TradeQueryGeneratorClass:GetAutoBaseOptionEntries(slot, existingItem)
+	local selectableBaseNames = self:GetSelectableBaseNames(slot, existingItem)
+	if not selectableBaseNames then
+		return nil
+	end
+
+	local availableProfiles = { }
+	for _, baseName in ipairs(selectableBaseNames) do
+		local defenceProfile = getBaseDefenceProfile(self.itemsTab.build.data.itemBases[baseName])
+		if defenceProfile then
+			availableProfiles[defenceProfile] = true
+		end
+	end
+
+	local entries = { }
+	for _, profile in ipairs(autoBaseDefenceProfiles) do
+		if profile.key == AUTO_BASE_OPTION_ANY_KEY or availableProfiles[profile.key] then
+			t_insert(entries, profile)
+		end
+	end
+	return #entries > 0 and entries or nil
+end
+
+function TradeQueryGeneratorClass:GetBaseDefenceRangeText(baseName, separator)
+	local baseData = self.itemsTab.build.data.itemBases[baseName]
+	local rangeParts = getBaseDefenceRangeParts(baseData)
+	return rangeParts and t_concat(rangeParts, separator or " / ") or nil
+end
+
+function TradeQueryGeneratorClass:GetBaseDefenceListDetailText(baseName)
+	local baseData = self.itemsTab.build.data.itemBases[baseName]
+	local armour = baseData and baseData.armour
+	if not armour then
+		return nil
+	end
+
+	local detailParts = { }
+	for _, valueText in pairs({
+		formatBaseDefenceMaxValue(armour.ArmourBaseMax or armour.ArmourBaseMin, "^xC79A2B"),
+		formatBaseDefenceMaxValue(armour.EvasionBaseMax or armour.EvasionBaseMin, "^x5FBF5F"),
+		formatBaseDefenceMaxValue(armour.EnergyShieldBaseMax or armour.EnergyShieldBaseMin, "^x6FD3FF"),
+		formatBaseDefenceMaxValue(armour.WardBaseMax or armour.WardBaseMin, "^xC9B6FF"),
+	}) do
+		if valueText then
+			t_insert(detailParts, valueText)
+		end
+	end
+	table.sort(detailParts, function(a, b)
+		local order = {
+			["^xC79A2B"] = 1,
+			["^x5FBF5F"] = 2,
+			["^x6FD3FF"] = 3,
+			["^xC9B6FF"] = 4,
+		}
+		return (order[a:match("^(%^x......)")] or 99) < (order[b:match("^(%^x......)")] or 99)
+	end)
+	return #detailParts > 0 and t_concat(detailParts, " ") or nil
+end
+
+function TradeQueryGeneratorClass:GetBaseDefenceProfileLabel(baseName)
+	local baseData = self.itemsTab.build.data.itemBases[baseName]
+	local defenceProfile = getBaseDefenceProfile(baseData)
+	for _, profile in ipairs(autoBaseDefenceProfiles) do
+		if profile.key == defenceProfile then
+			return profile.label:gsub("^Auto: ", "")
+		end
+	end
+	return nil
+end
+
+function TradeQueryGeneratorClass:GetBaseDefenceProfileText(baseName)
+	local baseData = self.itemsTab.build.data.itemBases[baseName]
+	local armour = baseData and baseData.armour
+	if not armour then
+		return nil
+	end
+
+	local profileParts = { }
+	if armour.ArmourBaseMin ~= nil or armour.ArmourBaseMax ~= nil then
+		t_insert(profileParts, "Armour")
+	end
+	if armour.EvasionBaseMin ~= nil or armour.EvasionBaseMax ~= nil then
+		t_insert(profileParts, "Evasion")
+	end
+	if armour.EnergyShieldBaseMin ~= nil or armour.EnergyShieldBaseMax ~= nil then
+		t_insert(profileParts, "Energy Shield")
+	end
+	if armour.WardBaseMin ~= nil or armour.WardBaseMax ~= nil then
+		t_insert(profileParts, "Ward")
+	end
+
+	return #profileParts > 0 and t_concat(profileParts, " / ") or nil
+end
+
+function TradeQueryGeneratorClass:GetBaseDefenceMaxText(baseName)
+	local baseData = self.itemsTab.build.data.itemBases[baseName]
+	local armour = baseData and baseData.armour
+	if not armour then
+		return nil
+	end
+
+	local detailParts = { }
+	for _, valueText in pairs({
+		formatNamedBaseDefenceMaxValue("Armour", armour.ArmourBaseMax or armour.ArmourBaseMin),
+		formatNamedBaseDefenceMaxValue("Evasion", armour.EvasionBaseMax or armour.EvasionBaseMin),
+		formatNamedBaseDefenceMaxValue("Energy Shield", armour.EnergyShieldBaseMax or armour.EnergyShieldBaseMin),
+		formatNamedBaseDefenceMaxValue("Ward", armour.WardBaseMax or armour.WardBaseMin),
+	}) do
+		if valueText then
+			t_insert(detailParts, valueText)
+		end
+	end
+	table.sort(detailParts, function(a, b)
+		local order = {
+			["Armour"] = 1,
+			["Evasion"] = 2,
+			["Energy Shield"] = 3,
+			["Ward"] = 4,
+		}
+		return (order[a:match("^(.-):")] or 99) < (order[b:match("^(.-):")] or 99)
+	end)
+	return #detailParts > 0 and t_concat(detailParts, " / ") or nil
+end
+
+function TradeQueryGeneratorClass:GetBaseRequirementLines(baseName)
+	local baseData = self.itemsTab.build.data.itemBases[baseName]
+	local req = baseData and baseData.req
+	if not req then
+		return nil
+	end
+
+	local requirementLines = { }
+	if req.level then
+		t_insert(requirementLines, "^x7F7F7FRequired Level: ^xD8C07A" .. tostring(req.level))
+	end
+	if req.str and req.str > 0 then
+		t_insert(requirementLines, "^x7F7F7FRequired Strength: " .. colorCodes.STRENGTH .. tostring(req.str))
+	end
+	if req.dex and req.dex > 0 then
+		t_insert(requirementLines, "^x7F7F7FRequired Dexterity: " .. colorCodes.DEXTERITY .. tostring(req.dex))
+	end
+	if req.int and req.int > 0 then
+		t_insert(requirementLines, "^x7F7F7FRequired Intelligence: " .. colorCodes.INTELLIGENCE .. tostring(req.int))
+	end
+	return #requirementLines > 0 and requirementLines or nil
+end
+
+function TradeQueryGeneratorClass:GetBaseRequirementCompactParts(baseName)
+	local baseData = self.itemsTab.build.data.itemBases[baseName]
+	local req = baseData and baseData.req
+	if not req then
+		return nil
+	end
+
+	local requirementParts = { }
+	local build = self.itemsTab and self.itemsTab.build
+	local output = build and build.calcsTab and build.calcsTab.mainOutput or { }
+	if req.level then
+		local levelColor = build and main:StatColor(req.level, nil, build.characterLevel) or "^xD8C07A"
+		t_insert(requirementParts, "^x7F7F7FLevel " .. levelColor .. tostring(req.level))
+	end
+	if req.str and req.str > 0 then
+		local strColor = build and main:StatColor(req.str, 0, output.Str) or colorCodes.STRENGTH
+		t_insert(requirementParts, strColor .. tostring(req.str) .. " ^x7F7F7FStr")
+	end
+	if req.dex and req.dex > 0 then
+		local dexColor = build and main:StatColor(req.dex, 0, output.Dex) or colorCodes.DEXTERITY
+		t_insert(requirementParts, dexColor .. tostring(req.dex) .. " ^x7F7F7FDex")
+	end
+	if req.int and req.int > 0 then
+		local intColor = build and main:StatColor(req.int, 0, output.Int) or colorCodes.INTELLIGENCE
+		t_insert(requirementParts, intColor .. tostring(req.int) .. " ^x7F7F7FInt")
+	end
+	return #requirementParts > 0 and requirementParts or nil
+end
+
+function TradeQueryGeneratorClass:GetBaseDefenceRangeLines(baseName)
+	local baseData = self.itemsTab.build.data.itemBases[baseName]
+	local armour = baseData and baseData.armour
+	if not armour then
+		return nil
+	end
+
+	local rangeLines = { }
+	local ranges = {
+		{ label = "Armour", min = armour.ArmourBaseMin, max = armour.ArmourBaseMax, color = "^xC79A2B" },
+		{ label = "Evasion", min = armour.EvasionBaseMin, max = armour.EvasionBaseMax, color = "^x5FBF5F" },
+		{ label = "Energy Shield", min = armour.EnergyShieldBaseMin, max = armour.EnergyShieldBaseMax, color = "^x6FD3FF" },
+		{ label = "Ward", min = armour.WardBaseMin, max = armour.WardBaseMax, color = "^xC9B6FF" },
+	}
+	for _, rangeData in ipairs(ranges) do
+		if rangeData.min ~= nil or rangeData.max ~= nil then
+			local rangeText = rangeData.min == rangeData.max
+				and tostring(rangeData.min or rangeData.max)
+				or tostring(rangeData.min or 0) .. "-" .. tostring(rangeData.max or rangeData.min or 0)
+			t_insert(rangeLines, "^x7F7F7F" .. rangeData.label .. ": " .. rangeData.color .. rangeText)
+		end
+	end
+	return #rangeLines > 0 and rangeLines or nil
+end
+
+function TradeQueryGeneratorClass:GetBaseDefenceRangeCompactParts(baseName)
+	local baseData = self.itemsTab.build.data.itemBases[baseName]
+	local armour = baseData and baseData.armour
+	if not armour then
+		return nil
+	end
+
+	local rangeParts = { }
+	local ranges = {
+		{ label = "Armour", min = armour.ArmourBaseMin, max = armour.ArmourBaseMax, color = "^xC79A2B" },
+		{ label = "Evasion", min = armour.EvasionBaseMin, max = armour.EvasionBaseMax, color = "^x5FBF5F" },
+		{ label = "Energy Shield", min = armour.EnergyShieldBaseMin, max = armour.EnergyShieldBaseMax, color = "^x6FD3FF" },
+		{ label = "Ward", min = armour.WardBaseMin, max = armour.WardBaseMax, color = "^xC9B6FF" },
+	}
+	for _, rangeData in ipairs(ranges) do
+		if rangeData.min ~= nil or rangeData.max ~= nil then
+			local rangeText = rangeData.min == rangeData.max
+				and tostring(rangeData.min or rangeData.max)
+				or tostring(rangeData.min or 0) .. "-" .. tostring(rangeData.max or rangeData.min or 0)
+			t_insert(rangeParts, "^x7F7F7F" .. rangeData.label .. " " .. rangeData.color .. rangeText)
+		end
+	end
+	return #rangeParts > 0 and rangeParts or nil
 end
 
 function TradeQueryGeneratorClass.GetBaseDefencePercentileAverage(item)
@@ -210,6 +512,142 @@ function TradeQueryGeneratorClass.GetBaseDefencePercentileAverage(item)
 	end
 
 	return totalPercentile / #fields
+end
+
+function TradeQueryGeneratorClass:GetAutoBaseSearchNames(slot, existingItem, options, limit)
+	local defenceProfile = options and options.autoBaseDefenceProfile
+	local selectableBaseNames = self:GetSelectableBaseNames(slot, existingItem, defenceProfile ~= AUTO_BASE_OPTION_ANY_KEY and defenceProfile or nil)
+	if not selectableBaseNames or #selectableBaseNames <= 1 then
+		return nil
+	end
+
+	local calcFunc, baseOutput = self.itemsTab.build.calcsTab:GetMiscCalculator()
+	local rankedBases = { }
+	for _, baseName in ipairs(selectableBaseNames) do
+		local testItem = new("Item", "Rarity: RARE\nStat Tester\n" .. baseName)
+		applyRequestedInfluences(testItem, options)
+		local output = slot and calcFunc({ repSlotName = slot.slotName, repItem = testItem }) or baseOutput
+		t_insert(rankedBases, {
+			baseName = baseName,
+			score = TradeQueryGeneratorClass.WeightedRatioOutputs(baseOutput, output, options.statWeights) * 1000,
+			isCurrent = existingItem and existingItem.baseName == baseName or false,
+		})
+	end
+
+	table.sort(rankedBases, function(a, b)
+		if a.score == b.score then
+			if a.isCurrent ~= b.isCurrent then
+				return a.isCurrent
+			end
+			return a.baseName < b.baseName
+		end
+		return a.score > b.score
+	end)
+
+	local maxBases = math.max(1, math.min(limit or MAX_AUTO_BASE_SEARCHES, #rankedBases))
+	local selectedBaseNames = { }
+	local selectedLookup = { }
+	for i = 1, maxBases do
+		local baseName = rankedBases[i].baseName
+		selectedBaseNames[i] = baseName
+		selectedLookup[baseName] = true
+	end
+
+	local canKeepCurrentBase = not defenceProfile or defenceProfile == AUTO_BASE_OPTION_ANY_KEY
+	if not canKeepCurrentBase and existingItem and existingItem.baseName then
+		local currentBase = self.itemsTab.build.data.itemBases[existingItem.baseName]
+		canKeepCurrentBase = currentBase and getBaseDefenceProfile(currentBase) == defenceProfile or false
+	end
+	if canKeepCurrentBase and existingItem and existingItem.baseName and not selectedLookup[existingItem.baseName] then
+		selectedBaseNames[#selectedBaseNames] = existingItem.baseName
+	end
+
+	return selectedBaseNames
+end
+
+function TradeQueryGeneratorClass:GetAutoBaseTooltipText(slot, existingItem, statWeights, influence1, influence2, autoBaseDefenceProfile)
+	local selectedProfile = autoBaseDefenceProfile or self.lastAutoBaseDefenceProfile or AUTO_BASE_OPTION_ANY_KEY
+	local autoBaseLabel = AUTO_BASE_OPTION_LABEL
+	for _, profile in ipairs(autoBaseDefenceProfiles) do
+		if profile.key == selectedProfile then
+			autoBaseLabel = profile.label
+			break
+		end
+	end
+
+	local tooltipLines = {
+		autoBaseLabel .. ": compatible bases for this slot are ranked with PoB using the selected stat weights.",
+		"The preview uses a blank rare on each base with the current influence filters, then keeps the top " .. tostring(MAX_AUTO_BASE_SEARCHES) .. " bases.",
+	}
+	local autoBaseNames = self:GetAutoBaseSearchNames(slot, existingItem, {
+		statWeights = statWeights,
+		influence1 = influence1 or 1,
+		influence2 = influence2 or 1,
+		autoBaseDefenceProfile = selectedProfile,
+	})
+	if autoBaseNames and #autoBaseNames > 0 then
+		t_insert(tooltipLines, "If the equipped base falls outside the top " .. tostring(MAX_AUTO_BASE_SEARCHES) .. ", it is still kept as a fallback for comparison.")
+		t_insert(tooltipLines, "")
+		t_insert(tooltipLines, "Current auto-selected bases:")
+		for _, baseName in ipairs(autoBaseNames) do
+			local detailParts = { }
+			local requirementParts = self:GetBaseRequirementCompactParts(baseName)
+			if requirementParts and #requirementParts > 0 then
+				t_insert(detailParts, "^x7F7F7FRequires " .. t_concat(requirementParts, "^x7F7F7F, "))
+			end
+			for _, part in ipairs(self:GetBaseDefenceRangeCompactParts(baseName) or { }) do
+				t_insert(detailParts, part)
+			end
+			t_insert(tooltipLines, "^xFFFFFF" .. baseName .. (#detailParts > 0 and ("  " .. t_concat(detailParts, "  ")) or ""))
+		end
+	end
+	t_insert(tooltipLines, "Pick an exact base to search that base only.")
+	return table.concat(tooltipLines, "\n")
+end
+
+function TradeQueryGeneratorClass:GetExactBaseTooltipText(baseName)
+	local tooltipLines = {
+		"^xFFFFFF" .. baseName,
+	}
+	local profileText = self:GetBaseDefenceProfileText(baseName)
+	if profileText then
+		t_insert(tooltipLines, "^x7F7F7FDefence Profile: ^xFFFFFF" .. profileText)
+	end
+	for _, requirementLine in ipairs(self:GetBaseRequirementLines(baseName) or { }) do
+		t_insert(tooltipLines, requirementLine)
+	end
+	for _, rangeLine in ipairs(self:GetBaseDefenceRangeLines(baseName) or { }) do
+		t_insert(tooltipLines, rangeLine)
+	end
+	return table.concat(tooltipLines, "\n")
+end
+
+function TradeQueryGeneratorClass:BuildBaseDefencePercentileForBase(slot, existingItem, options, baseName)
+	local selectedBase = self.itemsTab.build.data.itemBases[baseName]
+	local baseDefencePercentileFields = selectedBase and selectedBase.armour and getBaseDefencePercentileFields({ base = selectedBase })
+	if not baseDefencePercentileFields then
+		return nil
+	end
+
+	local calcFunc = self.calcContext.calcFunc
+	local baseOutput = self.calcContext.baseOutput
+	local baseItem = new("Item", "Rarity: RARE\nStat Tester\n" .. baseName)
+	applyRequestedInfluences(baseItem, options)
+	local baseItemOutput = slot and calcFunc({ repSlotName = slot.slotName, repItem = baseItem }) or baseOutput
+	local compStatValue = TradeQueryGeneratorClass.WeightedRatioOutputs(baseOutput, baseItemOutput, options.statWeights) * 1000
+	local zeroPercentileItem = buildBaseDefencePercentileItem(baseName, options, baseDefencePercentileFields, 0)
+	local zeroPercentileOutput = slot and calcFunc({ repSlotName = slot.slotName, repItem = zeroPercentileItem }) or baseOutput
+	local zeroPercentileStatValue = TradeQueryGeneratorClass.WeightedRatioOutputs(baseOutput, zeroPercentileOutput, options.statWeights) * 1000
+	local percentileWeight = (compStatValue - zeroPercentileStatValue) / 100
+	if percentileWeight <= 0.01 then
+		return nil
+	end
+
+	return {
+		tradeModId = BASE_DEFENCE_PERCENTILE_TRADE_MOD_ID,
+		weight = percentileWeight,
+		currentValue = existingItem and TradeQueryGeneratorClass.GetBaseDefencePercentileAverage(existingItem) or nil,
+	}
 end
 
 local function fetchStats()
@@ -1049,31 +1487,6 @@ function TradeQueryGeneratorClass:FinishQuery()
 	end
 	local minWeight = megalomaniacSpecialMinWeight or tradeEquivalentCurrentStatDiff * 0.5
 	
-	-- Generate trade query str and open in browser
-	local filters = 0
-	local queryTable = {
-		query = {
-			filters = self.calcContext.special.queryFilters or {
-				type_filters = {
-					filters = {
-						category = { option = self.calcContext.itemCategoryQueryStr },
-						rarity = { option = "nonunique" }
-					}
-				}
-			},
-			status = { option = "available" },
-			stats = {
-				{
-					type = "weight",
-					value = { min = minWeight },
-					filters = { }
-				}
-			}
-		},
-		sort = { ["statgroup.0"] = "desc" },
-		engine = "new"
-	}
-
 	local options = self.calcContext.options
 
 	local num_extra = 2
@@ -1098,7 +1511,7 @@ function TradeQueryGeneratorClass:FinishQuery()
 	-- Prioritize top mods by abs(weight)
 	table.sort(self.modWeights, function(a, b) return math.abs(a.weight) > math.abs(b.weight) end)
 
-	local prioritizedMods = {}
+	local prioritizedMods = { }
 	for _, entry in ipairs(self.modWeights) do
 		if #prioritizedMods < effective_max then
 			table.insert(prioritizedMods, entry)
@@ -1107,111 +1520,165 @@ function TradeQueryGeneratorClass:FinishQuery()
 		end
 	end
 
-	self.modWeights = prioritizedMods
-
-	for k, v in pairs(self.calcContext.special.queryExtra or {}) do
-		queryTable.query[k] = v
-	end
-	if self.calcContext.sameBaseType then
-		queryTable.query.type = self.calcContext.sameBaseType
-	end
-
-	local andFilters = { type = "and", filters = { } }
-	local options = self.calcContext.options
-	if options.influence1 > 1 then
-		t_insert(andFilters.filters, { id = hasInfluenceModIds[options.influence1 - 1] })
-		filters = filters + 1
-	end
-	if options.influence2 > 1 then
-		t_insert(andFilters.filters, { id = hasInfluenceModIds[options.influence2 - 1] })
-		filters = filters + 1
-	end
-
-	if #andFilters.filters > 0 then
-		t_insert(queryTable.query.stats, andFilters)
-	end
-
-	if self.calcContext.baseDefencePercentile then
-		t_insert(queryTable.query.stats[1].filters, {
-			id = self.calcContext.baseDefencePercentile.tradeModId,
-			value = { weight = self.calcContext.baseDefencePercentile.weight }
-		})
-		filters = filters + 1
-	end
-	
-	for _, entry in ipairs(self.modWeights) do
-		t_insert(queryTable.query.stats[1].filters, { id = entry.tradeModId, value = { weight = (entry.invert == true and entry.weight * -1 or entry.weight) } })
-		filters = filters + 1
-		if filters == effective_max then
-			break
+	local function buildQueryTable(baseOverride)
+		local queryFilters = copyTable(self.calcContext.special.queryFilters or {
+			type_filters = {
+				filters = {
+					category = { option = self.calcContext.itemCategoryQueryStr },
+					rarity = { option = "nonunique" }
+				}
+			}
+		}, true)
+		local filters = 0
+		local baseDefencePercentile = baseOverride and baseOverride.baseDefencePercentile or self.calcContext.baseDefencePercentile
+		local sameBaseType = baseOverride and baseOverride.baseName or self.calcContext.sameBaseType
+		local baseMinWeight = minWeight
+		if baseDefencePercentile and baseDefencePercentile ~= self.calcContext.baseDefencePercentile then
+			baseMinWeight = megalomaniacSpecialMinWeight or ((currentStatDiff + baseDefencePercentile.weight * 100) * 0.5)
 		end
-	end
-	if not options.includeMirrored then
-		queryTable.query.filters.misc_filters = {
-			disabled = false,
-			filters = {
-				mirrored = false,
-			}
-		}
-	end
 
-	if options.maxPrice and options.maxPrice > 0 then
-		queryTable.query.filters.trade_filters = {
-			filters = {
-				price = {
-					option = options.maxPriceType,
-					max = options.maxPrice
+		local queryTable = {
+			query = {
+				filters = queryFilters,
+				status = { option = "available" },
+				stats = {
+					{
+						type = "weight",
+						value = { min = baseMinWeight },
+						filters = { }
+					}
 				}
-			}
+			},
+			sort = { ["statgroup.0"] = "desc" },
+			engine = "new"
 		}
-	end
 
-	if options.maxLevel and options.maxLevel > 0 then
-		queryTable.query.filters.req_filters = {
-			disabled = false,
-			filters = {
-				lvl = {
-					max = options.maxLevel
-				}
-			}
-		}
-	end
+		for k, v in pairs(self.calcContext.special.queryExtra or { }) do
+			queryTable.query[k] = v
+		end
+		if sameBaseType then
+			queryTable.query.type = sameBaseType
+		end
 
-	if options.sockets and options.sockets > 0 then
-		queryTable.query.filters.socket_filters = {
-			disabled = false,
-			filters = {
-				sockets = {
-					max = options.sockets,
-					min = options.sockets
-				}
-			}
-		}
-	end
+		local andFilters = { type = "and", filters = { } }
+		if options.influence1 > 1 then
+			t_insert(andFilters.filters, { id = hasInfluenceModIds[options.influence1 - 1] })
+			filters = filters + 1
+		end
+		if options.influence2 > 1 then
+			t_insert(andFilters.filters, { id = hasInfluenceModIds[options.influence2 - 1] })
+			filters = filters + 1
+		end
 
-	if options.links and options.links > 0 then
-		if not queryTable.query.filters.socket_filters then
-			queryTable.query.filters.socket_filters = {
+		if #andFilters.filters > 0 then
+			t_insert(queryTable.query.stats, andFilters)
+		end
+
+		if baseDefencePercentile then
+			t_insert(queryTable.query.stats[1].filters, {
+				id = baseDefencePercentile.tradeModId,
+				value = { weight = baseDefencePercentile.weight }
+			})
+			filters = filters + 1
+		end
+
+		for _, entry in ipairs(prioritizedMods) do
+			t_insert(queryTable.query.stats[1].filters, { id = entry.tradeModId, value = { weight = (entry.invert == true and entry.weight * -1 or entry.weight) } })
+			filters = filters + 1
+			if filters == effective_max then
+				break
+			end
+		end
+		if not options.includeMirrored then
+			queryTable.query.filters.misc_filters = {
 				disabled = false,
 				filters = {
-					links = {
-						max = options.links,
-						min = options.links
+					mirrored = false,
+				}
+			}
+		end
+
+		if options.maxPrice and options.maxPrice > 0 then
+			queryTable.query.filters.trade_filters = {
+				filters = {
+					price = {
+						option = options.maxPriceType,
+						max = options.maxPrice
 					}
 				}
 			}
-		else -- do not overwrite options.sockets
-			queryTable.query.filters.socket_filters.filters["links"] = {
-				max = options.links,
-				min = options.links
+		end
+
+		if options.maxLevel and options.maxLevel > 0 then
+			queryTable.query.filters.req_filters = {
+				disabled = false,
+				filters = {
+					lvl = {
+						max = options.maxLevel
+					}
+				}
 			}
+		end
+
+		if options.sockets and options.sockets > 0 then
+			queryTable.query.filters.socket_filters = {
+				disabled = false,
+				filters = {
+					sockets = {
+						max = options.sockets,
+						min = options.sockets
+					}
+				}
+			}
+		end
+
+		if options.links and options.links > 0 then
+			if not queryTable.query.filters.socket_filters then
+				queryTable.query.filters.socket_filters = {
+					disabled = false,
+					filters = {
+						links = {
+							max = options.links,
+							min = options.links
+						}
+					}
+				}
+			else
+				queryTable.query.filters.socket_filters.filters["links"] = {
+					max = options.links,
+					min = options.links
+				}
+			end
+		end
+
+		return queryTable
+	end
+
+	local queryTable = buildQueryTable()
+	local queryPlan = nil
+	if not options.selectedBaseName then
+		local autoBaseNames = self:GetAutoBaseSearchNames(self.calcContext.slot, originalItem, options, MAX_AUTO_BASE_SEARCHES)
+		if autoBaseNames and #autoBaseNames > 1 then
+			queryPlan = { }
+			for _, baseName in ipairs(autoBaseNames) do
+				t_insert(queryPlan, {
+					baseName = baseName,
+					query = dkjson.encode(buildQueryTable({
+						baseName = baseName,
+						baseDefencePercentile = self:BuildBaseDefencePercentileForBase(self.calcContext.slot, originalItem, options, baseName),
+					})),
+				})
+			end
 		end
 	end
 
 	local errMsg = nil
 	if #queryTable.query.stats[1].filters == 0 then
-		-- No mods to filter
 		errMsg = "Could not generate search, found no mods to search for"
+	end
+
+	if self.requesterContext then
+		self.requesterContext.tradeQueryPlan = queryPlan
 	end
 
 	local queryJson = dkjson.encode(queryTable)
@@ -1235,6 +1702,7 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 	local isAmuletSlot = slot and slot.slotName == "Amulet"
 	local isEldritchModSlot = slot and eldritchModSlots[slot.slotName] == true
 	local selectableBaseNames = existingItem and self:GetSelectableBaseNames(slot, existingItem)
+	local autoBaseOptions = existingItem and self:GetAutoBaseOptionEntries(slot, existingItem)
 	local selectedBaseIndex = 1
 
 	controls.includeCorrupted = new("CheckBoxControl", {"TOP",nil,"TOP"}, {-40, 30, 18}, "Corrupted Mods:", function(state) end)
@@ -1280,10 +1748,23 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 	end
 
 	if selectableBaseNames then
-		local baseOptions = { "Any" }
+		local baseOptions = { }
+		for _, autoOption in ipairs(autoBaseOptions or { { key = AUTO_BASE_OPTION_ANY_KEY, label = AUTO_BASE_OPTION_LABEL } }) do
+			t_insert(baseOptions, {
+				label = autoOption.label,
+				autoBaseDefenceProfile = autoOption.key,
+			})
+			if not self.lastSelectedBaseName and (self.lastAutoBaseDefenceProfile or AUTO_BASE_OPTION_ANY_KEY) == autoOption.key then
+				selectedBaseIndex = #baseOptions
+			end
+		end
 		for _, baseName in ipairs(selectableBaseNames) do
-			t_insert(baseOptions, baseName)
-			if self.lastSelectedBaseName == baseName or (not self.lastSelectedBaseName and existingItem.baseName == baseName) then
+			t_insert(baseOptions, {
+				label = baseName,
+				baseName = baseName,
+				detail = self:GetBaseDefenceListDetailText(baseName),
+			})
+			if self.lastSelectedBaseName == baseName then
 				selectedBaseIndex = #baseOptions
 			end
 		end
@@ -1312,6 +1793,27 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		controls.jewelType.selIndex = 1
 		controls.jewelTypeLabel = new("LabelControl", {"RIGHT",controls.jewelType,"LEFT"}, {-5, 0, 0, 16}, "Jewel Type:")
 		updateLastAnchor(controls.jewelType)
+	end
+
+	if controls.selectedBase then
+		controls.selectedBase.tooltipFunc = function(tooltip)
+			tooltip:Clear()
+			local influence1 = controls.influence1 and controls.influence1.selIndex or self.lastInfluence1 or 1
+			local influence2 = controls.influence2 and controls.influence2.selIndex or self.lastInfluence2 or 1
+			local selectedBaseValue = controls.selectedBase.list[controls.selectedBase:GetHoverIndex()]
+			local autoBaseDefenceProfile = type(selectedBaseValue) == "table" and selectedBaseValue.autoBaseDefenceProfile or nil
+			local exactBaseName = type(selectedBaseValue) == "table" and selectedBaseValue.baseName or selectedBaseValue
+			local tooltipText = autoBaseDefenceProfile
+				and self:GetAutoBaseTooltipText(slot, existingItem, statWeights, influence1, influence2, autoBaseDefenceProfile)
+				or self:GetExactBaseTooltipText(exactBaseName)
+			for line in tooltipText:gmatch("([^\n]*)\n?") do
+				if line ~= "" then
+					tooltip:AddLine(16, line)
+				else
+					tooltip:AddLine(10, "")
+				end
+			end
+		end
 	end
 
 	-- Add max price limit selection dropbox
@@ -1390,15 +1892,21 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 			self.lastIncludeTalisman, options.includeTalisman = controls.includeTalisman.state, controls.includeTalisman.state
 		end
 		if controls.selectedBase then
-			options.selectedBaseName = controls.selectedBase.list[controls.selectedBase.selIndex]
-			if options.selectedBaseName == "Any" then
+			local selectedBaseValue = controls.selectedBase.list[controls.selectedBase.selIndex]
+			local autoBaseDefenceProfile = type(selectedBaseValue) == "table" and selectedBaseValue.autoBaseDefenceProfile or nil
+			options.selectedBaseName = type(selectedBaseValue) == "table" and selectedBaseValue.baseName or selectedBaseValue
+			if autoBaseDefenceProfile then
 				options.selectedBaseName = nil
 				self.lastSelectedBaseName = nil
+				options.autoBaseDefenceProfile = autoBaseDefenceProfile
+				self.lastAutoBaseDefenceProfile = autoBaseDefenceProfile
 			else
 				self.lastSelectedBaseName = options.selectedBaseName
+				options.autoBaseDefenceProfile = nil
 			end
 		else
 			options.selectedBaseName = nil
+			options.autoBaseDefenceProfile = nil
 		end
 		if controls.influence1 then
 			self.lastInfluence1, options.influence1 = controls.influence1.selIndex, controls.influence1.selIndex
