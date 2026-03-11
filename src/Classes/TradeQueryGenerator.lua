@@ -8,6 +8,7 @@ local dkjson = require "dkjson"
 local curl = require("lcurl.safe")
 local m_max = math.max
 local s_format = string.format
+local t_concat = table.concat
 local t_insert = table.insert
 
 -- TODO generate these from data files
@@ -99,9 +100,75 @@ local eldritchModSlots = {
 }
 
 local MAX_FILTERS = 35
+local BASE_DEFENCE_PERCENTILE_TRADE_MOD_ID = "pseudo.pseudo_base_defence_percentile"
+local baseDefencePercentileStats = {
+	{ percentileKey = "ArmourBasePercentile", minKey = "ArmourBaseMin", maxKey = "ArmourBaseMax" },
+	{ percentileKey = "EvasionBasePercentile", minKey = "EvasionBaseMin", maxKey = "EvasionBaseMax" },
+	{ percentileKey = "EnergyShieldBasePercentile", minKey = "EnergyShieldBaseMin", maxKey = "EnergyShieldBaseMax" },
+	{ percentileKey = "WardBasePercentile", minKey = "WardBaseMin", maxKey = "WardBaseMax" },
+}
 
 local function logToFile(...)
 	ConPrintf(...)
+end
+
+local function applyRequestedInfluences(item, options)
+	if options.influence1 and options.influence1 > 1 then
+		item[itemLib.influenceInfo.default[options.influence1 - 1].key] = true
+	end
+	if options.influence2 and options.influence2 > 1 then
+		item[itemLib.influenceInfo.default[options.influence2 - 1].key] = true
+	end
+end
+
+local function getBaseDefencePercentileFields(item)
+	local baseArmour = item and item.base and item.base.armour
+	if not baseArmour then
+		return nil
+	end
+
+	local fields = { }
+	for _, stat in ipairs(baseDefencePercentileStats) do
+		if baseArmour[stat.minKey] ~= nil or baseArmour[stat.maxKey] ~= nil then
+			t_insert(fields, stat)
+		end
+	end
+
+	return #fields > 0 and fields or nil
+end
+
+local function getSlotBaseType(slot, existingItem)
+	if not slot then
+		return nil
+	end
+	if slot.slotName == "Body Armour" then
+		return "Body Armour"
+	elseif slot.slotName == "Helmet" then
+		return "Helmet"
+	elseif slot.slotName == "Gloves" then
+		return "Gloves"
+	elseif slot.slotName == "Boots" then
+		return "Boots"
+	elseif slot.slotName:find("^Weapon %d") and existingItem and existingItem.type == "Shield" then
+		return "Shield"
+	end
+	return nil
+end
+
+local function buildBaseDefencePercentileItem(baseName, options, fields, percentile)
+	local itemLines = {
+		"Rarity: RARE",
+		"Stat Tester",
+		baseName,
+	}
+
+	for _, field in ipairs(fields) do
+		t_insert(itemLines, field.percentileKey .. ": " .. tostring(percentile))
+	end
+
+	local item = new("Item", t_concat(itemLines, "\n"))
+	applyRequestedInfluences(item, options)
+	return item
 end
 
 local TradeQueryGeneratorClass = newClass("TradeQueryGenerator", function(self, queryTab)
@@ -113,6 +180,37 @@ local TradeQueryGeneratorClass = newClass("TradeQueryGenerator", function(self, 
 	self.lastMaxPriceTypeIndex = nil
 	self.lastMaxLevel = nil
 end)
+
+function TradeQueryGeneratorClass:GetSelectableBaseNames(slot, existingItem)
+	local baseType = getSlotBaseType(slot, existingItem)
+	if not baseType then
+		return nil
+	end
+
+	local baseNames = { }
+	for baseName, baseData in pairs(self.itemsTab.build.data.itemBases) do
+		if baseData.type == baseType and baseData.armour then
+			t_insert(baseNames, baseName)
+		end
+	end
+	table.sort(baseNames)
+	return #baseNames > 0 and baseNames or nil
+end
+
+function TradeQueryGeneratorClass.GetBaseDefencePercentileAverage(item)
+	local fields = getBaseDefencePercentileFields(item)
+	if not fields then
+		return nil
+	end
+
+	local totalPercentile = 0
+	local armourData = item.armourData or { }
+	for _, field in ipairs(fields) do
+		totalPercentile = totalPercentile + ((armourData[field.percentileKey] or 1) * 100)
+	end
+
+	return totalPercentile / #fields
+end
 
 local function fetchStats()
 	local tradeStats = ""
@@ -712,7 +810,7 @@ function TradeQueryGeneratorClass:StartQuery(slot, options)
 
 	-- Figure out what type of item we're searching for
 	local existingItem = slot and self.itemsTab.items[slot.selItemId]
-	local testItemType = existingItem and existingItem.baseName or "Unset Amulet"
+	local testItemType = options.selectedBaseName or existingItem and existingItem.baseName or "Unset Amulet"
 	local itemCategoryQueryStr
 	local itemCategory
 	local special = { }
@@ -831,18 +929,38 @@ function TradeQueryGeneratorClass:StartQuery(slot, options)
 	local testItem = new("Item", itemRawStr)
 
 	-- Apply any requests influences
-	if options.influence1 > 1 then
-		testItem[itemLib.influenceInfo.default[options.influence1 - 1].key] = true
-	end
-	if options.influence2 > 1 then
-		testItem[itemLib.influenceInfo.default[options.influence2 - 1].key] = true
-	end
+	applyRequestedInfluences(testItem, options)
 
 	-- Calculate base output with a blank item
 	local calcFunc, baseOutput = self.itemsTab.build.calcsTab:GetMiscCalculator()
 	local baseItemOutput = slot and calcFunc({ repSlotName = slot.slotName, repItem = testItem }) or baseOutput
 	-- make weights more human readable
 	local compStatValue = TradeQueryGeneratorClass.WeightedRatioOutputs(baseOutput, baseItemOutput, options.statWeights) * 1000
+
+	local sameBaseType
+	local baseDefencePercentile
+	if options.selectedBaseName then
+		sameBaseType = options.selectedBaseName
+		local selectedBase = self.itemsTab.build.data.itemBases[options.selectedBaseName]
+		local baseDefencePercentileFields = selectedBase and selectedBase.armour and getBaseDefencePercentileFields({ base = selectedBase })
+		if baseDefencePercentileFields then
+			-- TODO: Quality skews the real value of base defence percentile. Keep the current
+			-- single-query behaviour for now; a future version should likely split searches into
+			-- <=20 quality and >20 quality buckets, then re-score the merged results in PoB.
+			local currentValue = TradeQueryGeneratorClass.GetBaseDefencePercentileAverage(existingItem)
+			local zeroPercentileItem = buildBaseDefencePercentileItem(testItemType, options, baseDefencePercentileFields, 0)
+			local zeroPercentileOutput = slot and calcFunc({ repSlotName = slot.slotName, repItem = zeroPercentileItem }) or baseOutput
+			local zeroPercentileStatValue = TradeQueryGeneratorClass.WeightedRatioOutputs(baseOutput, zeroPercentileOutput, options.statWeights) * 1000
+			local percentileWeight = (compStatValue - zeroPercentileStatValue) / 100
+			if currentValue and percentileWeight > 0.01 then
+				baseDefencePercentile = {
+					currentValue = currentValue,
+					tradeModId = BASE_DEFENCE_PERCENTILE_TRADE_MOD_ID,
+					weight = percentileWeight,
+				}
+			end
+		end
+	end
 
 	-- Test each mod one at a time and cache the normalized Stat (configured earlier) diff to use as weight
 	self.modWeights = { }
@@ -855,8 +973,10 @@ function TradeQueryGeneratorClass:StartQuery(slot, options)
 		testItem = testItem,
 		baseOutput = baseOutput,
 		baseStatValue = compStatValue,
+		baseDefencePercentile = baseDefencePercentile,
 		calcFunc = calcFunc,
 		options = options,
+		sameBaseType = sameBaseType,
 		slot = slot,
 	}
 
@@ -923,7 +1043,11 @@ function TradeQueryGeneratorClass:FinishQuery()
 	local megalomaniacSpecialMinWeight = self.calcContext.special.itemName == "Megalomaniac" and self.modWeights[#self.modWeights] * 3
 	-- This Stat diff value will generally be higher than the weighted sum of the same item, because the stats are all applied at once and can thus multiply off each other.
 	-- So apply a modifier to get a reasonable min and hopefully approximate that the query will start out with small upgrades.
-	local minWeight = megalomaniacSpecialMinWeight or currentStatDiff * 0.5
+	local tradeEquivalentCurrentStatDiff = currentStatDiff
+	if self.calcContext.baseDefencePercentile then
+		tradeEquivalentCurrentStatDiff = tradeEquivalentCurrentStatDiff + self.calcContext.baseDefencePercentile.weight * 100
+	end
+	local minWeight = megalomaniacSpecialMinWeight or tradeEquivalentCurrentStatDiff * 0.5
 	
 	-- Generate trade query str and open in browser
 	local filters = 0
@@ -953,6 +1077,9 @@ function TradeQueryGeneratorClass:FinishQuery()
 	local options = self.calcContext.options
 
 	local num_extra = 2
+	if self.calcContext.baseDefencePercentile then
+		num_extra = num_extra + 1
+	end
 	if not options.includeMirrored then
 		num_extra = num_extra + 1
 	end
@@ -985,6 +1112,9 @@ function TradeQueryGeneratorClass:FinishQuery()
 	for k, v in pairs(self.calcContext.special.queryExtra or {}) do
 		queryTable.query[k] = v
 	end
+	if self.calcContext.sameBaseType then
+		queryTable.query.type = self.calcContext.sameBaseType
+	end
 
 	local andFilters = { type = "and", filters = { } }
 	local options = self.calcContext.options
@@ -999,6 +1129,14 @@ function TradeQueryGeneratorClass:FinishQuery()
 
 	if #andFilters.filters > 0 then
 		t_insert(queryTable.query.stats, andFilters)
+	end
+
+	if self.calcContext.baseDefencePercentile then
+		t_insert(queryTable.query.stats[1].filters, {
+			id = self.calcContext.baseDefencePercentile.tradeModId,
+			value = { weight = self.calcContext.baseDefencePercentile.weight }
+		})
+		filters = filters + 1
 	end
 	
 	for _, entry in ipairs(self.modWeights) do
@@ -1091,10 +1229,13 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 	local options = { }
 	local popupHeight = 110
 
+	local existingItem = slot and self.itemsTab.items[slot.selItemId]
 	local isJewelSlot = slot and slot.slotName:find("Jewel") ~= nil
 	local isAbyssalJewelSlot = slot and slot.slotName:find("Abyssal") ~= nil
 	local isAmuletSlot = slot and slot.slotName == "Amulet"
 	local isEldritchModSlot = slot and eldritchModSlots[slot.slotName] == true
+	local selectableBaseNames = existingItem and self:GetSelectableBaseNames(slot, existingItem)
+	local selectedBaseIndex = 1
 
 	controls.includeCorrupted = new("CheckBoxControl", {"TOP",nil,"TOP"}, {-40, 30, 18}, "Corrupted Mods:", function(state) end)
 	controls.includeCorrupted.state = not context.slotTbl.alreadyCorrupted and (self.lastIncludeCorrupted == nil or self.lastIncludeCorrupted == true)
@@ -1136,6 +1277,20 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		controls.includeEldritch = new("CheckBoxControl", {"TOPRIGHT",lastItemAnchor,"BOTTOMRIGHT"}, {0, 5, 18}, "Eldritch Mods:", function(state) end)
 		controls.includeEldritch.state = (self.lastIncludeEldritch == true)
 		updateLastAnchor(controls.includeEldritch)
+	end
+
+	if selectableBaseNames then
+		local baseOptions = { "Any" }
+		for _, baseName in ipairs(selectableBaseNames) do
+			t_insert(baseOptions, baseName)
+			if self.lastSelectedBaseName == baseName or (not self.lastSelectedBaseName and existingItem.baseName == baseName) then
+				selectedBaseIndex = #baseOptions
+			end
+		end
+		controls.selectedBase = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 160, 18}, baseOptions, function(index, value) end)
+		controls.selectedBase.selIndex = selectedBaseIndex
+		controls.selectedBaseLabel = new("LabelControl", {"RIGHT",controls.selectedBase,"LEFT"}, {-5, 0, 0, 16}, "Base:")
+		updateLastAnchor(controls.selectedBase)
 	end
 
 	if isJewelSlot then
@@ -1233,6 +1388,17 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		end
 		if controls.includeTalisman then
 			self.lastIncludeTalisman, options.includeTalisman = controls.includeTalisman.state, controls.includeTalisman.state
+		end
+		if controls.selectedBase then
+			options.selectedBaseName = controls.selectedBase.list[controls.selectedBase.selIndex]
+			if options.selectedBaseName == "Any" then
+				options.selectedBaseName = nil
+				self.lastSelectedBaseName = nil
+			else
+				self.lastSelectedBaseName = options.selectedBaseName
+			end
+		else
+			options.selectedBaseName = nil
 		end
 		if controls.influence1 then
 			self.lastInfluence1, options.influence1 = controls.influence1.selIndex, controls.influence1.selIndex
