@@ -1589,6 +1589,52 @@ function TradeQueryClass:SearchWithQueryWeightAdjustedAndRaritySplit(query, call
 	end, params)
 end
 
+function TradeQueryClass:SearchWithQueryPlan(queryPlan, callback, params)
+	if not queryPlan or #queryPlan == 0 then
+		callback(nil, "Missing trade query plan")
+		return
+	end
+
+	local mergedItems = { }
+	local mergedIds = { }
+	local function mergeItems(items)
+		for _, item in ipairs(items or { }) do
+			if not item.id then
+				t_insert(mergedItems, item)
+			elseif not mergedIds[item.id] then
+				mergedIds[item.id] = true
+				t_insert(mergedItems, item)
+			end
+		end
+	end
+
+	local function searchNext(index)
+		local planEntry = queryPlan[index]
+		if not planEntry then
+			callback(mergedItems)
+			return
+		end
+
+		local localParams = { }
+		for key, value in pairs(params or { }) do
+			if index == 1 or key ~= "callbackQueryId" then
+				localParams[key] = value
+			end
+		end
+
+		self.tradeQueryRequests:SearchWithQueryWeightAdjusted(self.pbRealm, self.pbLeague, planEntry.query, function(items, errMsg)
+			if errMsg and errMsg ~= "No Matching Results Found" then
+				callback(nil, errMsg)
+				return
+			end
+			mergeItems(items)
+			searchNext(index + 1)
+		end, localParams)
+	end
+
+	searchNext(1)
+end
+
 -- Method to generate pane elements for each item slot
 function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, row_vertical_padding, row_height)
 	local controls = self.controls
@@ -1610,30 +1656,34 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 				url = url .. "?q=" .. urlEncode(query)
 				controls["uri"..context.row_idx]:SetText(url, true)
 				return
-			end
+				end
 			context.controls["priceButton"..context.row_idx].label = "Searching..."
-			self.tradeQueryRequests:SearchWithQueryWeightAdjusted(self.pbRealm, self.pbLeague, query,
-				function(items, errMsg)
-					if errMsg then
-						self:SetNotice(context.controls.pbNotice, colorCodes.NEGATIVE .. errMsg)
-						context.controls["priceButton"..context.row_idx].label =  "Price Item"
-						return
-					else
-						self:SetNotice(context.controls.pbNotice, "")
-					end
-					self.resultQueryOptions[context.row_idx] = { includeEldritch = context.includeEldritch == true }
-					self.resultTbl[context.row_idx] = items
-					self:UpdateControlsWithItems(context.row_idx)
-					context.controls["priceButton"..context.row_idx].label =  "Price Item"
-				end,
-				{
-					callbackQueryId = function(queryId)
-						local url = self.tradeQueryRequests:buildUrl(self.hostName .. "trade/search", self.pbRealm, self.pbLeague, queryId)
-						controls["uri"..context.row_idx]:SetText(url, true)
-					end
-				}
-			)
-				end)
+			local onSearchResults = function(items, errMsg)
+				if errMsg then
+					self:SetNotice(context.controls.pbNotice, colorCodes.NEGATIVE .. errMsg)
+					context.controls["priceButton"..context.row_idx].label = "Price Item"
+					return
+				else
+					self:SetNotice(context.controls.pbNotice, "")
+				end
+				self.resultQueryOptions[context.row_idx] = { includeEldritch = context.includeEldritch == true }
+				self.resultTbl[context.row_idx] = items
+				self:UpdateControlsWithItems(context.row_idx)
+				context.controls["priceButton"..context.row_idx].label = "Price Item"
+			end
+			local searchParams = {
+				callbackQueryId = function(queryId)
+					local url = self.tradeQueryRequests:buildUrl(self.hostName .. "trade/search", self.pbRealm, self.pbLeague, queryId)
+					controls["uri"..context.row_idx]:SetText(url, true)
+				end
+			}
+			if context.tradeQueryPlan and #context.tradeQueryPlan > 0 then
+				self:SearchWithQueryPlan(context.tradeQueryPlan, onSearchResults, searchParams)
+			else
+				self:SearchWithQueryWeightAdjustedAndRaritySplit(query, onSearchResults, searchParams)
+			end
+		end)
+	end)
 	controls["bestButton"..row_idx].shown = function() return not self.resultTbl[row_idx] end
 	controls["bestButton"..row_idx].enabled = function() return self.pbLeague end
 	controls["bestButton"..row_idx].tooltipText = "Creates a weighted search to find the highest Stat Value items for this slot."
