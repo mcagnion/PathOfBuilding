@@ -251,6 +251,8 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters)
 		local upgradedValue = getStatValue(output, currentStat)
 		local delta = upgradedValue - baseValue
 		local score = lowerIsBetter and -delta or delta
+		local currentGem = socketGroup and socketGroup.gemList and socketGroup.gemList[gemIndex]
+		local currentState = currentGem and currentGem.level and s_format("%d/%d", currentGem.level or 0, m_max(0, currentGem.quality or 0)) or tostring(currentValue)
 		local improvementPct = 0
 		local hasImprovementPct = false
 		if baseValue ~= 0 then
@@ -265,6 +267,7 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters)
 			upgradeLabel = getUpgradeDisplayLabel(sourceType, upgradeLabel),
 			name = name,
 			groupLabel = groupLabel,
+			currentState = currentState,
 			level = currentValue,
 			nextLevel = getUpgradePreviewValue(upgradeLabel, nextValue),
 			curSort = curSort,
