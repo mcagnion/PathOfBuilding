@@ -11,6 +11,8 @@ local m_floor = math.floor
 local m_max = math.max
 local m_min = math.min
 local s_format = string.format
+local co_running = coroutine.running
+local co_yield = coroutine.yield
 
 local alternateGemQualityPrefixMap = {
 	Default = "",
@@ -20,6 +22,17 @@ local alternateGemQualityPrefixMap = {
 }
 
 local gemTradeReport = { }
+
+local function advanceBuildState(buildState)
+	if not buildState then
+		return
+	end
+	buildState.completedGroups = (buildState.completedGroups or 0) + 1
+	local batchSize = buildState.batchSize or 1
+	if buildState.completedGroups % batchSize == 0 and co_running() then
+		co_yield()
+	end
+end
 
 local function getOutputAttr(skillsTab, output, stat)
 	if output and output[stat] ~= nil then
@@ -176,10 +189,14 @@ local function getGemActiveSkills(socketGroup, gemInstance)
 	return activeSkills
 end
 
-function gemTradeReport.Build(skillsTab, currentStat, filters)
-	local report = { }
+function gemTradeReport.Build(skillsTab, currentStat, filters, buildState)
+	local report = buildState and buildState.report or { }
 	if not (currentStat and currentStat.stat) then
 		return report
+	end
+	if buildState then
+		buildState.report = report
+		buildState.totalGroups = #skillsTab.socketGroupList
 	end
 
 	local calcFunc, calcBase = skillsTab.build.calcsTab:GetMiscCalculator()
@@ -371,6 +388,7 @@ function gemTradeReport.Build(skillsTab, currentStat, filters)
 				gemInstance.imbuedSupport = currentImbuedSupport
 			end
 		end
+		advanceBuildState(buildState)
 	end
 
 	return report
