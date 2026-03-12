@@ -132,6 +132,13 @@ local function addDistinctValue(list, seen, value)
 	t_insert(list, value)
 end
 
+local function getTradeGemNameSpec(gemData, nameSpec)
+	if gemData and gemData.grantedEffect and gemData.grantedEffect.support then
+		return (nameSpec or gemData.name) .. " Support"
+	end
+	return nameSpec or (gemData and gemData.name) or ""
+end
+
 local function isReportableImbuedSupportGem(gemData)
 	if not (gemData and gemData.grantedEffect and gemData.grantedEffect.support) then
 		return false
@@ -293,7 +300,7 @@ function gemTradeReport.Build(skillsTab, currentStat, filters)
 									gemIndex,
 									targetLevel,
 									targetQuality,
-									gemInstance.nameSpec,
+									getTradeGemNameSpec(gemInstance.gemData, gemInstance.nameSpec),
 									gemInstance.qualityId or "Default",
 									naturalMaxLevel,
 									nil
@@ -311,6 +318,7 @@ function gemTradeReport.Build(skillsTab, currentStat, filters)
 					if #activeSkills > 0 then
 						local imbuedQualities = { }
 						local seenImbuedQualities = { }
+						addDistinctValue(imbuedQualities, seenImbuedQualities, 0)
 						addDistinctValue(imbuedQualities, seenImbuedQualities, m_max(0, m_min(currentQuality, 20)))
 						addDistinctValue(imbuedQualities, seenImbuedQualities, 20)
 						for _, targetQuality in ipairs(imbuedQualities) do
@@ -345,7 +353,7 @@ function gemTradeReport.Build(skillsTab, currentStat, filters)
 												gemIndex,
 												20,
 												targetQuality,
-												gemInstance.nameSpec,
+												getTradeGemNameSpec(gemInstance.gemData, gemInstance.nameSpec),
 												gemInstance.qualityId or "Default",
 												naturalMaxLevel,
 												supportGemData.grantedEffectId

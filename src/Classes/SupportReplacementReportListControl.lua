@@ -6,6 +6,7 @@
 
 local t_sort = table.sort
 local s_format = string.format
+local m_max = math.max
 
 local function compareMixed(a, b)
 	if type(a) == "number" and type(b) == "number" then
@@ -16,17 +17,31 @@ local function compareMixed(a, b)
 	return a < b
 end
 
+local function formatStatePreservingLabel(name, state, maxNameLen)
+	name = tostring(name or "")
+	state = tostring(state or "")
+	if state == "" then
+		return name
+	end
+	if #name <= maxNameLen then
+		return name .. " " .. state
+	end
+	return name:sub(1, m_max(1, maxNameLen - 3)) .. "... " .. state
+end
+
 local SupportReplacementReportListClass = newClass("SupportReplacementReportListControl", "ListControl", function(self, anchor, rect, selectCallback, tooltipCallback)
 	self.ListControl(anchor, rect, 16, "VERTICAL", false)
 
 	local width = rect[3]
-	self.deltaColumn = { width = width * 0.22, label = "Delta", sortable = true }
+	self.deltaColumn = { width = width * 0.19, label = "Delta", sortable = true }
 	self.colList = {
-		{ width = width * 0.20, label = "Skill", sortable = true },
-		{ width = width * 0.23, label = "Current", sortable = true },
-		{ width = width * 0.23, label = "Candidate", sortable = true },
+		{ width = width * 0.16, label = "Skill", sortable = true },
+		{ width = width * 0.20, label = "Current", sortable = true },
+		{ width = width * 0.20, label = "Candidate", sortable = true },
 		self.deltaColumn,
-		{ width = width * 0.12, label = "Improvement", sortable = true },
+		{ width = width * 0.08, label = "Gain", sortable = true },
+		{ width = width * 0.08, label = "Price", sortable = true },
+		{ width = width * 0.09, label = "Value", sortable = true },
 	}
 	self.colLabels = true
 	self.selectCallback = selectCallback
@@ -73,6 +88,24 @@ function SupportReplacementReportListClass:ReSort(colIndex)
 			end
 			return a.improvementPct > b.improvementPct
 		end)
+	elseif colIndex == 6 then
+		t_sort(self.list, function(a, b)
+			local priceA = a.priceSort or math.huge
+			local priceB = b.priceSort or math.huge
+			if priceA == priceB then
+				return a.score > b.score
+			end
+			return priceA < priceB
+		end)
+	elseif colIndex == 7 then
+		t_sort(self.list, function(a, b)
+			local valueA = a.valueSort or -math.huge
+			local valueB = b.valueSort or -math.huge
+			if valueA == valueB then
+				return a.score > b.score
+			end
+			return valueA > valueB
+		end)
 	else
 		t_sort(self.list, function(a, b)
 			if a.score == b.score then
@@ -108,9 +141,11 @@ end
 
 function SupportReplacementReportListClass:GetRowValue(column, index, report)
 	return column == 1 and report.skillName
-		or column == 2 and report.currentLabel
-		or column == 3 and report.candidateLabel
+		or column == 2 and formatStatePreservingLabel(report.name, report.currentState, 18)
+		or column == 3 and formatStatePreservingLabel(report.candidateName, report.candidateState, 18)
 		or column == 4 and report.deltaStr
 		or column == 5 and (report.hasImprovementPct and s_format("%+.2f%%", report.improvementPct) or "--")
+		or column == 6 and (report.priceText or "--")
+		or column == 7 and (report.valueText or "--")
 		or ""
 end
