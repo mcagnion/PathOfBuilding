@@ -7,6 +7,16 @@
 local dkjson = require "dkjson"
 local m_min = math.min
 
+local function normalizeStatusOption(statusOption)
+	if type(statusOption) == "table" then
+		statusOption = statusOption.option or statusOption.id or statusOption.value or statusOption.label
+	end
+	if type(statusOption) == "string" and statusOption ~= "" then
+		return statusOption
+	end
+	return nil
+end
+
 ---@class TradeQueryRequests
 local TradeQueryRequestsClass = newClass("TradeQueryRequests", function(self, rateLimiter)
 	self.maxFetchPerSearch = 10
@@ -19,6 +29,30 @@ local TradeQueryRequestsClass = newClass("TradeQueryRequests", function(self, ra
 	self.lastWaitLog = { }
 	self.hostName = "https://www.pathofexile.com/"
 end)
+
+function TradeQueryRequestsClass:SetStatusOption(statusOption)
+	self.statusOption = normalizeStatusOption(statusOption)
+end
+
+function TradeQueryRequestsClass:ApplyDefaultStatusOption(query)
+	if not self.statusOption or type(query) ~= "string" or query == "" then
+		return query
+	end
+	local queryJson = dkjson.decode(query)
+	if not queryJson or type(queryJson) ~= "table" then
+		return query
+	end
+	queryJson.query = queryJson.query or { }
+	if queryJson.query.status == nil then
+		queryJson.query.status = { option = self.statusOption }
+		return dkjson.encode(queryJson)
+	end
+	if type(queryJson.query.status) == "string" and queryJson.query.status ~= "" then
+		queryJson.query.status = { option = queryJson.query.status }
+		return dkjson.encode(queryJson)
+	end
+	return query
+end
 
 ---Main routine for processing request queue
 function TradeQueryRequestsClass:ProcessQueue()
@@ -213,6 +247,7 @@ end
 ---@param callback fun(response:table, errMsg:string)
 function TradeQueryRequestsClass:PerformSearch(realm, league, query, callback, params)
 	params = params or {}
+	query = self:ApplyDefaultStatusOption(query)
 	table.insert(self.requestQueue["search"], {
 		url = self:buildUrl(self.hostName .. "api/trade/search", realm, league),
 		body = query,
