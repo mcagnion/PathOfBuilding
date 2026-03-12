@@ -6,6 +6,7 @@
 
 local t_sort = table.sort
 local s_format = string.format
+local m_max = math.max
 
 local function compareMixed(a, b)
 	if type(a) == "number" and type(b) == "number" then
@@ -16,18 +17,30 @@ local function compareMixed(a, b)
 	return a < b
 end
 
+local function formatStatePreservingLabel(name, state, maxNameLen)
+	name = tostring(name or "")
+	state = tostring(state or "")
+	if state == "" then
+		return name
+	end
+	if #name <= maxNameLen then
+		return name .. " " .. state
+	end
+	return name:sub(1, m_max(1, maxNameLen - 3)) .. "... " .. state
+end
+
 local GemTradeReportListClass = newClass("GemTradeReportListControl", "ListControl", function(self, anchor, rect, selectCallback, tooltipCallback)
 	self.ListControl(anchor, rect, 16, "VERTICAL", false)
 
 	local width = rect[3]
-	self.deltaColumn = { width = width * 0.22, label = "Delta", sortable = true }
+	self.deltaColumn = { width = width * 0.18, label = "Delta", sortable = true }
 	self.colList = {
-		{ width = width * 0.27, label = "Gem", sortable = true },
-		{ width = width * 0.22, label = "Candidate", sortable = true },
+		{ width = width * 0.30, label = "Gem", sortable = true },
+		{ width = width * 0.24, label = "Candidate", sortable = true },
 		self.deltaColumn,
 		{ width = width * 0.09, label = "Gain", sortable = true },
 		{ width = width * 0.10, label = "Price", sortable = true },
-		{ width = width * 0.10, label = "Stat Value / Price", sortable = true },
+		{ width = width * 0.09, label = "Value", sortable = true },
 	}
 	self.colLabels = true
 	self.selectCallback = selectCallback
@@ -136,7 +149,7 @@ function GemTradeReportListClass:AddValueTooltip(tooltip, index, report)
 end
 
 function GemTradeReportListClass:GetRowValue(column, index, report)
-	return column == 1 and (report.name .. " " .. tostring(report.currentState or report.level))
+	return column == 1 and formatStatePreservingLabel(report.name, report.currentState or report.level, 24)
 		or column == 2 and report.nextLevel
 		or column == 3 and report.deltaStr
 		or column == 4 and (report.hasImprovementPct and s_format("%+.2f%%", report.improvementPct) or "--")

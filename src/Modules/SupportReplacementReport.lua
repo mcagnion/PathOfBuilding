@@ -128,6 +128,28 @@ local function isRemovedLegacySupportGem(gemData)
 	return gemData and gemData.tags and gemData.tags.awakened and not gemData.tags.exceptional
 end
 
+local function addDistinctState(list, seen, level, quality)
+	if not level or not quality then
+		return
+	end
+	local key = tostring(level) .. "/" .. tostring(quality)
+	if seen[key] then
+		return
+	end
+	seen[key] = true
+	t_insert(list, {
+		level = level,
+		quality = quality,
+	})
+end
+
+local function getTradeGemNameSpec(gemData)
+	if gemData and gemData.grantedEffect and gemData.grantedEffect.support then
+		return gemData.name .. " Support"
+	end
+	return gemData and gemData.name or ""
+end
+
 function supportReplacementReport.Build(skillsTab, currentStat, filters)
 	local report = { }
 	if not (currentStat and currentStat.stat) then
@@ -194,79 +216,96 @@ function supportReplacementReport.Build(skillsTab, currentStat, filters)
 							if not candidateGrantedEffect.plusVersionOf then
 								candidateMaxLevel = candidateMaxLevel + 1
 							end
-							local candidateLevel = m_min(currentLevel, candidateMaxLevel)
-							local candidateQuality = m_min(currentQuality, 23)
-							if candidateGrantedEffect.levels[candidateLevel] then
-								gemInstance.gemId = candidateGemData.id
-								gemInstance.nameSpec = candidateGemData.name
-								gemInstance.skillId = candidateGemData.grantedEffectId
-								gemInstance.gemData = candidateGemData
-								gemInstance.grantedEffect = candidateGrantedEffect
-								gemInstance.level = candidateLevel
-								gemInstance.quality = candidateQuality
-								gemInstance.qualityId = "Default"
-								gemInstance.imbuedSupport = nil
-								gemInstance.corrupted = currentCorrupted and candidateLevel > candidateGemData.naturalMaxLevel or candidateQuality > 20
-								skillsTab:ProcessSocketGroup(socketGroup)
-								local errMsg, output = PCall(calcFunc, nil, useFullDPS)
-								local processedGem = socketGroup.gemList[gemIndex]
-								if not errMsg and isLevelUsable(skillsTab, processedGem, candidateGrantedEffect, candidateLevel, output) then
-									local upgradedValue = getStatValue(output, currentStat)
-									local delta = upgradedValue - baseValue
-									local score = lowerIsBetter and -delta or delta
-									local improvementPct = 0
-									local hasImprovementPct = false
-									if baseValue ~= 0 then
-										hasImprovementPct = true
-										improvementPct = score / m_abs(baseValue) * 100
+							local candidateStates = { }
+							local seenStates = { }
+							addDistinctState(candidateStates, seenStates, m_min(currentLevel, candidateMaxLevel), m_min(currentQuality, 23))
+							if candidateMaxLevel >= 21 and candidateGrantedEffect.levels[21] then
+								addDistinctState(candidateStates, seenStates, 21, 20)
+							end
+							if (candidateGemData.naturalMaxLevel or 0) >= 20 then
+								addDistinctState(candidateStates, seenStates, 20, 23)
+							end
+
+							for _, candidateState in ipairs(candidateStates) do
+								local candidateLevel = candidateState.level
+								local candidateQuality = candidateState.quality
+								if candidateGrantedEffect.levels[candidateLevel] then
+									gemInstance.gemId = candidateGemData.id
+									gemInstance.nameSpec = candidateGemData.name
+									gemInstance.skillId = candidateGemData.grantedEffectId
+									gemInstance.gemData = candidateGemData
+									gemInstance.grantedEffect = candidateGrantedEffect
+									gemInstance.level = candidateLevel
+									gemInstance.quality = candidateQuality
+									gemInstance.qualityId = "Default"
+									gemInstance.imbuedSupport = nil
+									gemInstance.corrupted = (candidateLevel > (candidateGemData.naturalMaxLevel or 0)) or candidateQuality > 20
+									skillsTab:ProcessSocketGroup(socketGroup)
+									local errMsg, output = PCall(calcFunc, nil, useFullDPS)
+									local processedGem = socketGroup.gemList[gemIndex]
+									if not errMsg and isLevelUsable(skillsTab, processedGem, candidateGrantedEffect, candidateLevel, output) then
+										local upgradedValue = getStatValue(output, currentStat)
+										local delta = upgradedValue - baseValue
+										local score = lowerIsBetter and -delta or delta
+										local improvementPct = 0
+										local hasImprovementPct = false
+										if baseValue ~= 0 then
+											hasImprovementPct = true
+											improvementPct = score / m_abs(baseValue) * 100
+										end
+
+										local reportRow = {
+											type = "Support",
+											sourceType = "SUPPORT_REPLACEMENT",
+											skillName = activeSkillName,
+											groupLabel = socketGroup.displayLabel or socketGroup.label or ("Socket Group " .. groupIndex),
+											name = currentName,
+											currentState = currentState,
+											candidateName = candidateGemData.name,
+											candidateState = s_format("%d/%d", candidateLevel, candidateQuality),
+											currentLabel = currentName .. " " .. currentState,
+											candidateLabel = candidateGemData.name .. " " .. s_format("%d/%d", candidateLevel, candidateQuality),
+											level = currentState,
+											nextLevel = s_format("%s %d/%d", candidateGemData.name, candidateLevel, candidateQuality),
+											curSort = currentName .. "|" .. currentState,
+											nextSort = candidateGemData.name .. "|" .. s_format("%02d/%02d", candidateLevel, candidateQuality),
+											delta = delta,
+											deltaStr = formatDelta(delta, displayStat, lowerIsBetter),
+											score = score,
+											improvementPct = improvementPct,
+											hasImprovementPct = hasImprovementPct,
+											socketGroup = socketGroup,
+											gemIndex = gemIndex,
+											currentGemId = currentGemId,
+											currentQualityId = currentQualityId,
+											candidateGemId = candidateGemData.id,
+											candidateLevel = candidateLevel,
+											candidateQuality = candidateQuality,
+											candidateQualityId = "Default",
+											tradeGemNameSpec = getTradeGemNameSpec(candidateGemData),
+											tradeQualityId = "Default",
+											tradeNaturalMaxLevel = candidateGemData.naturalMaxLevel,
+											targetLevel = candidateLevel,
+											targetQuality = candidateQuality,
+											useFullDPS = useFullDPS,
+										}
+										if isRowAllowedByFilters(reportRow, filters) then
+											t_insert(report, reportRow)
+										end
 									end
 
-									local reportRow = {
-										type = "Support",
-										sourceType = "SUPPORT_REPLACEMENT",
-										skillName = activeSkillName,
-										groupLabel = socketGroup.displayLabel or socketGroup.label or ("Socket Group " .. groupIndex),
-										name = currentName,
-										currentState = currentState,
-										candidateName = candidateGemData.name,
-										candidateState = s_format("%d/%d", candidateLevel, candidateQuality),
-										currentLabel = currentName .. " " .. currentState,
-										candidateLabel = candidateGemData.name .. " " .. s_format("%d/%d", candidateLevel, candidateQuality),
-										level = currentState,
-										nextLevel = s_format("%s %d/%d", candidateGemData.name, candidateLevel, candidateQuality),
-										curSort = currentName .. "|" .. currentState,
-										nextSort = candidateGemData.name .. "|" .. s_format("%02d/%02d", candidateLevel, candidateQuality),
-										delta = delta,
-										deltaStr = formatDelta(delta, displayStat, lowerIsBetter),
-										score = score,
-										improvementPct = improvementPct,
-										hasImprovementPct = hasImprovementPct,
-										socketGroup = socketGroup,
-										gemIndex = gemIndex,
-										currentGemId = currentGemId,
-										currentQualityId = currentQualityId,
-										candidateGemId = candidateGemData.id,
-										candidateLevel = candidateLevel,
-										candidateQuality = candidateQuality,
-										candidateQualityId = "Default",
-										useFullDPS = useFullDPS,
-									}
-									if isRowAllowedByFilters(reportRow, filters) then
-										t_insert(report, reportRow)
-									end
+									gemInstance.gemId = currentGemId
+									gemInstance.nameSpec = currentNameSpec
+									gemInstance.skillId = currentSkillId
+									gemInstance.gemData = skillsTab.build.data.gems[currentGemId]
+									gemInstance.grantedEffect = gemInstance.gemData and gemInstance.gemData.grantedEffect
+									gemInstance.level = currentLevel
+									gemInstance.quality = currentQuality
+									gemInstance.qualityId = currentQualityId
+									gemInstance.imbuedSupport = currentImbuedSupport
+									gemInstance.corrupted = currentCorrupted
+									skillsTab:ProcessSocketGroup(socketGroup)
 								end
-
-								gemInstance.gemId = currentGemId
-								gemInstance.nameSpec = currentNameSpec
-								gemInstance.skillId = currentSkillId
-								gemInstance.gemData = skillsTab.build.data.gems[currentGemId]
-								gemInstance.grantedEffect = gemInstance.gemData and gemInstance.gemData.grantedEffect
-								gemInstance.level = currentLevel
-								gemInstance.quality = currentQuality
-								gemInstance.qualityId = currentQualityId
-								gemInstance.imbuedSupport = currentImbuedSupport
-								gemInstance.corrupted = currentCorrupted
-								skillsTab:ProcessSocketGroup(socketGroup)
 							end
 						end
 					end

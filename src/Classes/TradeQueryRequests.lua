@@ -5,6 +5,7 @@
 --
 
 local dkjson = require "dkjson"
+local m_min = math.min
 
 ---@class TradeQueryRequests
 local TradeQueryRequestsClass = newClass("TradeQueryRequests", function(self, rateLimiter)
@@ -15,6 +16,7 @@ local TradeQueryRequestsClass = newClass("TradeQueryRequests", function(self, ra
 		["search"] = {},
 		["fetch"] = {},
 	}
+	self.lastWaitLog = { }
 	self.hostName = "https://www.pathofexile.com/"
 end)
 
@@ -27,20 +29,34 @@ function TradeQueryRequestsClass:ProcessQueue()
 			local timeNext = self.rateLimiter:NextRequestTime(policy, now)
 			if not (queue[1].retryTime and now < queue[1].retryTime) then
 				if now >= timeNext then
+					self.lastWaitLog[key] = nil
 					local request = table.remove(queue, 1)
 					local requestId = self.rateLimiter:InsertRequest(policy)
+					ConPrintf("[TradeQueryRequests] dispatch %s %s", key, request.url)
 					local onComplete = function(response, errMsg)
+						response = response or { header = "", body = "" }
+						local header = response.header or ""
 						self.rateLimiter:FinishRequest(policy, requestId)
-						self.rateLimiter:UpdateFromHeader(response.header)
-						if response.header:match("HTTP/[%d%.]+ (%d+)") == "429" then
+						if header ~= "" then
+							self.rateLimiter:UpdateFromHeader(header)
+						end
+						local responseCode = header:match("HTTP/[%d%.]+ (%d+)")
+						if responseCode then
+							ConPrintf("[TradeQueryRequests] complete %s %s -> %s", key, request.url, responseCode)
+						elseif errMsg then
+							ConPrintf("[TradeQueryRequests] complete %s %s -> error: %s", key, request.url, tostring(errMsg))
+						end
+						if responseCode == "429" then
 							request.attempts = (request.attempts or 0) + 1
 							local backoff = m_min(2 ^ request.attempts, 60)
 							request.retryTime = os.time() + backoff
+							ConPrintf("[TradeQueryRequests] rate limited %s %s, retry in %ds", key, request.url, backoff)
 							table.insert(queue, 1, request)
 							return
 						end
 						-- if limit rules don't return account then the POESESSID is invalid.
-						if response.header:match("[xX]%-[rR]ate%-[lL]imit%-[rR]ules: (.-)\n"):match("Account") == nil and main.POESESSID ~= "" then
+						local rateLimitRules = header:match("[xX]%-[rR]ate%-[lL]imit%-[rR]ules: (.-)\n")
+						if rateLimitRules and rateLimitRules:match("Account") == nil and main.POESESSID ~= "" then
 							main.POESESSID = ""
 							if errMsg then
 								errMsg = errMsg .. "\nPOESESSID is invalid. Please Re-Log and reset"
@@ -55,14 +71,24 @@ function TradeQueryRequestsClass:ProcessQueue()
 					if main.POESESSID ~= "" then
 						header = header .. "\nCookie: POESESSID=" .. main.POESESSID
 					end
+					if request.onDispatch then
+						request.onDispatch()
+					end
 					launch:DownloadPage(request.url, onComplete, {
 						header = header,
 						body = request.body,
 					})
 				else
+					local waitSeconds = timeNext - now
+					if self.lastWaitLog[key] ~= waitSeconds then
+						self.lastWaitLog[key] = waitSeconds
+						ConPrintf("[TradeQueryRequests] waiting %s for %ds", key, waitSeconds)
+					end
 					break
 				end
 			end
+		else
+			self.lastWaitLog[key] = nil
 		end
 	end
 end
@@ -83,7 +109,7 @@ function TradeQueryRequestsClass:SearchWithQuery(realm, league, query, callback,
 			return callback(nil, errMsg)
 		end
 		self:FetchResults(response.result, response.id, callback)
-	end)
+	end, params)
 end
 
 ---Performs search and fetches results, adjusting the query weight and repeating
@@ -193,10 +219,12 @@ end
 ---@param league string
 ---@param query string
 ---@param callback fun(response:table, errMsg:string)
-function TradeQueryRequestsClass:PerformSearch(realm, league, query, callback)
+function TradeQueryRequestsClass:PerformSearch(realm, league, query, callback, params)
+	params = params or {}
 	table.insert(self.requestQueue["search"], {
 		url = self:buildUrl(self.hostName .. "api/trade/search", realm, league),
 		body = query,
+		onDispatch = params.onDispatch,
 		callback = function(response, errMsg)
 			if errMsg and not errMsg:find("Response code: 400") then
 				return callback(nil, errMsg)
@@ -282,11 +310,13 @@ function TradeQueryRequestsClass:FetchResultBlock(url, callback)
 			end
 			local items = {}
 			for _, trade_entry in pairs(response.result) do
+				local price = trade_entry.listing and trade_entry.listing.price or {}
+				local extendedText = trade_entry.item and trade_entry.item.extended and trade_entry.item.extended.text
 				table.insert(items, {
-					amount = trade_entry.listing.price.amount,
-					currency = trade_entry.listing.price.currency,
-					item_string = common.base64.decode(trade_entry.item.extended.text),
-					whisper = trade_entry.listing.whisper,
+					amount = price.amount,
+					currency = price.currency,
+					item_string = extendedText and common.base64.decode(extendedText) or nil,
+					whisper = trade_entry.listing and trade_entry.listing.whisper,
 					weight = trade_entry.item.pseudoMods and trade_entry.item.pseudoMods[1]:match("Sum: (.+)") or "0",
 					id = trade_entry.id
 				})
