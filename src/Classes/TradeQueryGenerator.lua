@@ -83,12 +83,13 @@ local tradeStatCategoryIndices = {
 }
 
 local influenceSuffixes = { "_shaper", "_elder", "_adjudicator", "_basilisk", "_crusader", "_eyrie"}
-local INFLUENCE_ANY_INDEX = 1
+local INFLUENCE_IGNORE_INDEX = 1
 local INFLUENCE_NONE_INDEX = 2
-local influenceDropdownNames = { "Any", "None" }
+local INFLUENCE_ANY_INDEX = 3
+local influenceDropdownNames = { "Ignore", "None", "Any" }
 local hasInfluenceModIds = { }
 for i, curInfluenceInfo in ipairs(itemLib.influenceInfo.default) do
-	influenceDropdownNames[i + INFLUENCE_NONE_INDEX] = curInfluenceInfo.display
+	influenceDropdownNames[i + INFLUENCE_ANY_INDEX] = curInfluenceInfo.display
 	hasInfluenceModIds[i] = "pseudo.pseudo_has_" .. string.lower(curInfluenceInfo.display) .. "_influence"
 end
 
@@ -106,8 +107,12 @@ local function logToFile(...)
 	ConPrintf(...)
 end
 
+local function isIgnoredSelection(selectionIndex)
+	return selectionIndex == nil or selectionIndex == INFLUENCE_IGNORE_INDEX
+end
+
 local function isSpecificInfluenceSelection(selectionIndex)
-	return selectionIndex and selectionIndex > INFLUENCE_NONE_INDEX
+	return selectionIndex and selectionIndex > INFLUENCE_ANY_INDEX
 end
 
 local function isNoInfluenceSelection(selectionIndex)
@@ -118,7 +123,61 @@ local function getInfluenceInfoForSelection(selectionIndex)
 	if not isSpecificInfluenceSelection(selectionIndex) then
 		return nil
 	end
-	return itemLib.influenceInfo.default[selectionIndex - INFLUENCE_NONE_INDEX]
+	return itemLib.influenceInfo.default[selectionIndex - INFLUENCE_ANY_INDEX]
+end
+
+-- Influence dropdown semantics:
+-- Ignore = no constraint for that slot, None = missing influence slot,
+-- Any = present but unspecified influence slot, Specific = named influence slot.
+local function resolveInfluenceQueryState(selection1, selection2)
+	local state = {
+		exactCount = nil,
+		minCount = nil,
+		specificInfluenceModIds = { },
+	}
+	local positiveSelectionCount = 0
+	local ignoreSelectionCount = 0
+	local noneSelectionCount = 0
+	local seenSpecificInfluenceModIds = { }
+
+	for _, selectionIndex in ipairs({ selection1 or INFLUENCE_IGNORE_INDEX, selection2 or INFLUENCE_IGNORE_INDEX }) do
+		if isIgnoredSelection(selectionIndex) then
+			ignoreSelectionCount = ignoreSelectionCount + 1
+		elseif isNoInfluenceSelection(selectionIndex) then
+			noneSelectionCount = noneSelectionCount + 1
+		else
+			positiveSelectionCount = positiveSelectionCount + 1
+			if isSpecificInfluenceSelection(selectionIndex) then
+				local influenceModId = hasInfluenceModIds[selectionIndex - INFLUENCE_ANY_INDEX]
+				if not seenSpecificInfluenceModIds[influenceModId] then
+					seenSpecificInfluenceModIds[influenceModId] = true
+					t_insert(state.specificInfluenceModIds, influenceModId)
+				end
+			end
+		end
+	end
+
+	if noneSelectionCount > 0 then
+		state.exactCount = positiveSelectionCount
+	elseif ignoreSelectionCount == 2 then
+		return state
+	elseif ignoreSelectionCount > 0 then
+		if positiveSelectionCount > #state.specificInfluenceModIds then
+			state.minCount = positiveSelectionCount
+		end
+	else
+		state.exactCount = positiveSelectionCount
+	end
+
+	return state
+end
+
+local function getInfluenceFilterCost(influenceState)
+	local cost = #influenceState.specificInfluenceModIds
+	if influenceState.exactCount ~= nil or influenceState.minCount ~= nil then
+		cost = cost + #hasInfluenceModIds
+	end
+	return cost
 end
 
 local TradeQueryGeneratorClass = newClass("TradeQueryGenerator", function(self, queryTab)
@@ -970,18 +1029,8 @@ function TradeQueryGeneratorClass:FinishQuery()
 	}
 
 	local options = self.calcContext.options
-	local forceNoInfluence = isNoInfluenceSelection(options.influence1) or isNoInfluenceSelection(options.influence2)
-	local influenceFilterCost = 0
-	if forceNoInfluence then
-		influenceFilterCost = #hasInfluenceModIds
-	else
-		if isSpecificInfluenceSelection(options.influence1) then
-			influenceFilterCost = influenceFilterCost + 1
-		end
-		if isSpecificInfluenceSelection(options.influence2) then
-			influenceFilterCost = influenceFilterCost + 1
-		end
-	end
+	local influenceState = resolveInfluenceQueryState(options.influence1, options.influence2)
+	local influenceFilterCost = getInfluenceFilterCost(influenceState)
 
 	local num_extra = influenceFilterCost
 	if not options.includeMirrored then
@@ -1019,22 +1068,35 @@ function TradeQueryGeneratorClass:FinishQuery()
 
 	local andFilters = { type = "and", filters = { } }
 	local options = self.calcContext.options
-	if forceNoInfluence then
+	if influenceState.exactCount == 0 then
 		local noInfluenceFilters = { type = "not", filters = { } }
 		for _, modId in ipairs(hasInfluenceModIds) do
 			t_insert(noInfluenceFilters.filters, { id = modId })
 			filters = filters + 1
 		end
 		t_insert(queryTable.query.stats, noInfluenceFilters)
-	else
-		if isSpecificInfluenceSelection(options.influence1) then
-			t_insert(andFilters.filters, { id = hasInfluenceModIds[options.influence1 - INFLUENCE_NONE_INDEX] })
+	elseif influenceState.exactCount ~= nil or influenceState.minCount ~= nil then
+		local countFilters = {
+			type = "count",
+			value = {},
+			filters = { }
+		}
+		if influenceState.exactCount ~= nil then
+			countFilters.value.min = influenceState.exactCount
+			countFilters.value.max = influenceState.exactCount
+		else
+			countFilters.value.min = influenceState.minCount
+		end
+		for _, modId in ipairs(hasInfluenceModIds) do
+			t_insert(countFilters.filters, { id = modId })
 			filters = filters + 1
 		end
-		if isSpecificInfluenceSelection(options.influence2) then
-			t_insert(andFilters.filters, { id = hasInfluenceModIds[options.influence2 - INFLUENCE_NONE_INDEX] })
-			filters = filters + 1
-		end
+		t_insert(queryTable.query.stats, countFilters)
+	end
+
+	for _, modId in ipairs(influenceState.specificInfluenceModIds) do
+		t_insert(andFilters.filters, { id = modId })
+		filters = filters + 1
 	end
 
 	if #andFilters.filters > 0 then
@@ -1185,27 +1247,39 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		updateLastAnchor(controls.jewelType)
 	elseif slot and not isAbyssalJewelSlot then
 		local function normalizeInfluenceSelections(changedControl)
-			if changedControl == 1 and controls.influence1.selIndex == INFLUENCE_NONE_INDEX and controls.influence2.selIndex ~= INFLUENCE_ANY_INDEX then
-				controls.influence2:SetSel(INFLUENCE_ANY_INDEX)
-			elseif changedControl == 2 and controls.influence2.selIndex == INFLUENCE_NONE_INDEX and controls.influence1.selIndex ~= INFLUENCE_ANY_INDEX then
-				controls.influence1:SetSel(INFLUENCE_ANY_INDEX)
-			elseif controls.influence1.selIndex == INFLUENCE_NONE_INDEX and controls.influence2.selIndex ~= INFLUENCE_ANY_INDEX then
-				controls.influence2:SetSel(INFLUENCE_ANY_INDEX)
-			elseif controls.influence2.selIndex == INFLUENCE_NONE_INDEX and controls.influence1.selIndex ~= INFLUENCE_ANY_INDEX then
-				controls.influence1:SetSel(INFLUENCE_ANY_INDEX)
+			local changedDropdown = changedControl == 1 and controls.influence1 or changedControl == 2 and controls.influence2 or nil
+			local otherDropdown = changedControl == 1 and controls.influence2 or changedControl == 2 and controls.influence1 or nil
+
+			if changedDropdown and otherDropdown then
+				if isIgnoredSelection(changedDropdown.selIndex) and isNoInfluenceSelection(otherDropdown.selIndex) then
+					changedDropdown:SetSel(INFLUENCE_NONE_INDEX)
+					return
+				elseif isNoInfluenceSelection(changedDropdown.selIndex) and isIgnoredSelection(otherDropdown.selIndex) then
+					otherDropdown:SetSel(INFLUENCE_NONE_INDEX)
+					return
+				elseif isSpecificInfluenceSelection(changedDropdown.selIndex) and changedDropdown.selIndex == otherDropdown.selIndex then
+					changedDropdown:SetSel(INFLUENCE_ANY_INDEX)
+					return
+				end
+			end
+
+			if isIgnoredSelection(controls.influence1.selIndex) and isNoInfluenceSelection(controls.influence2.selIndex) then
+				controls.influence1:SetSel(INFLUENCE_NONE_INDEX)
+			elseif isNoInfluenceSelection(controls.influence1.selIndex) and isIgnoredSelection(controls.influence2.selIndex) then
+				controls.influence2:SetSel(INFLUENCE_NONE_INDEX)
 			end
 		end
 
 		controls.influence1 = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 100, 18}, influenceDropdownNames, function(index, value)
 			normalizeInfluenceSelections(1)
 		end)
-		controls.influence1.selIndex = self.lastInfluence1 or INFLUENCE_ANY_INDEX
+		controls.influence1.selIndex = self.lastInfluence1 or INFLUENCE_IGNORE_INDEX
 		controls.influence1Label = new("LabelControl", {"RIGHT",controls.influence1,"LEFT"}, {-5, 0, 0, 16}, "Influence 1:")
 
 		controls.influence2 = new("DropDownControl", {"TOPLEFT",controls.influence1,"BOTTOMLEFT"}, {0, 5, 100, 18}, influenceDropdownNames, function(index, value)
 			normalizeInfluenceSelections(2)
 		end)
-		controls.influence2.selIndex = self.lastInfluence2 or INFLUENCE_ANY_INDEX
+		controls.influence2.selIndex = self.lastInfluence2 or INFLUENCE_IGNORE_INDEX
 		controls.influence2Label = new("LabelControl", {"RIGHT",controls.influence2,"LEFT"}, {-5, 0, 0, 16}, "Influence 2:")
 		normalizeInfluenceSelections()
 		updateLastAnchor(controls.influence2, 46)
@@ -1294,12 +1368,12 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		if controls.influence1 then
 			self.lastInfluence1, options.influence1 = controls.influence1.selIndex, controls.influence1.selIndex
 		else
-			options.influence1 = 1
+			options.influence1 = INFLUENCE_IGNORE_INDEX
 		end
 		if controls.influence2 then
 			self.lastInfluence2, options.influence2 = controls.influence2.selIndex, controls.influence2.selIndex
 		else
-			options.influence2 = 1
+			options.influence2 = INFLUENCE_IGNORE_INDEX
 		end
 		if controls.jewelType then
 			self.lastJewelType = controls.jewelType.selIndex
