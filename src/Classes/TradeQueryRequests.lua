@@ -32,7 +32,6 @@ function TradeQueryRequestsClass:ProcessQueue()
 					self.lastWaitLog[key] = nil
 					local request = table.remove(queue, 1)
 					local requestId = self.rateLimiter:InsertRequest(policy)
-					ConPrintf("[TradeQueryRequests] dispatch %s %s", key, request.url)
 					local onComplete = function(response, errMsg)
 						response = response or { header = "", body = "" }
 						local header = response.header or ""
@@ -41,16 +40,10 @@ function TradeQueryRequestsClass:ProcessQueue()
 							self.rateLimiter:UpdateFromHeader(header)
 						end
 						local responseCode = header:match("HTTP/[%d%.]+ (%d+)")
-						if responseCode then
-							ConPrintf("[TradeQueryRequests] complete %s %s -> %s", key, request.url, responseCode)
-						elseif errMsg then
-							ConPrintf("[TradeQueryRequests] complete %s %s -> error: %s", key, request.url, tostring(errMsg))
-						end
 						if responseCode == "429" then
 							request.attempts = (request.attempts or 0) + 1
 							local backoff = m_min(2 ^ request.attempts, 60)
 							request.retryTime = os.time() + backoff
-							ConPrintf("[TradeQueryRequests] rate limited %s %s, retry in %ds", key, request.url, backoff)
 							table.insert(queue, 1, request)
 							return
 						end
@@ -82,7 +75,6 @@ function TradeQueryRequestsClass:ProcessQueue()
 					local waitSeconds = timeNext - now
 					if self.lastWaitLog[key] ~= waitSeconds then
 						self.lastWaitLog[key] = waitSeconds
-						ConPrintf("[TradeQueryRequests] waiting %s for %ds", key, waitSeconds)
 					end
 					break
 				end
