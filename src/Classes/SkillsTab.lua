@@ -720,6 +720,8 @@ local function formatTradePrice(amount, currency)
 end
 
 local gemTradeQueuePumpKey = "SkillsTabGemTradeQueuePump"
+local gemReportBuildPumpKey = "SkillsTabReportBuild"
+local gemReportInitPumpKey = "SkillsTabReportInit"
 
 local function loadTradeCurrencyConversionFromFile(tradeQuery, league)
 	if not (tradeQuery and league and league ~= "") then
@@ -1346,6 +1348,74 @@ function SkillsTabClass:OpenGemTradeSessionPopup(refreshReport)
 		main:ClosePopup()
 	end)
 	main:OpenPopup(364, 72, "Change session ID", poesessidControls)
+end
+
+function SkillsTabClass:StartGemReportBuild(popupSession, buildFunction, progressFunction, completeFunction, errorFunction)
+	self.currentReportBuildSession = popupSession
+	self:StopGemReportBuild()
+	local buildState = {
+		report = { },
+		batchSize = 1,
+		completedGroups = 0,
+		totalGroups = 0,
+	}
+	local buildCoroutine = coroutine.create(function()
+		return buildFunction(buildState)
+	end)
+	main.onFrameFuncs[gemReportBuildPumpKey] = function()
+		if self.currentReportBuildSession ~= popupSession then
+			main.onFrameFuncs[gemReportBuildPumpKey] = nil
+			return
+		end
+		local resumed = false
+		for _ = 1, 2 do
+			if coroutine.status(buildCoroutine) == "dead" then
+				break
+			end
+			local ok, result = coroutine.resume(buildCoroutine)
+			if not ok then
+				main.onFrameFuncs[gemReportBuildPumpKey] = nil
+				if errorFunction then
+					errorFunction(result, buildState)
+				end
+				return
+			end
+			resumed = true
+			if coroutine.status(buildCoroutine) == "dead" then
+				main.onFrameFuncs[gemReportBuildPumpKey] = nil
+				if completeFunction then
+					completeFunction(result or buildState.report, buildState)
+				end
+				return
+			end
+		end
+		if resumed and progressFunction then
+			progressFunction(buildState.report, buildState)
+		end
+	end
+end
+
+function SkillsTabClass:StopGemReportBuild()
+	main.onFrameFuncs[gemReportBuildPumpKey] = nil
+	main.onFrameFuncs[gemReportInitPumpKey] = nil
+end
+
+local function getReportBuildStatusText(prefix, buildState)
+	local completedGroups = buildState and buildState.completedGroups or 0
+	local totalGroups = buildState and buildState.totalGroups or 0
+	if totalGroups and totalGroups > 0 then
+		return string.format("^7%s... %d/%d groups", prefix, completedGroups, totalGroups)
+	end
+	return "^7" .. prefix .. "..."
+end
+
+function SkillsTabClass:DeferGemReportInit(popupSession, callback)
+	main.onFrameFuncs[gemReportInitPumpKey] = function()
+		main.onFrameFuncs[gemReportInitPumpKey] = nil
+		if self.currentReportBuildSession == popupSession and callback then
+			callback()
+		end
+	end
 end
 
 function SkillsTabClass:StartGemTradeQueuePump(popupSession)
@@ -2097,28 +2167,32 @@ function SkillsTabClass:OpenGemUpgradePopup()
 	local refreshReport
 	local rawReportCacheByStat = { }
 	local rawReportCacheRevision = -1
+	local deferInitialLoad = true
+	self.currentReportBuildSession = (self.currentReportBuildSession or 0) + 1
+	local popupSession = self.currentReportBuildSession
 	controls.sortLabel = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 24, 0, 16 }, "^7Sort by:")
 	controls.sortSelect = new("DropDownControl", { "LEFT", controls.sortLabel, "RIGHT" }, { 8, 0, 220, 20 }, self.gemUpgradeSortStatList, function(index, selected)
 		self.gemUpgradeSortStat = selected or self.gemUpgradeSortStat
-		if refreshReport then
+		if refreshReport and not deferInitialLoad then
 			refreshReport(true)
 		end
 	end)
 	controls.impactLabel = new("LabelControl", { "LEFT", controls.sortSelect, "RIGHT" }, { 20, 0, 0, 16 }, "^7Impact:")
 	controls.impactSelect = new("DropDownControl", { "LEFT", controls.impactLabel, "RIGHT" }, { 8, 0, 160, 20 }, gemUpgradeImpactFilterList, function(index, selected)
 		self.gemUpgradeImpactFilter = selected and selected.value or self.gemUpgradeImpactFilter
-		if refreshReport then
+		if refreshReport and not deferInitialLoad then
 			refreshReport(false)
 		end
 	end)
 	controls.sourceLabel = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 52, 0, 16 }, "^7Method:")
 	controls.sourceSelect = new("DropDownControl", { "LEFT", controls.sourceLabel, "RIGHT" }, { 8, 0, 160, 20 }, gemUpgradeSourceFilterList, function(index, selected)
 		self.gemUpgradeSourceFilter = selected and selected.value or self.gemUpgradeSourceFilter
-		if refreshReport then
+		if refreshReport and not deferInitialLoad then
 			refreshReport(false)
 		end
 	end)
-	controls.reportList = new("GemUpgradeReportListControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 84, 860, 392 }, function(reportRow, doubleClick)
+	controls.reportStatus = new("LabelControl", { "LEFT", controls.sourceSelect, "RIGHT" }, { 16, 0, 0, 16 }, "^7Loading report...")
+	controls.reportList = new("GemUpgradeReportListControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 100, 860, 376 }, function(reportRow, doubleClick)
 		if doubleClick then
 			self:SelectGemFromUpgradeReport(reportRow, 1)
 		end
@@ -2146,6 +2220,7 @@ function SkillsTabClass:OpenGemUpgradePopup()
 		self:AddGemUpgradeReportTooltip(tooltip, reportRow)
 	end)
 	controls.close = new("ButtonControl", { "TOP", controls.reportList, "BOTTOM" }, { 0, 12, 90, 20 }, "Close", function()
+		self:StopGemReportBuild()
 		main:ClosePopup()
 	end)
 	refreshReport = function(forceRebuild)
@@ -2157,15 +2232,60 @@ function SkillsTabClass:OpenGemUpgradePopup()
 			forceRebuild = true
 		end
 		local statKey = selectedStat and selectedStat.stat or ""
-			if forceRebuild or not rawReportCacheByStat[statKey] then
-				rawReportCacheByStat[statKey] = gemUpgradeReport.Build(self, selectedStat)
-			end
-			local filteredReport = gemUpgradeReport.Filter(rawReportCacheByStat[statKey], {
-				impact = self.gemUpgradeImpactFilter,
-				source = self.gemUpgradeSourceFilter,
-			})
-			controls.reportList:SetReport(selectedStat, filteredReport)
+		local buildEntry = rawReportCacheByStat[statKey]
+		if forceRebuild or not buildEntry then
+			buildEntry = {
+				report = { },
+				loading = true,
+			}
+			rawReportCacheByStat[statKey] = buildEntry
+			controls.reportStatus.label = getReportBuildStatusText("Loading report", buildEntry)
+			self:StartGemReportBuild(
+				popupSession,
+				function(buildState)
+					buildEntry.report = buildState.report
+					return gemUpgradeReport.Build(self, selectedStat, nil, buildState)
+				end,
+				function(partialReport, buildState)
+					if rawReportCacheByStat[statKey] ~= buildEntry or self.currentReportBuildSession ~= popupSession then
+						return
+					end
+					buildEntry.report = partialReport
+					buildEntry.loading = true
+					buildEntry.completedGroups = buildState.completedGroups
+					buildEntry.totalGroups = buildState.totalGroups
+					refreshReport(false)
+				end,
+				function(finalReport, buildState)
+					if rawReportCacheByStat[statKey] ~= buildEntry or self.currentReportBuildSession ~= popupSession then
+						return
+					end
+					buildEntry.report = finalReport
+					buildEntry.loading = false
+					buildEntry.completedGroups = buildState.completedGroups
+					buildEntry.totalGroups = buildState.totalGroups
+					refreshReport(false)
+				end,
+				function(errMsg)
+					if self.currentReportBuildSession ~= popupSession then
+						return
+					end
+					buildEntry.loading = false
+					controls.reportStatus.label = "^1Error: " .. tostring(errMsg)
+				end
+			)
 		end
+		local filteredReport = gemUpgradeReport.Filter(buildEntry.report, {
+			impact = self.gemUpgradeImpactFilter,
+			source = self.gemUpgradeSourceFilter,
+		})
+		controls.reportList:SetReport(selectedStat, filteredReport)
+		if buildEntry.loading then
+			controls.reportStatus.label = getReportBuildStatusText("Loading report", buildEntry)
+		else
+			controls.reportStatus.label = "^7Hover for details, double-click to jump to gem"
+		end
+	end
 
 	main:OpenPopup(900, 520, "Gem Upgrade Report", controls, nil, nil, "close")
 	controls.sortSelect:SelByValue((self.gemUpgradeSortStat and self.gemUpgradeSortStat.stat) or self.sortGemsByDPSField or "CombinedDPS", "stat")
@@ -2174,7 +2294,10 @@ function SkillsTabClass:OpenGemUpgradePopup()
 	self.gemUpgradeImpactFilter = (controls.impactSelect.list[controls.impactSelect.selIndex] or controls.impactSelect.list[1]).value
 	controls.sourceSelect:SelByValue(self.gemUpgradeSourceFilter, "value")
 	self.gemUpgradeSourceFilter = (controls.sourceSelect.list[controls.sourceSelect.selIndex] or controls.sourceSelect.list[1]).value
-	refreshReport(true)
+	self:DeferGemReportInit(popupSession, function()
+		deferInitialLoad = false
+		refreshReport(true)
+	end)
 end
 
 function SkillsTabClass:OpenGemTradePopup()
@@ -2184,6 +2307,7 @@ function SkillsTabClass:OpenGemTradePopup()
 	local rawReportCacheRevision = -1
 	local tradeQuery = self.build and self.build.itemsTab and self.build.itemsTab.tradeQuery
 	local leagueList = buildGemTradeLeagueList(tradeQuery)
+	local deferInitialLoad = true
 	self.gemTradePopupSession = (self.gemTradePopupSession or 0) + 1
 	local popupSession = self.gemTradePopupSession
 	self.gemTradePriceFetchBudget = 0
@@ -2191,7 +2315,7 @@ function SkillsTabClass:OpenGemTradePopup()
 	controls.sortLabel = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 24, 0, 16 }, "^7Sort by:")
 	controls.sortSelect = new("DropDownControl", { "LEFT", controls.sortLabel, "RIGHT" }, { 8, 0, 220, 20 }, self.gemUpgradeSortStatList, function(index, selected)
 		self.gemUpgradeSortStat = selected or self.gemUpgradeSortStat
-		if refreshReport then
+		if refreshReport and not deferInitialLoad then
 			self.gemTradePricePendingPrime = false
 			refreshReport(true, false)
 		end
@@ -2199,7 +2323,7 @@ function SkillsTabClass:OpenGemTradePopup()
 	controls.impactLabel = new("LabelControl", { "LEFT", controls.sortSelect, "RIGHT" }, { 20, 0, 0, 16 }, "^7Impact:")
 	controls.impactSelect = new("DropDownControl", { "LEFT", controls.impactLabel, "RIGHT" }, { 8, 0, 160, 20 }, gemUpgradeImpactFilterList, function(index, selected)
 		self.gemUpgradeImpactFilter = selected and selected.value or self.gemUpgradeImpactFilter
-		if refreshReport then
+		if refreshReport and not deferInitialLoad then
 			self.gemTradePricePendingPrime = false
 			refreshReport(false, false)
 		end
@@ -2208,12 +2332,13 @@ function SkillsTabClass:OpenGemTradePopup()
 	controls.leagueSelect = new("DropDownControl", { "LEFT", controls.leagueLabel, "RIGHT" }, { 8, 0, 200, 20 }, leagueList, function(index, selected)
 		self.gemTradeLeague = selected or self.gemTradeLeague
 		self.gemTradePricePendingPrime = false
-		if refreshReport then
+		if refreshReport and not deferInitialLoad then
 			refreshReport(false, false)
 		end
 	end)
 	controls.priceStatus = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 52, 0, 16 }, "^7Prices: click Fetch Prices to begin.")
-	controls.reportList = new("GemTradeReportListControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 84, 860, 392 }, function(reportRow, doubleClick)
+	controls.reportStatus = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 68, 0, 16 }, "^7Loading report...")
+	controls.reportList = new("GemTradeReportListControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 100, 860, 376 }, function(reportRow, doubleClick)
 		if doubleClick then
 			self:SelectGemFromUpgradeReport(reportRow, 1)
 		end
@@ -2244,6 +2369,7 @@ function SkillsTabClass:OpenGemTradePopup()
 		self:AddGemUpgradeReportTooltip(tooltip, reportRow)
 	end)
 	controls.close = new("ButtonControl", { "TOP", controls.reportList, "BOTTOM" }, { 0, 12, 90, 20 }, "Close", function()
+		self:StopGemReportBuild()
 		self:StopGemTradeQueuePump()
 		main:ClosePopup()
 	end)
@@ -2264,7 +2390,7 @@ function SkillsTabClass:OpenGemTradePopup()
 		end
 	end)
 	controls.fetchMore.enabled = function()
-		return controls.fetchMore.hasQueued
+		return controls.fetchMore.hasQueued and not controls.fetchMore.reportLoading
 	end
 	controls.fetchMore.tooltipFunc = function(tooltip)
 		tooltip:Clear()
@@ -2304,9 +2430,49 @@ Without it, price fetching may fail or return limited results.]]
 		end
 		local statKey = selectedStat and selectedStat.stat or ""
 		if forceRebuild or not rawReportCacheByStat[statKey] then
-			rawReportCacheByStat[statKey] = gemTradeReport.Build(self, selectedStat)
+			local buildEntry = {
+				report = { },
+				loading = true,
+			}
+			rawReportCacheByStat[statKey] = buildEntry
+			controls.reportStatus.label = getReportBuildStatusText("Loading report", buildEntry)
+			self:StartGemReportBuild(
+				popupSession,
+				function(buildState)
+					buildEntry.report = buildState.report
+					return gemTradeReport.Build(self, selectedStat, nil, buildState)
+				end,
+				function(partialReport, buildState)
+					if rawReportCacheByStat[statKey] ~= buildEntry or self.currentReportBuildSession ~= popupSession then
+						return
+					end
+					buildEntry.report = partialReport
+					buildEntry.loading = true
+					buildEntry.completedGroups = buildState.completedGroups
+					buildEntry.totalGroups = buildState.totalGroups
+					refreshReport(false, false)
+				end,
+				function(finalReport, buildState)
+					if rawReportCacheByStat[statKey] ~= buildEntry or self.currentReportBuildSession ~= popupSession then
+						return
+					end
+					buildEntry.report = finalReport
+					buildEntry.loading = false
+					buildEntry.completedGroups = buildState.completedGroups
+					buildEntry.totalGroups = buildState.totalGroups
+					refreshReport(false, false)
+				end,
+				function(errMsg)
+					if self.currentReportBuildSession ~= popupSession then
+						return
+					end
+					buildEntry.loading = false
+					controls.reportStatus.label = "^1Error: " .. tostring(errMsg)
+				end
+			)
 		end
-		local filteredReport = gemTradeReport.Filter(rawReportCacheByStat[statKey], {
+		local buildEntry = rawReportCacheByStat[statKey]
+		local filteredReport = gemTradeReport.Filter(buildEntry.report, {
 			impact = self.gemUpgradeImpactFilter,
 		})
 		local imbuedSupportStatIds = self:GetGemTradeImbuedSupportStats()
@@ -2326,14 +2492,23 @@ Without it, price fetching may fail or return limited results.]]
 		self:ApplyGemTradePriceCache(filteredReport, selectedLeague)
 		controls.reportList:SetReport(selectedStat, filteredReport)
 		local displayReport = controls.reportList.list or filteredReport
-		self:UpdateGemTradePriceStatus(controls, displayReport)
+		controls.fetchMore.reportLoading = buildEntry.loading
+		if buildEntry.loading then
+			controls.reportStatus.label = getReportBuildStatusText("Loading report", buildEntry)
+			controls.priceStatus.label = "^7Prices: report is still loading..."
+			controls.fetchMore.hasQueued = false
+		else
+			controls.reportStatus.label = "^7Hover for details, double-click to jump to gem"
+			self:UpdateGemTradePriceStatus(controls, displayReport)
+		end
 		self:UpdateGemTradeCurrencyConversionButton(controls)
-		if primePrices then
+		if primePrices and not buildEntry.loading then
 			self:PrimeGemTradePrices(displayReport, controls, refreshReport, selectedLeague)
 		end
 	end
 
 	main:OpenPopup(900, 520, "Gem Trade Report", controls, nil, nil, "close")
+	self.currentReportBuildSession = popupSession
 	self:StartGemTradeQueuePump(popupSession)
 	controls.sortSelect:SelByValue((self.gemUpgradeSortStat and self.gemUpgradeSortStat.stat) or self.sortGemsByDPSField or "CombinedDPS", "stat")
 	self.gemUpgradeSortStat = controls.sortSelect.list[controls.sortSelect.selIndex] or self.gemUpgradeSortStatList[1]
@@ -2343,7 +2518,10 @@ Without it, price fetching may fail or return limited results.]]
 	self.gemTradeLeague = controls.leagueSelect.list[controls.leagueSelect.selIndex] or self.gemTradeLeague or resolveTradeLeague(tradeQuery)
 	self:EnsureGemTradeLeagueList(controls, refreshReport)
 	self:UpdateGemTradeCurrencyConversionButton(controls)
-	refreshReport(true, false)
+	self:DeferGemReportInit(popupSession, function()
+		deferInitialLoad = false
+		refreshReport(true, false)
+	end)
 end
 
 function SkillsTabClass:OpenSupportReplacementPopup()
@@ -2351,18 +2529,18 @@ function SkillsTabClass:OpenSupportReplacementPopup()
 	local refreshReport
 	local rawReportCacheByStat = { }
 	local rawReportCacheRevision = -1
+	local deferInitialLoad = true
 	self.gemTradePopupSession = (self.gemTradePopupSession or 0) + 1
 	local popupSession = self.gemTradePopupSession
 	local tradeQuery = self.build and self.build.itemsTab and self.build.itemsTab.tradeQuery
 	local leagueList = buildGemTradeLeagueList(tradeQuery)
-	self.gemTradePopupSession = (self.gemTradePopupSession or 0) + 1
 	self.gemTradePriceFetchBudget = 0
 	self.gemTradePricePendingPrime = false
 
 	controls.sortLabel = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 24, 0, 16 }, "^7Sort by:")
 	controls.sortSelect = new("DropDownControl", { "LEFT", controls.sortLabel, "RIGHT" }, { 8, 0, 220, 20 }, self.gemUpgradeSortStatList, function(index, selected)
 		self.gemUpgradeSortStat = selected or self.gemUpgradeSortStat
-		if refreshReport then
+		if refreshReport and not deferInitialLoad then
 			self.gemTradePricePendingPrime = false
 			refreshReport(true, false)
 		end
@@ -2370,7 +2548,7 @@ function SkillsTabClass:OpenSupportReplacementPopup()
 	controls.impactLabel = new("LabelControl", { "LEFT", controls.sortSelect, "RIGHT" }, { 20, 0, 0, 16 }, "^7Impact:")
 	controls.impactSelect = new("DropDownControl", { "LEFT", controls.impactLabel, "RIGHT" }, { 8, 0, 160, 20 }, gemUpgradeImpactFilterList, function(index, selected)
 		self.gemUpgradeImpactFilter = selected and selected.value or self.gemUpgradeImpactFilter
-		if refreshReport then
+		if refreshReport and not deferInitialLoad then
 			self.gemTradePricePendingPrime = false
 			refreshReport(false, false)
 		end
@@ -2379,12 +2557,13 @@ function SkillsTabClass:OpenSupportReplacementPopup()
 	controls.leagueSelect = new("DropDownControl", { "LEFT", controls.leagueLabel, "RIGHT" }, { 8, 0, 200, 20 }, leagueList, function(index, selected)
 		self.gemTradeLeague = selected or self.gemTradeLeague
 		self.gemTradePricePendingPrime = false
-		if refreshReport then
+		if refreshReport and not deferInitialLoad then
 			refreshReport(false, false)
 		end
 	end)
 	controls.priceStatus = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 52, 0, 16 }, "^7Prices: click Fetch Prices to begin.")
-	controls.reportList = new("SupportReplacementReportListControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 84, 860, 392 }, function(reportRow, doubleClick)
+	controls.reportStatus = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 68, 0, 16 }, "^7Loading report...")
+	controls.reportList = new("SupportReplacementReportListControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 100, 860, 376 }, function(reportRow, doubleClick)
 		if doubleClick then
 			self:SelectGemFromUpgradeReport(reportRow, 1)
 		end
@@ -2415,6 +2594,7 @@ function SkillsTabClass:OpenSupportReplacementPopup()
 		end
 	end)
 	controls.close = new("ButtonControl", { "TOP", controls.reportList, "BOTTOM" }, { 0, 12, 90, 20 }, "Close", function()
+		self:StopGemReportBuild()
 		self:StopGemTradeQueuePump()
 		main:ClosePopup()
 	end)
@@ -2435,7 +2615,7 @@ function SkillsTabClass:OpenSupportReplacementPopup()
 		end
 	end)
 	controls.fetchMore.enabled = function()
-		return controls.fetchMore.hasQueued
+		return controls.fetchMore.hasQueued and not controls.fetchMore.reportLoading
 	end
 	controls.fetchMore.tooltipFunc = function(tooltip)
 		tooltip:Clear()
@@ -2476,9 +2656,49 @@ Without it, price fetching may fail or return limited results.]]
 		end
 		local statKey = selectedStat and selectedStat.stat or ""
 		if forceRebuild or not rawReportCacheByStat[statKey] then
-			rawReportCacheByStat[statKey] = supportReplacementReport.Build(self, selectedStat)
+			local buildEntry = {
+				report = { },
+				loading = true,
+			}
+			rawReportCacheByStat[statKey] = buildEntry
+			controls.reportStatus.label = getReportBuildStatusText("Loading report", buildEntry)
+			self:StartGemReportBuild(
+				popupSession,
+				function(buildState)
+					buildEntry.report = buildState.report
+					return supportReplacementReport.Build(self, selectedStat, nil, buildState)
+				end,
+				function(partialReport, buildState)
+					if rawReportCacheByStat[statKey] ~= buildEntry or self.currentReportBuildSession ~= popupSession then
+						return
+					end
+					buildEntry.report = partialReport
+					buildEntry.loading = true
+					buildEntry.completedGroups = buildState.completedGroups
+					buildEntry.totalGroups = buildState.totalGroups
+					refreshReport(false, false)
+				end,
+				function(finalReport, buildState)
+					if rawReportCacheByStat[statKey] ~= buildEntry or self.currentReportBuildSession ~= popupSession then
+						return
+					end
+					buildEntry.report = finalReport
+					buildEntry.loading = false
+					buildEntry.completedGroups = buildState.completedGroups
+					buildEntry.totalGroups = buildState.totalGroups
+					refreshReport(false, false)
+				end,
+				function(errMsg)
+					if self.currentReportBuildSession ~= popupSession then
+						return
+					end
+					buildEntry.loading = false
+					controls.reportStatus.label = "^1Error: " .. tostring(errMsg)
+				end
+			)
 		end
-		local filteredReport = supportReplacementReport.Filter(rawReportCacheByStat[statKey], {
+		local buildEntry = rawReportCacheByStat[statKey]
+		local filteredReport = supportReplacementReport.Filter(buildEntry.report, {
 			impact = self.gemUpgradeImpactFilter,
 		})
 		for _, reportRow in ipairs(filteredReport) do
@@ -2488,14 +2708,23 @@ Without it, price fetching may fail or return limited results.]]
 		self:ApplyGemTradePriceCache(filteredReport, selectedLeague)
 		controls.reportList:SetReport(selectedStat, filteredReport)
 		local displayReport = controls.reportList.list or filteredReport
-		self:UpdateGemTradePriceStatus(controls, displayReport)
+		controls.fetchMore.reportLoading = buildEntry.loading
+		if buildEntry.loading then
+			controls.reportStatus.label = getReportBuildStatusText("Loading report", buildEntry)
+			controls.priceStatus.label = "^7Prices: report is still loading..."
+			controls.fetchMore.hasQueued = false
+		else
+			controls.reportStatus.label = "^7Hover for details, double-click to jump to gem"
+			self:UpdateGemTradePriceStatus(controls, displayReport)
+		end
 		self:UpdateGemTradeCurrencyConversionButton(controls)
-		if primePrices then
+		if primePrices and not buildEntry.loading then
 			self:PrimeGemTradePrices(displayReport, controls, refreshReport, selectedLeague)
 		end
 	end
 
 	main:OpenPopup(900, 520, "Support Replacement Report", controls, nil, nil, "close")
+	self.currentReportBuildSession = popupSession
 	self:StartGemTradeQueuePump(popupSession)
 	controls.sortSelect:SelByValue((self.gemUpgradeSortStat and self.gemUpgradeSortStat.stat) or self.sortGemsByDPSField or "CombinedDPS", "stat")
 	self.gemUpgradeSortStat = controls.sortSelect.list[controls.sortSelect.selIndex] or self.gemUpgradeSortStatList[1]
@@ -2505,7 +2734,10 @@ Without it, price fetching may fail or return limited results.]]
 	self.gemTradeLeague = controls.leagueSelect.list[controls.leagueSelect.selIndex] or self.gemTradeLeague or resolveTradeLeague(tradeQuery)
 	self:EnsureGemTradeLeagueList(controls, refreshReport)
 	self:UpdateGemTradeCurrencyConversionButton(controls)
-	refreshReport(true, false)
+	self:DeferGemReportInit(popupSession, function()
+		deferInitialLoad = false
+		refreshReport(true, false)
+	end)
 end
 
 function SkillsTabClass:CopySocketGroup(socketGroup)
