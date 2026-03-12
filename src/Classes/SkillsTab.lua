@@ -799,6 +799,16 @@ local function resolveTradeRealm(tradeQuery)
 	if not tradeQuery then
 		return "pc"
 	end
+	if tradeQuery.controls and tradeQuery.controls.realm and tradeQuery.controls.realm.list then
+		local selIndex = tradeQuery.controls.realm.selIndex
+		local realmLabel = selIndex and tradeQuery.controls.realm.list[selIndex]
+		if realmLabel and tradeQuery.realmIds and tradeQuery.realmIds[realmLabel] then
+			tradeQuery.pbRealmIndex = selIndex
+			tradeQuery.pbRealm = tradeQuery.realmIds[realmLabel]
+			tradeQuery.realmDropList = copyTable(tradeQuery.controls.realm.list)
+			return tradeQuery.pbRealm
+		end
+	end
 	if tradeQuery.pbRealm and tradeQuery.pbRealm ~= "" then
 		return tradeQuery.pbRealm
 	end
@@ -815,6 +825,20 @@ local function resolveTradeLeague(tradeQuery)
 	if not tradeQuery then
 		return "Standard"
 	end
+	if tradeQuery.controls and tradeQuery.controls.league and tradeQuery.controls.league.list then
+		local selIndex = tradeQuery.controls.league.selIndex or tradeQuery.pbLeagueIndex
+		local selectedLeague = selIndex and tradeQuery.controls.league.list[selIndex]
+		if selectedLeague then
+			tradeQuery.pbLeagueIndex = selIndex
+			tradeQuery.pbLeague = selectedLeague
+			if tradeQuery.itemsTab then
+				tradeQuery.itemsTab.leagueDropList = copyTable(tradeQuery.controls.league.list)
+			else
+				tradeQuery.leagueDropList = copyTable(tradeQuery.controls.league.list)
+			end
+			return selectedLeague
+		end
+	end
 	if tradeQuery.pbLeague and tradeQuery.pbLeague ~= "" then
 		return tradeQuery.pbLeague
 	end
@@ -822,13 +846,18 @@ local function resolveTradeLeague(tradeQuery)
 	if leagueList and tradeQuery.pbLeagueIndex and leagueList[tradeQuery.pbLeagueIndex] then
 		return leagueList[tradeQuery.pbLeagueIndex]
 	end
-	if tradeQuery.controls and tradeQuery.controls.league and tradeQuery.controls.league.list then
-		local selIndex = tradeQuery.controls.league.selIndex or tradeQuery.pbLeagueIndex
-		if selIndex and tradeQuery.controls.league.list[selIndex] then
-			return tradeQuery.controls.league.list[selIndex]
-		end
-	end
 	return "Standard"
+end
+
+local function getTraderLeagueSelection(tradeQuery)
+	if not (tradeQuery and tradeQuery.controls and tradeQuery.controls.league and tradeQuery.controls.league.list) then
+		return
+	end
+	local leagueList = tradeQuery.controls.league.list
+	local selIndex = tradeQuery.controls.league.selIndex
+	if selIndex and leagueList[selIndex] then
+		return leagueList, selIndex, leagueList[selIndex]
+	end
 end
 
 local function getGemTradeCurrencyButtonState(tradeQuery, league, realm)
@@ -852,23 +881,20 @@ end
 local function buildGemTradeLeagueList(tradeQuery)
 	local leagueList = { }
 	local knownLeagues = { }
-	local realm = resolveTradeRealm(tradeQuery)
-	local allLeagues = tradeQuery and tradeQuery.allLeagues and tradeQuery.allLeagues[realm]
-	if allLeagues then
-		for _, league in ipairs(allLeagues) do
+	local function addLeagueList(sourceList)
+		for _, league in ipairs(sourceList or { }) do
 			if type(league) == "string" and league ~= "" and not knownLeagues[league] then
 				knownLeagues[league] = true
 				t_insert(leagueList, league)
 			end
 		end
 	end
+	local realm = resolveTradeRealm(tradeQuery)
+	local allLeagues = tradeQuery and tradeQuery.allLeagues and tradeQuery.allLeagues[realm]
+	addLeagueList(allLeagues)
+	addLeagueList(tradeQuery and tradeQuery.controls and tradeQuery.controls.league and tradeQuery.controls.league.list)
 	local sourceList = tradeQuery and ((tradeQuery.itemsTab and tradeQuery.itemsTab.leagueDropList) or tradeQuery.leagueDropList) or { }
-	for _, league in ipairs(sourceList or { }) do
-		if type(league) == "string" and league ~= "" and not knownLeagues[league] then
-			knownLeagues[league] = true
-			t_insert(leagueList, league)
-		end
-	end
+	addLeagueList(sourceList)
 	local resolvedLeague = resolveTradeLeague(tradeQuery)
 	if resolvedLeague ~= "" and not knownLeagues[resolvedLeague] then
 		t_insert(leagueList, 1, resolvedLeague)
@@ -877,6 +903,47 @@ local function buildGemTradeLeagueList(tradeQuery)
 		t_insert(leagueList, "Standard")
 	end
 	return leagueList
+end
+
+local function resolvePreferredGemTradeLeague(tradeQuery, currentReportLeague)
+	local traderLeague = resolveTradeLeague(tradeQuery)
+	local leagueList = buildGemTradeLeagueList(tradeQuery)
+	local knownLeagues = { }
+	for _, league in ipairs(leagueList) do
+		knownLeagues[league] = true
+	end
+	if traderLeague and traderLeague ~= "" and traderLeague ~= "Standard" and knownLeagues[traderLeague] then
+		return traderLeague
+	end
+	if currentReportLeague and currentReportLeague ~= "" and knownLeagues[currentReportLeague] then
+		return currentReportLeague
+	end
+	if traderLeague and traderLeague ~= "" and knownLeagues[traderLeague] then
+		return traderLeague
+	end
+	return currentReportLeague or traderLeague or "Standard"
+end
+
+local function syncGemTradeLeagueSelection(self, controls, tradeQuery, fallbackLeague)
+	if not (controls and controls.leagueSelect) then
+		return fallbackLeague or resolvePreferredGemTradeLeague(tradeQuery, self.gemTradeLeague)
+	end
+	local traderLeagueList, traderSelIndex, traderLeague = getTraderLeagueSelection(tradeQuery)
+	if traderLeagueList and traderSelIndex then
+		controls.leagueSelect:SetList(copyTable(traderLeagueList))
+		controls.leagueSelect:SetSel(traderSelIndex)
+		self.gemTradeLeague = controls.leagueSelect.list[controls.leagueSelect.selIndex] or traderLeague or fallbackLeague or self.gemTradeLeague
+		return self.gemTradeLeague
+	end
+	local selectedLeague = resolvePreferredGemTradeLeague(tradeQuery, fallbackLeague or self.gemTradeLeague)
+	local leagueList = buildGemTradeLeagueList(tradeQuery)
+	controls.leagueSelect:SetList(leagueList)
+	controls.leagueSelect:SelByValue(selectedLeague, nil)
+	if not controls.leagueSelect.list[controls.leagueSelect.selIndex] then
+		controls.leagueSelect:SetSel(1)
+	end
+	self.gemTradeLeague = controls.leagueSelect.list[controls.leagueSelect.selIndex] or selectedLeague
+	return self.gemTradeLeague
 end
 
 local function sortTradeLeaguesForPopup(leagues)
@@ -891,6 +958,53 @@ local function sortTradeLeaguesForPopup(leagues)
 	t_insert(sortedLeagues, "Ruthless")
 	t_insert(sortedLeagues, "Hardcore Ruthless")
 	return sortedLeagues
+end
+
+local function ensureGemTradeLeagueSelectionFromState(tradeQuery, preferredLeague)
+	if not tradeQuery then
+		return "Standard"
+	end
+	local realm = resolveTradeRealm(tradeQuery)
+	local realmLeagues = tradeQuery.allLeagues and tradeQuery.allLeagues[realm]
+	if realmLeagues and #realmLeagues > 0 then
+		tradeQuery.itemsTab.leagueDropList = copyTable(realmLeagues)
+		local selectedIndex = tradeQuery.pbLeagueIndex
+		local canPreferLeague = preferredLeague and preferredLeague ~= ""
+		if canPreferLeague and preferredLeague == "Standard" then
+			local hasExplicitTradeLeague = tradeQuery.pbLeague and tradeQuery.pbLeague ~= ""
+			local hasExplicitSelection = tradeQuery.controls
+				and tradeQuery.controls.league
+				and tradeQuery.controls.league.selIndex
+				and tradeQuery.controls.league.list
+				and tradeQuery.controls.league.list[tradeQuery.controls.league.selIndex] == preferredLeague
+			if not hasExplicitTradeLeague and not hasExplicitSelection then
+				canPreferLeague = false
+			end
+		end
+		if canPreferLeague then
+			for index, league in ipairs(realmLeagues) do
+				if league == preferredLeague then
+					selectedIndex = index
+					break
+				end
+			end
+		elseif tradeQuery.pbLeague and tradeQuery.pbLeague ~= "" then
+			for index, league in ipairs(realmLeagues) do
+				if league == tradeQuery.pbLeague then
+					selectedIndex = index
+					break
+				end
+			end
+		end
+		selectedIndex = selectedIndex or 1
+		if not realmLeagues[selectedIndex] then
+			selectedIndex = 1
+		end
+		tradeQuery.pbLeagueIndex = selectedIndex
+		tradeQuery.pbLeague = realmLeagues[selectedIndex]
+		return tradeQuery.pbLeague
+	end
+	return tradeQuery.pbLeague or preferredLeague or "Standard"
 end
 
 local isPOESESSIDError
@@ -995,7 +1109,6 @@ function SkillsTabClass:GetGemTradeQueryContext(selectedLeague)
 		return nil, "Trader is unavailable."
 	end
 	if isGemTradeRequestQueueStale(tradeQuery.tradeQueryRequests) then
-		ConPrintf("[SkillsTab] resetting stale trade request queue")
 		tradeQuery.tradeQueryRequests = new("TradeQueryRequests")
 	end
 	local realm = resolveTradeRealm(tradeQuery)
@@ -1178,8 +1291,76 @@ function SkillsTabClass:EnsureGemTradeLeagueList(controls, refreshReport)
 	if not (tradeQuery and tradeQuery.tradeQueryRequests) then
 		return
 	end
+	local function updateControlsFromTradeState()
+		local preferredLeague = controls and controls.leagueSelect and controls.leagueSelect.list[controls.leagueSelect.selIndex] or self.gemTradeLeague
+		local selectedLeague = ensureGemTradeLeagueSelectionFromState(tradeQuery, preferredLeague)
+		syncGemTradeLeagueSelection(self, controls, tradeQuery, selectedLeague)
+	end
+	local function ensureRealmState(callback)
+		if tradeQuery.pbRealm and tradeQuery.pbRealm ~= "" then
+			return callback()
+		end
+		if main.POESESSID and main.POESESSID ~= "" then
+			if self.gemTradeRealmListLoading then
+				return
+			end
+			self.gemTradeRealmListLoading = true
+			return tradeQuery.tradeQueryRequests:FetchRealmsAndLeaguesHTML(function(data, errMsg)
+				self.gemTradeRealmListLoading = false
+				if errMsg or not data then
+					tradeQuery.realmIds = {
+						["PC"] = "pc",
+						["PS4"] = "sony",
+						["Xbox"] = "xbox",
+					}
+					tradeQuery.realmDropList = { "PC", "PS4", "Xbox" }
+					tradeQuery.pbRealmIndex = tradeQuery.pbRealmIndex or 1
+					tradeQuery.pbRealm = tradeQuery.realmIds[tradeQuery.realmDropList[tradeQuery.pbRealmIndex] or "PC"] or "pc"
+					return callback()
+				end
+				tradeQuery.allLeagues = {}
+				for _, value in ipairs(data.leagues or { }) do
+					if not tradeQuery.allLeagues[value.realm] then
+						tradeQuery.allLeagues[value.realm] = {}
+					end
+					t_insert(tradeQuery.allLeagues[value.realm], value.id)
+				end
+				tradeQuery.realmIds = {}
+				for _, value in pairs(data.realms or { }) do
+					if value.text and value.text:match("PoE 1 ") then
+						tradeQuery.realmIds[value.text:gsub("PoE 1 ", "")] = value.id
+					end
+				end
+				tradeQuery.realmDropList = {}
+				for realmLabel, _ in pairs(tradeQuery.realmIds) do
+					if realmLabel == "PC" then
+						t_insert(tradeQuery.realmDropList, 1, realmLabel)
+					else
+						t_insert(tradeQuery.realmDropList, realmLabel)
+					end
+				end
+				tradeQuery.pbRealmIndex = tradeQuery.pbRealmIndex or 1
+				local realmLabel = tradeQuery.realmDropList[tradeQuery.pbRealmIndex] or tradeQuery.realmDropList[1]
+				tradeQuery.pbRealm = realmLabel and tradeQuery.realmIds[realmLabel] or "pc"
+				if tradeQuery.allLeagues[tradeQuery.pbRealm] then
+					tradeQuery.allLeagues[tradeQuery.pbRealm] = sortTradeLeaguesForPopup(tradeQuery.allLeagues[tradeQuery.pbRealm])
+				end
+				callback()
+			end)
+		end
+		tradeQuery.realmIds = tradeQuery.realmIds or {
+			["PC"] = "pc",
+			["PS4"] = "sony",
+			["Xbox"] = "xbox",
+		}
+		tradeQuery.realmDropList = tradeQuery.realmDropList or { "PC", "PS4", "Xbox" }
+		tradeQuery.pbRealmIndex = tradeQuery.pbRealmIndex or 1
+		tradeQuery.pbRealm = tradeQuery.pbRealm or tradeQuery.realmIds[tradeQuery.realmDropList[tradeQuery.pbRealmIndex] or "PC"] or "pc"
+		callback()
+	end
 	local realm = resolveTradeRealm(tradeQuery)
 	if tradeQuery.allLeagues and tradeQuery.allLeagues[realm] then
+		updateControlsFromTradeState()
 		return
 	end
 	if self.gemTradeLeagueListLoading then
@@ -1189,29 +1370,31 @@ function SkillsTabClass:EnsureGemTradeLeagueList(controls, refreshReport)
 	if controls and controls.priceStatus then
 		controls.priceStatus.label = "^7Prices: loading trade leagues..."
 	end
-	tradeQuery.tradeQueryRequests:FetchLeagues(realm, function(leagues, errMsg)
-		self.gemTradeLeagueListLoading = false
-		if errMsg then
-			if controls and controls.priceStatus then
-				controls.priceStatus.label = "^1Unable to load trade leagues: " .. errMsg
+	ensureRealmState(function()
+		local resolvedRealm = resolveTradeRealm(tradeQuery)
+		if tradeQuery.allLeagues and tradeQuery.allLeagues[resolvedRealm] then
+			self.gemTradeLeagueListLoading = false
+			updateControlsFromTradeState()
+			if refreshReport then
+				refreshReport(false, false)
 			end
 			return
 		end
-		tradeQuery.allLeagues = tradeQuery.allLeagues or { }
-		tradeQuery.allLeagues[realm] = sortTradeLeaguesForPopup(leagues)
-		local selectedLeague = controls and controls.leagueSelect and controls.leagueSelect.list[controls.leagueSelect.selIndex] or self.gemTradeLeague or resolveTradeLeague(tradeQuery)
-		local leagueList = buildGemTradeLeagueList(tradeQuery)
-		if controls and controls.leagueSelect then
-			controls.leagueSelect:SetList(leagueList)
-			controls.leagueSelect:SelByValue(selectedLeague, nil)
-			if not controls.leagueSelect.list[controls.leagueSelect.selIndex] then
-				controls.leagueSelect:SetSel(1)
+		tradeQuery.tradeQueryRequests:FetchLeagues(resolvedRealm, function(leagues, errMsg)
+			self.gemTradeLeagueListLoading = false
+			if errMsg then
+				if controls and controls.priceStatus then
+					controls.priceStatus.label = "^1Unable to load trade leagues: " .. errMsg
+				end
+				return
 			end
-			self.gemTradeLeague = controls.leagueSelect.list[controls.leagueSelect.selIndex] or selectedLeague
-		end
-		if refreshReport then
-			refreshReport(false, false)
-		end
+			tradeQuery.allLeagues = tradeQuery.allLeagues or { }
+			tradeQuery.allLeagues[resolvedRealm] = sortTradeLeaguesForPopup(leagues)
+			updateControlsFromTradeState()
+			if refreshReport then
+				refreshReport(false, false)
+			end
+		end)
 	end)
 end
 
@@ -2493,8 +2676,7 @@ Without it, price fetching may fail or return limited results.]]
 	self.gemUpgradeSortStat = controls.sortSelect.list[controls.sortSelect.selIndex] or self.gemUpgradeSortStatList[1]
 	controls.impactSelect:SelByValue(self.gemUpgradeImpactFilter, "value")
 	self.gemUpgradeImpactFilter = (controls.impactSelect.list[controls.impactSelect.selIndex] or controls.impactSelect.list[1]).value
-	controls.leagueSelect:SelByValue(self.gemTradeLeague or resolveTradeLeague(tradeQuery), nil)
-	self.gemTradeLeague = controls.leagueSelect.list[controls.leagueSelect.selIndex] or self.gemTradeLeague or resolveTradeLeague(tradeQuery)
+	syncGemTradeLeagueSelection(self, controls, tradeQuery, self.gemTradeLeague)
 	self:EnsureGemTradeLeagueList(controls, refreshReport)
 	self:UpdateGemTradeCurrencyConversionButton(controls)
 	self:DeferGemReportInit(popupSession, function()
@@ -2709,8 +2891,7 @@ Without it, price fetching may fail or return limited results.]]
 	self.gemUpgradeSortStat = controls.sortSelect.list[controls.sortSelect.selIndex] or self.gemUpgradeSortStatList[1]
 	controls.impactSelect:SelByValue(self.gemUpgradeImpactFilter, "value")
 	self.gemUpgradeImpactFilter = (controls.impactSelect.list[controls.impactSelect.selIndex] or controls.impactSelect.list[1]).value
-	controls.leagueSelect:SelByValue(self.gemTradeLeague or resolveTradeLeague(tradeQuery), nil)
-	self.gemTradeLeague = controls.leagueSelect.list[controls.leagueSelect.selIndex] or self.gemTradeLeague or resolveTradeLeague(tradeQuery)
+	syncGemTradeLeagueSelection(self, controls, tradeQuery, self.gemTradeLeague)
 	self:EnsureGemTradeLeagueList(controls, refreshReport)
 	self:UpdateGemTradeCurrencyConversionButton(controls)
 	self:DeferGemReportInit(popupSession, function()
