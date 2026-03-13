@@ -92,6 +92,7 @@ for i, curInfluenceInfo in ipairs(itemLib.influenceInfo.default) do
 	influenceDropdownNames[i + INFLUENCE_ANY_INDEX] = curInfluenceInfo.display
 	hasInfluenceModIds[i] = "pseudo.pseudo_has_" .. string.lower(curInfluenceInfo.display) .. "_influence"
 end
+local hasAnyInfluenceModId = "pseudo.pseudo_has_influence_count"
 
 -- slots that allow eldritch mods (non-unique only)
 local eldritchModSlots = {
@@ -134,6 +135,7 @@ local function resolveInfluenceQueryState(selection1, selection2)
 		exactCount = nil,
 		minCount = nil,
 		specificInfluenceModIds = { },
+		hasNoneConstraint = false,
 	}
 	local positiveSelectionCount = 0
 	local ignoreSelectionCount = 0
@@ -158,6 +160,7 @@ local function resolveInfluenceQueryState(selection1, selection2)
 	end
 
 	if noneSelectionCount > 0 then
+		state.hasNoneConstraint = true
 		state.exactCount = positiveSelectionCount
 	elseif ignoreSelectionCount == 2 then
 		return state
@@ -172,10 +175,22 @@ local function resolveInfluenceQueryState(selection1, selection2)
 	return state
 end
 
+-- Returns true when pseudo_has_influence must be added to enforce a count constraint.
+-- Skipped when all influences are named and no None is present (Shaper+Elder): the specific
+-- mods alone are sufficient and the extra slot is better used for weighted-sum mods.
+local function needsHasInfluenceFilter(influenceState)
+	if influenceState.exactCount ~= nil then
+		return influenceState.exactCount == 0
+			or influenceState.hasNoneConstraint
+			or #influenceState.specificInfluenceModIds < influenceState.exactCount
+	end
+	return influenceState.minCount ~= nil
+end
+
 local function getInfluenceFilterCost(influenceState)
 	local cost = #influenceState.specificInfluenceModIds
-	if influenceState.exactCount ~= nil or influenceState.minCount ~= nil then
-		cost = cost + #hasInfluenceModIds
+	if needsHasInfluenceFilter(influenceState) then
+		cost = cost + 1
 	end
 	return cost
 end
@@ -1068,30 +1083,16 @@ function TradeQueryGeneratorClass:FinishQuery()
 
 	local andFilters = { type = "and", filters = { } }
 	local options = self.calcContext.options
-	if influenceState.exactCount == 0 then
-		local noInfluenceFilters = { type = "not", filters = { } }
-		for _, modId in ipairs(hasInfluenceModIds) do
-			t_insert(noInfluenceFilters.filters, { id = modId })
-			filters = filters + 1
-		end
-		t_insert(queryTable.query.stats, noInfluenceFilters)
-	elseif influenceState.exactCount ~= nil or influenceState.minCount ~= nil then
-		local countFilters = {
-			type = "count",
-			value = {},
-			filters = { }
-		}
-		if influenceState.exactCount ~= nil then
-			countFilters.value.min = influenceState.exactCount
-			countFilters.value.max = influenceState.exactCount
+	if needsHasInfluenceFilter(influenceState) then
+		if influenceState.exactCount == 0 then
+			-- "has 0 influences" cannot be queried with a value range; use NOT instead
+			t_insert(queryTable.query.stats, { type = "not", filters = { { id = hasAnyInfluenceModId } } })
+		elseif influenceState.exactCount ~= nil then
+			t_insert(andFilters.filters, { id = hasAnyInfluenceModId, value = { min = influenceState.exactCount, max = influenceState.exactCount } })
 		else
-			countFilters.value.min = influenceState.minCount
+			t_insert(andFilters.filters, { id = hasAnyInfluenceModId, value = { min = influenceState.minCount } })
 		end
-		for _, modId in ipairs(hasInfluenceModIds) do
-			t_insert(countFilters.filters, { id = modId })
-			filters = filters + 1
-		end
-		t_insert(queryTable.query.stats, countFilters)
+		filters = filters + 1
 	end
 
 	for _, modId in ipairs(influenceState.specificInfluenceModIds) do
@@ -1184,6 +1185,15 @@ function TradeQueryGeneratorClass:FinishQuery()
 	-- Close blocker popup
 	main:ClosePopup()
 end
+
+-- Test accessors for influence query state logic (not used in production paths)
+TradeQueryGeneratorClass._resolveInfluenceQueryState = resolveInfluenceQueryState
+TradeQueryGeneratorClass._getInfluenceFilterCost = getInfluenceFilterCost
+TradeQueryGeneratorClass._needsHasInfluenceFilter = needsHasInfluenceFilter
+TradeQueryGeneratorClass._hasAnyInfluenceModId = hasAnyInfluenceModId
+TradeQueryGeneratorClass._INFLUENCE_IGNORE_INDEX = INFLUENCE_IGNORE_INDEX
+TradeQueryGeneratorClass._INFLUENCE_NONE_INDEX = INFLUENCE_NONE_INDEX
+TradeQueryGeneratorClass._INFLUENCE_ANY_INDEX = INFLUENCE_ANY_INDEX
 
 function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callback)
 	self.requesterCallback = callback
