@@ -2006,7 +2006,7 @@ end
 -- Updates the resistance swap buttons for elemental resistance mods on imported/non-crafted items
 function ItemsTabClass:UpdateResistSwapControls()
 	local item = self.displayItem
-	if not item or not item.explicitModLines then
+	if not item or not item.explicitModLines or item.corrupted then
 		return
 	end
 	local i = 1
