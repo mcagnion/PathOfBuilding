@@ -78,6 +78,28 @@ describe("Resistance Swap — Item parsing", function()
 		assert.is_true(item.explicitModLines[found[1].idx].crafted)
 	end)
 
+	it("does not detect All Elemental Resistances as swappable", function()
+		local item = new("Item", makeRing({ "+15% to all Elemental Resistances" }))
+		assert.are.equal(0, #swappableResists(item))
+	end)
+
+	it("does not detect fractured resistance mod as swappable", function()
+		local item = new("Item", makeRing({ "{fractured}+35% to Cold Resistance" }))
+		-- fractured mods are in explicitModLines but must be excluded from swap
+		local found = {}
+		for i, modLine in ipairs(item.explicitModLines or {}) do
+			local t = modLine.line and modLine.line:match("to (%a+) Resistance$")
+			if (t == "Fire" or t == "Cold" or t == "Lightning") and not modLine.fractured then
+				table.insert(found, { idx = i, elemType = t })
+			end
+		end
+		assert.are.equal(0, #found)
+		-- but the mod itself is present and flagged
+		local allFound = swappableResists(item) -- naive detection without fractured check
+		assert.are.equal(1, #allFound)
+		assert.is_true(item.explicitModLines[allFound[1].idx].fractured)
+	end)
+
 	it("marks corrupted items correctly", function()
 		local item = new("Item", makeRing({ "+40% to Fire Resistance" }, nil, true))
 		assert.is_true(item.corrupted)
@@ -86,6 +108,17 @@ describe("Resistance Swap — Item parsing", function()
 	it("non-corrupted item is not marked corrupted", function()
 		local item = new("Item", makeRing({ "+40% to Fire Resistance" }))
 		assert.is_not_true(item.corrupted)
+	end)
+
+	it("marks mirrored items correctly", function()
+		local lines = "Rarity: Rare\nName\nCoral Ring\n+40% to Fire Resistance\nMirrored"
+		local item = new("Item", lines)
+		assert.is_true(item.mirrored)
+	end)
+
+	it("non-mirrored item is not marked mirrored", function()
+		local item = new("Item", makeRing({ "+40% to Fire Resistance" }))
+		assert.is_not_true(item.mirrored)
 	end)
 end)
 
@@ -214,6 +247,41 @@ describe("Resistance Swap — groupResists merging", function()
 		assert.are.equal(1, #result)
 		assert.are.equal("life", result[1].tradeModId)
 	end)
+
+	it("chaos-only mod does not produce pseudo_total_elemental_resistance", function()
+		local weights = {
+			{ tradeModId = "chaos_resist", weight = 4, resistTag = { chaos = true } },
+		}
+		local result = mergeResists(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("pseudo.pseudo_total_chaos_resistance", result[1].tradeModId)
+		-- elemental pseudo-stat must not appear
+		for _, e in ipairs(result) do
+			assert.are_not.equal("pseudo.pseudo_total_elemental_resistance", e.tradeModId)
+		end
+	end)
+
+	it("takes the maximum weight among multiple same-type elemental mods", function()
+		local weights = {
+			{ tradeModId = "fire_resist_1", weight = 3,  resistTag = { elem = true } },
+			{ tradeModId = "fire_resist_2", weight = 12, resistTag = { elem = true } },
+			{ tradeModId = "fire_resist_3", weight = 7,  resistTag = { elem = true } },
+		}
+		local result = mergeResists(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("pseudo.pseudo_total_elemental_resistance", result[1].tradeModId)
+		assert.are.equal(12, result[1].weight)
+	end)
+
+	it("does not emit pseudo-stat for elemental mod with weight 0", function()
+		local weights = {
+			{ tradeModId = "fire_resist", weight = 0, resistTag = { elem = true } },
+			{ tradeModId = "life",        weight = 5 },
+		}
+		local result = mergeResists(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("life", result[1].tradeModId)
+	end)
 end)
 
 describe("Resistance Swap — combo enumeration", function()
@@ -285,5 +353,24 @@ describe("Resistance Swap — combo enumeration", function()
 		local line = "+50 to maximum Life"
 		local swapped = line:gsub("to %a+ Resistance$", "to Fire Resistance")
 		assert.are.equal(line, swapped)
+	end)
+
+	it("gsub chain covers all types when starting from Cold or Lightning", function()
+		local elemTypes = { "Fire", "Cold", "Lightning" }
+		for _, startType in ipairs(elemTypes) do
+			local line = "+25% to " .. startType .. " Resistance"
+			for _, target in ipairs(elemTypes) do
+				local swapped = line:gsub("to %a+ Resistance$", "to " .. target .. " Resistance")
+				assert.are.equal("+25% to " .. target .. " Resistance", swapped)
+			end
+		end
+	end)
+
+	it("mixed-radix counter visits all 27 combos for N=3 with correct first and last", function()
+		local combos = allCombos(3)
+		assert.are.equal(27, #combos)
+		-- first combo: {1,1,1}, last combo: {3,3,3}
+		assert.are.equal(1, combos[1][1]) assert.are.equal(1, combos[1][2]) assert.are.equal(1, combos[1][3])
+		assert.are.equal(3, combos[27][1]) assert.are.equal(3, combos[27][2]) assert.are.equal(3, combos[27][3])
 	end)
 end)
