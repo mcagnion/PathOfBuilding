@@ -619,6 +619,7 @@ function TradeQueryGeneratorClass:GenerateModWeights(modsToTest)
 			local meanStatDiff = TradeQueryGeneratorClass.WeightedRatioOutputs(self.calcContext.baseOutput, output, self.calcContext.options.statWeights) * 1000 - (self.calcContext.baseStatValue or 0)
 			if meanStatDiff > 0.01 then
 				local resistTag
+				local resistFactor = 1  -- number of elemental types contributed (used to normalise pseudo_total weight)
 				local modText = entry.tradeMod.text
 				local elemType = modText:match("to (%a+) Resistance$")
 				if elemType == "Fire" or elemType == "Cold" or elemType == "Lightning" then
@@ -628,10 +629,28 @@ function TradeQueryGeneratorClass:GenerateModWeights(modsToTest)
 				else
 					local hybridElem = modText:match("to (%a+) and Chaos Resistances$")
 					if hybridElem == "Fire" or hybridElem == "Cold" or hybridElem == "Lightning" then
+						-- element+Chaos hybrid: contributes 1 type to elem pseudo-total and 1 to chaos pseudo-total
 						resistTag = { elem = true, chaos = true }
+					elseif modText:match("^%+#%% to all Elemental Resistances$") then
+						-- all-elemental mod: contributes 3× (Fire+Cold+Lightning) to pseudo_total_elemental
+						resistTag = { elem = true }
+						resistFactor = 3
+					else
+						-- dual-elemental mod (e.g. Fire and Lightning, Fire and Cold, Cold and Lightning)
+						local dualA, dualB = modText:match("^%+#%% to (%a+) and (%a+) Resistances$")
+						if dualA and dualB then
+							local aElem = dualA == "Fire" or dualA == "Cold" or dualA == "Lightning"
+							local bElem = dualB == "Fire" or dualB == "Cold" or dualB == "Lightning"
+							if aElem and bElem then
+								-- contributes 2× to pseudo_total_elemental
+								resistTag = { elem = true }
+								resistFactor = 2
+							end
+						end
 					end
 				end
-				t_insert(self.modWeights, { tradeModId = entry.tradeMod.id, weight = meanStatDiff / modValue, meanStatDiff = meanStatDiff, invert = entry.sign == "-" and true or false, resistTag = resistTag })
+				local weight = meanStatDiff / modValue
+				t_insert(self.modWeights, { tradeModId = entry.tradeMod.id, weight = weight, normalizedWeight = weight / resistFactor, meanStatDiff = meanStatDiff, invert = entry.sign == "-" and true or false, resistTag = resistTag })
 			end
 			self.alreadyWeightedMods[entry.tradeMod.id] = true
 
@@ -990,8 +1009,11 @@ function TradeQueryGeneratorClass:FinishQuery()
 		local filtered = { }
 		for _, entry in ipairs(self.modWeights) do
 			if entry.resistTag then
-				if entry.resistTag.elem and entry.weight > elemMax then elemMax = entry.weight end
-				if entry.resistTag.chaos and entry.weight > chaosMax then chaosMax = entry.weight end
+				-- Use normalizedWeight (weight / resistFactor) so that dual/all-elem mods don't
+				-- inflate the pseudo_total filter threshold relative to single-element mods.
+				local nw = entry.normalizedWeight or entry.weight
+				if entry.resistTag.elem and nw > elemMax then elemMax = nw end
+				if entry.resistTag.chaos and nw > chaosMax then chaosMax = nw end
 			else
 				t_insert(filtered, entry)
 			end
