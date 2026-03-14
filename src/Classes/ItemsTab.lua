@@ -2006,13 +2006,13 @@ end
 -- Updates the resistance swap buttons for elemental resistance mods on imported/non-crafted items
 function ItemsTabClass:UpdateResistSwapControls()
 	local item = self.displayItem
-	if not item or not item.explicitModLines or item.corrupted then
+	if not item or not item.explicitModLines or item.corrupted or item.mirrored then
 		return
 	end
 	local i = 1
 	if item.rarity == "MAGIC" or item.rarity == "RARE" then
 		for index, modLine in ipairs(item.explicitModLines) do
-			if not modLine.crafted then
+			if not modLine.crafted and not modLine.fractured then
 				local resistType = modLine.line and modLine.line:match("to (%a+) Resistance$")
 				if resistType ~= "Fire" and resistType ~= "Cold" and resistType ~= "Lightning" then
 					resistType = nil

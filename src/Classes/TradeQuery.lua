@@ -748,21 +748,21 @@ function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, ba
 		end
 		if self.slotTables[row_idx].groupResists then
 			local baseItem = buildItem(result.item_string)
-			-- Corrupted items cannot be modified via Harvest
-			if baseItem.corrupted then
+			-- Corrupted and mirrored items cannot be modified via Harvest
+			if baseItem.corrupted or baseItem.mirrored then
 				local output = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = baseItem }))
 				local weight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, output, self.statSortSelectionList)
 				result.evaluation = {{ output = output, weight = weight }}
 			else
 			-- Only single-element explicit resistance mods are Harvest-swappable:
-			-- implicits/enchants excluded (explicitModLines), dual-element and
-			-- element+chaos hybrids are not swappable via Harvest
+			-- implicits/enchants excluded (explicitModLines), fractured mods are locked,
+			-- dual-element and element+chaos hybrids are not swappable via Harvest
 			local elemTypes = { "Fire", "Cold", "Lightning" }
-			-- Collect explicit single-element resistance mod indices
+			-- Collect explicit single-element non-fractured resistance mod indices
 			local resistMods = {} -- { idx }
 			for i, modLine in ipairs(baseItem.explicitModLines or {}) do
 				local t = modLine.line and modLine.line:match("to (%a+) Resistance$")
-				if t == "Fire" or t == "Cold" or t == "Lightning" then
+				if (t == "Fire" or t == "Cold" or t == "Lightning") and not modLine.fractured then
 					t_insert(resistMods, { idx = i })
 				end
 			end
