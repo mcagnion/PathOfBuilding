@@ -418,7 +418,6 @@ describe("TradeQueryGenerator", function()
                 queryJson = payload
             end
             queryGen.requesterContext = {}
-            queryGen.queryTab = { GetTradeStatusOption = function() return "online" end }
             queryGen.modWeights = {
                 { tradeModId = "explicit.stat_1", weight = 2, meanStatDiff = 20 }
             }
