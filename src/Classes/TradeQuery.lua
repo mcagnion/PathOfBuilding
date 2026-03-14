@@ -747,21 +747,23 @@ function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, ba
 			return item
 		end
 		if self.slotTables[row_idx].groupResists then
-			-- Only explicit mods are Harvest-swappable (not implicits, enchants, etc.)
-			-- Enumerate all 3^N type assignments for N explicit elemental resistance mods
-			local elemTypes = { "Fire", "Cold", "Lightning" }
 			local baseItem = buildItem(result.item_string)
-			-- Collect explicit elemental resistance mod indices
-			local resistMods = {} -- { idx, isHybrid }
+			-- Corrupted items cannot be modified via Harvest
+			if baseItem.corrupted then
+				local output = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = baseItem }))
+				local weight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, output, self.statSortSelectionList)
+				result.evaluation = {{ output = output, weight = weight }}
+			else
+			-- Only single-element explicit resistance mods are Harvest-swappable:
+			-- implicits/enchants excluded (explicitModLines), dual-element and
+			-- element+chaos hybrids are not swappable via Harvest
+			local elemTypes = { "Fire", "Cold", "Lightning" }
+			-- Collect explicit single-element resistance mod indices
+			local resistMods = {} -- { idx }
 			for i, modLine in ipairs(baseItem.explicitModLines or {}) do
 				local t = modLine.line and modLine.line:match("to (%a+) Resistance$")
 				if t == "Fire" or t == "Cold" or t == "Lightning" then
-					t_insert(resistMods, { idx = i, isHybrid = false })
-				else
-					local t2 = modLine.line and modLine.line:match("to (%a+) and Chaos Resistances$")
-					if t2 == "Fire" or t2 == "Cold" or t2 == "Lightning" then
-						t_insert(resistMods, { idx = i, isHybrid = true })
-					end
+					t_insert(resistMods, { idx = i })
 				end
 			end
 			local N = #resistMods
@@ -772,12 +774,7 @@ function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, ba
 				-- Apply this combination to explicit mod lines and rebuild
 				for j, mod in ipairs(resistMods) do
 					local modLine = baseItem.explicitModLines[mod.idx]
-					local targetType = elemTypes[combo[j]]
-					if mod.isHybrid then
-						modLine.line = modLine.line:gsub("to %a+ and Chaos Resistances$", "to "..targetType.." and Chaos Resistances")
-					else
-						modLine.line = modLine.line:gsub("to %a+ Resistance$", "to "..targetType.." Resistance")
-					end
+					modLine.line = modLine.line:gsub("to %a+ Resistance$", "to "..elemTypes[combo[j]].." Resistance")
 				end
 				baseItem:BuildAndParseRaw()
 				local output = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = baseItem }))
@@ -793,6 +790,7 @@ function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, ba
 				end
 			end
 			result.evaluation = {{ output = bestOutput, weight = bestWeight }}
+			end -- corrupted check
 		else
 			local item = buildItem(result.item_string)
 			local output = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = item }))
