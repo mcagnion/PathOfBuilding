@@ -738,14 +738,67 @@ function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, ba
 		}
 		table.sort(result.evaluation, function(a, b) return a.weight > b.weight end)
 	else
-		local item = new("Item", result.item_string)
-		if not self.enchantInSort then -- Calc item DPS without anoint or enchant as these can generally be added after.
-			item.enchantModLines = { }
-			item:BuildAndParseRaw()
+		local function buildItem(itemString)
+			local item = new("Item", itemString)
+			if not self.enchantInSort then -- Calc item DPS without anoint or enchant as these can generally be added after.
+				item.enchantModLines = { }
+				item:BuildAndParseRaw()
+			end
+			return item
 		end
-		local output = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = item }))
-		local weight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, output, self.statSortSelectionList)
-		result.evaluation = {{ output = output, weight = weight }}
+		if self.slotTables[row_idx].groupResists then
+			-- Only explicit mods are Harvest-swappable (not implicits, enchants, etc.)
+			-- Enumerate all 3^N type assignments for N explicit elemental resistance mods
+			local elemTypes = { "Fire", "Cold", "Lightning" }
+			local baseItem = buildItem(result.item_string)
+			-- Collect explicit elemental resistance mod indices
+			local resistMods = {} -- { idx, isHybrid }
+			for i, modLine in ipairs(baseItem.explicitModLines or {}) do
+				local t = modLine.line and modLine.line:match("to (%a+) Resistance$")
+				if t == "Fire" or t == "Cold" or t == "Lightning" then
+					t_insert(resistMods, { idx = i, isHybrid = false })
+				else
+					local t2 = modLine.line and modLine.line:match("to (%a+) and Chaos Resistances$")
+					if t2 == "Fire" or t2 == "Cold" or t2 == "Lightning" then
+						t_insert(resistMods, { idx = i, isHybrid = true })
+					end
+				end
+			end
+			local N = #resistMods
+			local bestWeight, bestOutput
+			local combo = {}
+			for i = 1, N do combo[i] = 1 end
+			for _ = 1, (N == 0 and 1 or 3 ^ N) do
+				-- Apply this combination to explicit mod lines and rebuild
+				for j, mod in ipairs(resistMods) do
+					local modLine = baseItem.explicitModLines[mod.idx]
+					local targetType = elemTypes[combo[j]]
+					if mod.isHybrid then
+						modLine.line = modLine.line:gsub("to %a+ and Chaos Resistances$", "to "..targetType.." and Chaos Resistances")
+					else
+						modLine.line = modLine.line:gsub("to %a+ Resistance$", "to "..targetType.." Resistance")
+					end
+				end
+				baseItem:BuildAndParseRaw()
+				local output = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = baseItem }))
+				local weight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, output, self.statSortSelectionList)
+				if not bestWeight or weight > bestWeight then
+					bestWeight, bestOutput = weight, output
+				end
+				-- Increment mixed-radix counter
+				for j = N, 1, -1 do
+					combo[j] = combo[j] + 1
+					if combo[j] <= 3 then break end
+					combo[j] = 1
+				end
+			end
+			result.evaluation = {{ output = bestOutput, weight = bestWeight }}
+		else
+			local item = buildItem(result.item_string)
+			local output = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = item }))
+			local weight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, output, self.statSortSelectionList)
+			result.evaluation = {{ output = output, weight = weight }}
+		end
 	end
 	return result.evaluation
 end
