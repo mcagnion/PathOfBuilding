@@ -127,45 +127,85 @@ describe("Resistance Swap — resistTag tagging", function()
 	local function getResistTag(modText)
 		local elemType = modText:match("to (%a+) Resistance$")
 		if elemType == "Fire" or elemType == "Cold" or elemType == "Lightning" then
-			return { elem = true }
+			return { elem = true }, 1
 		elseif elemType == "Chaos" then
-			return { chaos = true }
+			return { chaos = true }, 1
 		end
 		local hybridElem = modText:match("to (%a+) and Chaos Resistances$")
 		if hybridElem == "Fire" or hybridElem == "Cold" or hybridElem == "Lightning" then
-			return { elem = true, chaos = true }
+			return { elem = true, chaos = true }, 1
 		end
-		return nil
+		if modText:match("^%+#%% to all Elemental Resistances$") then
+			return { elem = true }, 3
+		end
+		local dualA, dualB = modText:match("^%+#%% to (%a+) and (%a+) Resistances$")
+		if dualA and dualB then
+			local aElem = dualA == "Fire" or dualA == "Cold" or dualA == "Lightning"
+			local bElem = dualB == "Fire" or dualB == "Cold" or dualB == "Lightning"
+			if aElem and bElem then
+				return { elem = true }, 2
+			end
+		end
+		return nil, 1
 	end
 
-	it("tags Fire/Cold/Lightning mods as elem", function()
+	it("tags Fire/Cold/Lightning mods as elem (factor 1)", function()
 		for _, t in ipairs({ "Fire", "Cold", "Lightning" }) do
-			local tag = getResistTag("+40% to " .. t .. " Resistance")
+			local tag, factor = getResistTag("+40% to " .. t .. " Resistance")
 			assert.is_not_nil(tag)
 			assert.is_true(tag.elem)
 			assert.is_nil(tag.chaos)
+			assert.are.equal(1, factor)
 		end
 	end)
 
-	it("tags Chaos mod as chaos only", function()
-		local tag = getResistTag("+20% to Chaos Resistance")
+	it("tags Chaos mod as chaos only (factor 1)", function()
+		local tag, factor = getResistTag("+20% to Chaos Resistance")
 		assert.is_not_nil(tag)
 		assert.is_nil(tag.elem)
 		assert.is_true(tag.chaos)
+		assert.are.equal(1, factor)
 	end)
 
-	it("tags element+chaos hybrid as both elem and chaos", function()
+	it("tags element+chaos hybrid as both elem and chaos (factor 1)", function()
 		for _, t in ipairs({ "Fire", "Cold", "Lightning" }) do
-			local tag = getResistTag("+15% to " .. t .. " and Chaos Resistances")
+			local tag, factor = getResistTag("+15% to " .. t .. " and Chaos Resistances")
 			assert.is_not_nil(tag)
 			assert.is_true(tag.elem)
 			assert.is_true(tag.chaos)
+			assert.are.equal(1, factor)
+		end
+	end)
+
+	it("tags all Elemental Resistances as elem with factor 3", function()
+		local tag, factor = getResistTag("+#% to all Elemental Resistances")
+		assert.is_not_nil(tag)
+		assert.is_true(tag.elem)
+		assert.is_nil(tag.chaos)
+		assert.are.equal(3, factor)
+	end)
+
+	it("tags dual elemental mods as elem with factor 2", function()
+		local pairs_list = {
+			{ "Fire", "Cold" }, { "Fire", "Lightning" }, { "Cold", "Lightning" }
+		}
+		for _, p in ipairs(pairs_list) do
+			local tag, factor = getResistTag("+#% to " .. p[1] .. " and " .. p[2] .. " Resistances")
+			assert.is_not_nil(tag, "expected tag for " .. p[1] .. "+" .. p[2])
+			assert.is_true(tag.elem)
+			assert.is_nil(tag.chaos)
+			assert.are.equal(2, factor)
 		end
 	end)
 
 	it("returns nil for non-resistance mods", function()
 		assert.is_nil(getResistTag("+50 to maximum Life"))
-		assert.is_nil(getResistTag("+15% to Fire and Cold Resistances"))
+	end)
+
+	it("does not tag minion or totem all-elemental mods (no character prefix)", function()
+		-- These mods do NOT match the strict ^+#% prefix anchor
+		assert.is_nil(getResistTag("Minions have +#% to all Elemental Resistances"))
+		assert.is_nil(getResistTag("Totems gain +#% to all Elemental Resistances"))
 	end)
 end)
 
@@ -176,8 +216,9 @@ describe("Resistance Swap — groupResists merging", function()
 		local filtered = {}
 		for _, entry in ipairs(modWeights) do
 			if entry.resistTag then
-				if entry.resistTag.elem and entry.weight > elemMax then elemMax = entry.weight end
-				if entry.resistTag.chaos and entry.weight > chaosMax then chaosMax = entry.weight end
+				local nw = entry.normalizedWeight or entry.weight
+				if entry.resistTag.elem and nw > elemMax then elemMax = nw end
+				if entry.resistTag.chaos and nw > chaosMax then chaosMax = nw end
 			else
 				table.insert(filtered, entry)
 			end
@@ -275,12 +316,53 @@ describe("Resistance Swap — groupResists merging", function()
 
 	it("does not emit pseudo-stat for elemental mod with weight 0", function()
 		local weights = {
-			{ tradeModId = "fire_resist", weight = 0, resistTag = { elem = true } },
+			{ tradeModId = "fire_resist", weight = 0, normalizedWeight = 0, resistTag = { elem = true } },
 			{ tradeModId = "life",        weight = 5 },
 		}
 		local result = mergeResists(weights)
 		assert.are.equal(1, #result)
 		assert.are.equal("life", result[1].tradeModId)
+	end)
+
+	it("normalizes all-elemental mod weight by factor 3 to avoid double-counting", function()
+		-- all-elem mod: raw weight=30, normalizedWeight=10 (30/3)
+		-- single fire mod: raw weight=8, normalizedWeight=8 (8/1)
+		-- elemMax should be max(10, 8) = 10, not max(30, 8) = 30
+		local weights = {
+			{ tradeModId = "all_elem",    weight = 30, normalizedWeight = 10, resistTag = { elem = true } },
+			{ tradeModId = "fire_resist", weight = 8,  normalizedWeight = 8,  resistTag = { elem = true } },
+		}
+		local result = mergeResists(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("pseudo.pseudo_total_elemental_resistance", result[1].tradeModId)
+		assert.are.equal(10, result[1].weight)
+	end)
+
+	it("normalizes dual-elemental mod weight by factor 2 to avoid double-counting", function()
+		-- dual fire+lightning: raw weight=20, normalizedWeight=10 (20/2)
+		-- single fire mod: raw weight=9, normalizedWeight=9
+		-- elemMax should be max(10, 9) = 10
+		local weights = {
+			{ tradeModId = "fire_lightning", weight = 20, normalizedWeight = 10, resistTag = { elem = true } },
+			{ tradeModId = "fire_resist",    weight = 9,  normalizedWeight = 9,  resistTag = { elem = true } },
+		}
+		local result = mergeResists(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("pseudo.pseudo_total_elemental_resistance", result[1].tradeModId)
+		assert.are.equal(10, result[1].weight)
+	end)
+
+	it("dual/all-elem mods are removed from individual filters (no double-counting)", function()
+		local weights = {
+			{ tradeModId = "all_elem",    weight = 30, normalizedWeight = 10, resistTag = { elem = true } },
+			{ tradeModId = "fire_resist", weight = 8,  normalizedWeight = 8,  resistTag = { elem = true } },
+			{ tradeModId = "life",        weight = 5 },
+		}
+		local result = mergeResists(weights)
+		-- Only "life" and the single pseudo entry should remain — no individual all_elem or fire_resist
+		assert.are.equal(2, #result)
+		assert.are.equal("life", result[1].tradeModId)
+		assert.are.equal("pseudo.pseudo_total_elemental_resistance", result[2].tradeModId)
 	end)
 end)
 
