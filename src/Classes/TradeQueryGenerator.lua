@@ -941,7 +941,7 @@ function TradeQueryGeneratorClass:FinishQuery()
 						}
 					}
 				},
-				status = { option = self.queryTab:GetTradeStatusOption() },
+				status = { option = self.queryTab and self.queryTab.GetTradeStatusOption and self.queryTab:GetTradeStatusOption() or "online" },
 			stats = {
 				{
 					type = "weight",
