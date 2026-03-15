@@ -1155,13 +1155,12 @@ function TradeQueryGeneratorClass:FinishQuery()
 	end
 
 	local queryJson = dkjson.encode(queryTable)
-	self.requesterCallback(self.requesterContext, queryJson, errMsg)
-
 	-- Close blocker popup
 	main:ClosePopup()
+	self.requesterCallback(self.requesterContext, queryJson, errMsg)
 end
 
-function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callback)
+function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callback, skipPopup)
 	self.requesterCallback = callback
 	self.requesterContext = context
 
@@ -1315,9 +1314,10 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 	end
 	popupHeight = popupHeight + 4
 
-	controls.generateQuery = new("ButtonControl", { "BOTTOM", nil, "BOTTOM" }, {-45, -10, 80, 20}, "Execute", function()
-		main:ClosePopup()
-
+	local function executeQuery()
+		if not skipPopup then
+			main:ClosePopup()
+		end
 		if controls.includeMirrored then
 			self.lastIncludeMirrored, options.includeMirrored = controls.includeMirrored.state, controls.includeMirrored.state
 		end
@@ -1402,9 +1402,15 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		end
 
 		self:StartQuery(slot, options)
-	end)
+	end
+
+	controls.generateQuery = new("ButtonControl", { "BOTTOM", nil, "BOTTOM" }, {-45, -10, 80, 20}, "Execute", executeQuery)
 	controls.cancel = new("ButtonControl", { "BOTTOM", nil, "BOTTOM" }, {45, -10, 80, 20}, "Cancel", function()
 		main:ClosePopup()
 	end)
-	main:OpenPopup(400, popupHeight, "Query Options", controls)
+	if skipPopup then
+		executeQuery()
+	else
+		main:OpenPopup(400, popupHeight, "Query Options", controls)
+	end
 end
