@@ -353,6 +353,21 @@ Highest Weight - Displays the order retrieved from trade]]
 	end)
 	self.controls.enchantInSort.tooltipText = "This includes enchants in sorting that occurs after trade results have been retrieved"
 
+	-- Only show items with required attributes (or include unusable when checked)
+	local optionsRow3Anchor = {"TOPRIGHT", self.controls.fetchCountEdit, "BOTTOMRIGHT"}
+	self.controls.includeUnusableCheck = new("CheckBoxControl", optionsRow3Anchor, {0, row_height + row_vertical_padding, row_height, row_height}, "", function(state)
+		-- checked = include unusable -> disable attribute filter
+		self.includeUnusable = state
+		for row_idx, _ in pairs(self.resultTbl) do
+			self:UpdateControlsWithItems(row_idx)
+		end
+	end)
+	self.controls.includeUnusableLabel = new("LabelControl", {"RIGHT", self.controls.includeUnusableCheck, "LEFT"}, {-6, 0, 0, 16}, "^7Include unusable:")
+	self.controls.includeUnusableCheck.tooltipText = "Include items you cannot currently equip (ignore Str/Dex/Int/Omni requirements).\nUnchecked: only show items you meet the attributes for."
+	self.includeUnusable = self.includeUnusable == true
+	self.controls.includeUnusableCheck.state = self.includeUnusable
+
+
 	-- Realm selection
 	self.controls.realmLabel = new("LabelControl", {"LEFT", self.controls.setSelect, "RIGHT"}, {18, 0, 20, row_height - 4}, "^7Realm:")
 	self.controls.realm = new("DropDownControl", {"LEFT", self.controls.realmLabel, "RIGHT"}, {6, 0, 150, row_height}, self.realmDropList, function(index, value)
@@ -449,7 +464,8 @@ Highest Weight - Displays the order retrieved from trade]]
 		t_insert(slotTables, { slotName = self.itemsTab.sockets[nodeId].label, nodeId = nodeId })
 	end
 
-	self.controls.sectionAnchor = new("LabelControl", {"LEFT", self.controls.poesessidButton, "LEFT"}, {0, 0, 0, 0}, "")
+	-- Anchor rows below the header controls (3 rows on right side now)
+	self.controls.sectionAnchor = new("LabelControl", {"TOPLEFT", self.controls.setSelect, "BOTTOMLEFT"}, {0, (row_height + row_vertical_padding) * 3 - row_vertical_padding * 2, 0, 0}, "")
 	top_pane_alignment_ref = {"TOPLEFT", self.controls.sectionAnchor, "TOPLEFT"}
 	local scrollBarShown = #slotTables > 21 -- clipping starts beyond this
 	-- dynamically hide rows that are above or below the scrollBar
@@ -487,7 +503,7 @@ Highest Weight - Displays the order retrieved from trade]]
 	end
 	row_count = row_count + 1
 
-	local effective_row_count = row_count - ((scrollBarShown and #slotTables >= 19) and #slotTables-19 or 0) + 2 + 2 -- Two top menu rows, two bottom rows, slots after #19 overlap the other controls at the bottom of the pane
+	local effective_row_count = row_count - ((scrollBarShown and #slotTables >= 19) and #slotTables-19 or 0) + 3 + 3 -- Three top menu rows, three bottom rows (full price line + notice + buttons), slots after #19 overlap the other controls at the bottom of the pane
 	self.effective_rows_height = row_height * (effective_row_count - #slotTables + (18 - (#slotTables > 37 and 3 or 0))) -- scrollBar height, "18 - slotTables > 37" logic is fine tuning whitespace after last row
 	self.pane_height = (row_height + row_vertical_padding) * effective_row_count + 3 * pane_margins_vertical + row_height / 2
 	local pane_width = 850 + (scrollBarShown and 25 or 0)
@@ -752,6 +768,19 @@ end
 
 -- Method to update controls after a search is completed
 function TradeQueryClass:UpdateControlsWithItems(row_idx)
+	local results = self.resultTbl[row_idx]
+	if not results or #results == 0 then
+		self.sortedResultTbl[row_idx] = {}
+		if self.controls["resultDropdown".. row_idx] then
+			self.controls["resultDropdown".. row_idx]:SetList({})
+			self.controls["resultDropdown".. row_idx].selIndex = 1
+		end
+		self.itemIndexTbl[row_idx] = nil
+		self.totalPrice[row_idx] = nil
+		self.controls.fullPrice.label = "Total Price: " .. self:GetTotalPriceString()
+		return
+	end
+
 	local sortMode = self.itemSortSelectionList[self.pbItemSortSelectionIndex]
 	local sortedItems, errMsg = self:SortFetchResults(row_idx, sortMode)
 	if errMsg == "MissingConversionRates" then
@@ -764,6 +793,16 @@ function TradeQueryClass:UpdateControlsWithItems(row_idx)
 	else
 		self:SetNotice(self.controls.pbNotice, "")
 	end
+	if not sortedItems or #sortedItems == 0 then
+		self:SetNotice(self.controls.pbNotice, "No usable results (attribute requirements)")
+		self.sortedResultTbl[row_idx] = {}
+		self.controls["resultDropdown".. row_idx]:SetList({})
+		self.controls["resultDropdown".. row_idx].selIndex = 1
+		self.itemIndexTbl[row_idx] = nil
+		self.totalPrice[row_idx] = nil
+		self.controls.fullPrice.label = "Total Price: " .. self:GetTotalPriceString()
+		return
+	end
 
 	self.sortedResultTbl[row_idx] = sortedItems
 	local pb_index = self.sortedResultTbl[row_idx][1].index
@@ -775,13 +814,16 @@ function TradeQueryClass:UpdateControlsWithItems(row_idx)
 	}
 	self.controls.fullPrice.label = "Total Price: " .. self:GetTotalPriceString()
 	local dropdownLabels = {}
-	for result_index = 1, #self.resultTbl[row_idx] do
-		local pb_index = self.sortedResultTbl[row_idx][result_index].index
-		local item = new("Item", self.resultTbl[row_idx][pb_index].item_string)
-		table.insert(dropdownLabels, colorCodes[item.rarity]..item.name)
+	for _, sorted in ipairs(self.sortedResultTbl[row_idx]) do
+		if sorted and sorted.index and self.resultTbl[row_idx][sorted.index] then
+			local item = new("Item", self.resultTbl[row_idx][sorted.index].item_string)
+			table.insert(dropdownLabels, colorCodes[item.rarity]..item.name)
+		end
 	end
-	self.controls["resultDropdown".. row_idx].selIndex = 1
-	self.controls["resultDropdown".. row_idx]:SetList(dropdownLabels)
+	if self.controls["resultDropdown".. row_idx] then
+		self.controls["resultDropdown".. row_idx].selIndex = 1
+		self.controls["resultDropdown".. row_idx]:SetList(dropdownLabels)
+	end
 end
 
 -- Method to set the current result return in the pane based of an index
@@ -798,6 +840,39 @@ end
 -- Method to sort the fetched results
 function TradeQueryClass:SortFetchResults(row_idx, mode)
 	local calcFunc, baseOutput
+	local attrReqCache = {}
+	local slotName = self.slotTables[row_idx].nodeId and "Jewel " .. tostring(self.slotTables[row_idx].nodeId) or self.slotTables[row_idx].slotName
+	local results = self.resultTbl[row_idx]
+	if not results or #results == 0 then
+		return {}
+	end
+
+		-- Returns true if the candidate item meets its attribute requirements when equipped
+		local function meetsAttributeRequirements(result_index)
+			if self.includeUnusable then
+				return true
+			end
+		if attrReqCache[result_index] ~= nil then
+			return attrReqCache[result_index]
+		end
+		if not calcFunc then
+			calcFunc, baseOutput = self.itemsTab.build.calcsTab:GetMiscCalculator()
+		end
+		local item = new("Item", self.resultTbl[row_idx][result_index].item_string)
+		local output = calcFunc({ repSlotName = slotName, repItem = item })
+		local ok
+		if output.ReqOmni then
+			ok = (output.ReqOmni or 0) <= (output.Omni or 0)
+		else
+			local function attrOk(reqKey, attrKey)
+				return (output[reqKey] or 0) <= (output[attrKey] or 0)
+			end
+			ok = attrOk("ReqStr", "Str") and attrOk("ReqDex", "Dex") and attrOk("ReqInt", "Int")
+		end
+		attrReqCache[result_index] = ok
+		return ok
+	end
+
 	local function getResultWeight(result_index)
 		if not calcFunc then
 			calcFunc, baseOutput = self.itemsTab.build.calcsTab:GetMiscCalculator()
@@ -825,12 +900,16 @@ function TradeQueryClass:SortFetchResults(row_idx, mode)
 	local newTbl = {}
 	if mode == self.sortModes.Weight then
 		for index, _ in pairs(self.resultTbl[row_idx]) do
-			t_insert(newTbl, { outputAttr = index, index = index })
+			if meetsAttributeRequirements(index) then
+				t_insert(newTbl, { outputAttr = index, index = index })
+			end
 		end
 		return newTbl
 	elseif mode == self.sortModes.StatValue  then
 		for result_index = 1, #self.resultTbl[row_idx] do
-			t_insert(newTbl, { outputAttr = getResultWeight(result_index), index = result_index })
+			if meetsAttributeRequirements(result_index) then
+				t_insert(newTbl, { outputAttr = getResultWeight(result_index), index = result_index })
+			end
 		end
 		table.sort(newTbl, function(a,b) return a.outputAttr > b.outputAttr end)
 	elseif mode == self.sortModes.StatValuePrice then
@@ -839,7 +918,9 @@ function TradeQueryClass:SortFetchResults(row_idx, mode)
 			return nil, "MissingConversionRates"
 		end
 		for result_index = 1, #self.resultTbl[row_idx] do
-			t_insert(newTbl, { outputAttr = getResultWeight(result_index) / priceTable[result_index], index = result_index })
+			if meetsAttributeRequirements(result_index) then
+				t_insert(newTbl, { outputAttr = getResultWeight(result_index) / priceTable[result_index], index = result_index })
+			end
 		end
 		table.sort(newTbl, function(a,b) return a.outputAttr > b.outputAttr end)
 	elseif mode == self.sortModes.Price then
@@ -848,7 +929,9 @@ function TradeQueryClass:SortFetchResults(row_idx, mode)
 			return nil, "MissingConversionRates"
 		end
 		for result_index, price in pairs(priceTable) do
-			t_insert(newTbl, { outputAttr = price, index = result_index })
+			if meetsAttributeRequirements(result_index) then
+				t_insert(newTbl, { outputAttr = price, index = result_index })
+			end
 		end
 		table.sort(newTbl, function(a,b) return a.outputAttr < b.outputAttr end)
 	else
@@ -1084,8 +1167,10 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 		table.insert(dropdownLabels, colorCodes[item.rarity]..item.name)
 	end
 	controls["resultDropdown"..row_idx] = new("DropDownControl", { "TOPLEFT", controls["changeButton"..row_idx], "TOPRIGHT"}, {8, 0, 325, row_height}, dropdownLabels, function(index)
-		self.itemIndexTbl[row_idx] = self.sortedResultTbl[row_idx][index].index
-		self:SetFetchResultReturn(row_idx, self.itemIndexTbl[row_idx])
+		if self.sortedResultTbl[row_idx] and self.sortedResultTbl[row_idx][index] then
+			self.itemIndexTbl[row_idx] = self.sortedResultTbl[row_idx][index].index
+			self:SetFetchResultReturn(row_idx, self.itemIndexTbl[row_idx])
+		end
 	end)
 	local function addMegalomaniacCompareToTooltipIfApplicable(tooltip, result_index)
 		if slotTbl.slotName ~= "Megalomaniac" then
@@ -1102,8 +1187,15 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 		end
 	end
 	controls["resultDropdown"..row_idx].tooltipFunc = function(tooltip, dropdown_mode, dropdown_index, dropdown_display_string)
-		local pb_index = self.sortedResultTbl[row_idx][dropdown_index].index
-		local result = self.resultTbl[row_idx][pb_index]
+		local sortedRow = self.sortedResultTbl[row_idx]
+		if not sortedRow or not sortedRow[dropdown_index] then
+			return
+		end
+		local pb_index = sortedRow[dropdown_index].index
+		local result = self.resultTbl[row_idx] and self.resultTbl[row_idx][pb_index]
+		if not result then
+			return
+		end
 		local item = new("Item", result.item_string)
 		tooltip:Clear()
 		self.itemsTab:AddItemTooltip(tooltip, item, slotTbl)
