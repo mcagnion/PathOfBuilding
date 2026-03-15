@@ -1276,6 +1276,12 @@ local preFlagList = {
 	["^hits against enemies (%a+) by you have "] = function(cond)
 		return { tag = { type = "ActorCondition", actor = "enemy", var = cond:gsub("^%a", string.upper) } }
 	end,
+	["^attack hits against (%a+) enemies have "] = function(cond)
+		return {
+			flags = bor(ModFlag.Attack, ModFlag.Hit),
+			tag = { type = "ActorCondition", actor = "enemy", var = cond:gsub("^%a", string.upper) },
+		}
+	end,
 	["^enemies shocked or frozen by you take "] = { tag = { type = "Condition", varList = { "Shocked","Frozen" } }, applyToEnemy = true, modSuffix = "Taken" },
 	["^enemies affected by your spider's webs [thd][ae][avk][el] "] = { tag = { type = "MultiplierThreshold", var = "Spider's WebStack", threshold = 1 }, applyToEnemy = true },
 	["^enemies you curse take "] = { tag = { type = "Condition", var = "Cursed" }, applyToEnemy = true, modSuffix = "Taken" },
@@ -6892,6 +6898,7 @@ end
 local cache = { }
 local unsupported = { }
 local count = 0
+local cacheBlindRetryDone = { }
 --local foo = io.open("../unsupported.txt", "w")
 --foo:close()
 return function(line, isComb)
@@ -6911,6 +6918,16 @@ return function(line, isComb)
 				foo:close()
 			end
 		end
+	elseif not cacheBlindRetryDone[line]
+		and cache[line][2]
+		and line:lower():find("chance to blind", 1, true) then
+		-- Cached unsupported blind chance lines can become parseable after parser updates.
+		cacheBlindRetryDone[line] = true
+		local modList, extra = parseMod(line, 1)
+		if modList and extra then
+			modList, extra = parseMod(line, 2)
+		end
+		cache[line] = { modList, extra }
 	end
 	return unpack(copyTable(cache[line]))
 end, cache
