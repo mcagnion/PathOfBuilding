@@ -1794,6 +1794,7 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 			options.links = tonumber(controls.links.buf)
 		end
 		options.statWeights = statWeights
+		self.requesterContext.includeEldritch = options.includeEldritch == true
 
 		if self.savedOptions then
 			self.savedOptions.includeMirrored = self.lastIncludeMirrored

@@ -28,6 +28,7 @@ local TradeQueryClass = newClass("TradeQuery", function(self, itemsTab)
 	self.sortedResultTbl = { }
 	self.itemIndexTbl = { }
 	self.slotScoreCache = { }
+	self.resultQueryOptions = { }
 	-- tooltip acceleration tables
 	self.onlyWeightedBaseOutput = { }
 	self.lastComparedWeightList = { }
@@ -1142,6 +1143,20 @@ function TradeQueryClass:ReduceOutput(output)
 	return smallOutput
 end
 
+function TradeQueryClass:BuildComparableResultItem(slotName, result, includeEnchants, preserveExistingEldritchImplicits)
+	local item = new("Item", result.item_string)
+	if not item.base then
+		return item
+	end
+	self.itemsTab:ApplyComparisonItemOverrides(item, { preserveExistingEldritchImplicits = preserveExistingEldritchImplicits })
+	if not includeEnchants and #item.enchantModLines > 0 then
+		item.enchantModLines = { }
+		item:BuildAndParseRaw()
+	end
+
+	return item
+end
+
 -- Method to evaluate a result by getting it's output and weight
 function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, baseOutput)
 	local result = self.resultTbl[row_idx][result_index]
@@ -1162,6 +1177,7 @@ function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, ba
 		self.lastComparedWeightList[row_idx][result_index] = self.statSortSelectionList
 	end
 	local slotName = self.slotTables[row_idx].nodeId and "Jewel " .. tostring(self.slotTables[row_idx].nodeId) or self.slotTables[row_idx].slotName
+	local preserveExistingEldritchImplicits = self.resultQueryOptions[row_idx] and self.resultQueryOptions[row_idx].includeEldritch == true
 	if slotName == "Megalomaniac" then
 		local addedNodes = {}
 		for nodeName in (result.item_string.."\r\n"):gmatch("1 Added Passive Skill is (.-)\r?\n") do
@@ -1184,11 +1200,7 @@ function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, ba
 		}
 		table.sort(result.evaluation, function(a, b) return a.weight > b.weight end)
 	else
-		local item = new("Item", result.item_string)
-		if not self.enchantInSort then -- Calc item DPS without anoint or enchant as these can generally be added after.
-			item.enchantModLines = { }
-			item:BuildAndParseRaw()
-		end
+		local item = self:BuildComparableResultItem(slotName, result, self.enchantInSort, preserveExistingEldritchImplicits)
 		local output = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = item }))
 		local weight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, output, self.statSortSelectionList)
 		result.evaluation = {{ output = output, weight = weight }}
@@ -1251,12 +1263,14 @@ function TradeQueryClass:UpdateControlsWithItems(row_idx)
 	}
 	self.controls.fullPrice.label = "Total Price: " .. self:GetTotalPriceString()
 	self:UpdateBestUpgradeLabel()
+	if not self.slotTables[row_idx] then return end
 	local dropdownLabels = {}
-	for _, sorted in ipairs(self.sortedResultTbl[row_idx]) do
-		if sorted and sorted.index and self.resultTbl[row_idx][sorted.index] then
-			local item = new("Item", self.resultTbl[row_idx][sorted.index].item_string)
-			table.insert(dropdownLabels, colorCodes[item.rarity]..item.name)
-		end
+	local slotName = self.slotTables[row_idx].nodeId and "Jewel " .. tostring(self.slotTables[row_idx].nodeId) or self.slotTables[row_idx].slotName
+	local preserveExistingEldritchImplicits = self.resultQueryOptions[row_idx] and self.resultQueryOptions[row_idx].includeEldritch == true
+	for result_index = 1, #self.resultTbl[row_idx] do
+		local pb_index = self.sortedResultTbl[row_idx][result_index].index
+		local item = self:BuildComparableResultItem(slotName, self.resultTbl[row_idx][pb_index], true, preserveExistingEldritchImplicits)
+		table.insert(dropdownLabels, colorCodes[item.rarity]..item.name)
 	end
 	if self.controls["resultDropdown".. row_idx] then
 		self.controls["resultDropdown".. row_idx].selIndex = 1
@@ -1596,30 +1610,30 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 				url = url .. "?q=" .. urlEncode(query)
 				controls["uri"..context.row_idx]:SetText(url, true)
 				return
-				end
-				context.controls["priceButton"..context.row_idx].label = "Searching..."
-				self:SearchWithQueryWeightAdjustedAndRaritySplit(query,
-					function(items, errMsg)
-						if errMsg then
-							self:SetNotice(context.controls.pbNotice, colorCodes.NEGATIVE .. errMsg)
-							context.controls["priceButton"..context.row_idx].label = "Price Item"
-							return
-						else
-							self:SetNotice(context.controls.pbNotice, "")
-						end
-						self.resultTbl[context.row_idx] = items
-						self:UpdateControlsWithItems(context.row_idx)
-						context.controls["priceButton"..context.row_idx].label = "Price Item"
-					end,
-					{
-						callbackQueryId = function(queryId)
-							local url = self.tradeQueryRequests:buildUrl(self.hostName .. "trade/search", self.pbRealm, self.pbLeague, queryId)
-							controls["uri"..context.row_idx]:SetText(url, true)
-						end
-					}
-				)
-			end)
-		end)
+			end
+			context.controls["priceButton"..context.row_idx].label = "Searching..."
+			self.tradeQueryRequests:SearchWithQueryWeightAdjusted(self.pbRealm, self.pbLeague, query,
+				function(items, errMsg)
+					if errMsg then
+						self:SetNotice(context.controls.pbNotice, colorCodes.NEGATIVE .. errMsg)
+						context.controls["priceButton"..context.row_idx].label =  "Price Item"
+						return
+					else
+						self:SetNotice(context.controls.pbNotice, "")
+					end
+					self.resultQueryOptions[context.row_idx] = { includeEldritch = context.includeEldritch == true }
+					self.resultTbl[context.row_idx] = items
+					self:UpdateControlsWithItems(context.row_idx)
+					context.controls["priceButton"..context.row_idx].label =  "Price Item"
+				end,
+				{
+					callbackQueryId = function(queryId)
+						local url = self.tradeQueryRequests:buildUrl(self.hostName .. "trade/search", self.pbRealm, self.pbLeague, queryId)
+						controls["uri"..context.row_idx]:SetText(url, true)
+					end
+				}
+			)
+				end)
 	controls["bestButton"..row_idx].shown = function() return not self.resultTbl[row_idx] end
 	controls["bestButton"..row_idx].enabled = function() return self.pbLeague end
 	controls["bestButton"..row_idx].tooltipText = "Creates a weighted search to find the highest Stat Value items for this slot."
@@ -1659,6 +1673,7 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 					self:SetNotice(controls.pbNotice, "Error: " .. errMsg)
 				else
 					self:SetNotice(controls.pbNotice, "")
+					self.resultQueryOptions[row_idx] = nil
 					self.resultTbl[row_idx] = items
 					self:UpdateControlsWithItems(row_idx)
 				end
@@ -1686,6 +1701,7 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 		self.itemIndexTbl[row_idx] = nil
 		self.sortedResultTbl[row_idx] = nil
 		self.resultTbl[row_idx] = nil
+		self.resultQueryOptions[row_idx] = nil
 		self.totalPrice[row_idx] = nil
 		self.slotScoreCache[row_idx] = nil
 		self.controls.fullPrice.label = "Total Price: " .. self:GetTotalPriceString()
@@ -1693,8 +1709,12 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 	end)
 	controls["changeButton"..row_idx].shown = function() return self.resultTbl[row_idx] end
 	local dropdownLabels = {}
+	local slotName = slotTbl.nodeId and "Jewel " .. tostring(slotTbl.nodeId) or slotTbl.slotName
+	local function preserveExistingEldritchImplicits()
+		return self.resultQueryOptions[row_idx] and self.resultQueryOptions[row_idx].includeEldritch == true
+	end
 	for _, sortedResult in ipairs(self.sortedResultTbl[row_idx] or {}) do
-		local item = new("Item", self.resultTbl[row_idx][sortedResult.index].item_string)
+		local item = self:BuildComparableResultItem(slotName, self.resultTbl[row_idx][sortedResult.index], true, preserveExistingEldritchImplicits())
 		table.insert(dropdownLabels, colorCodes[item.rarity]..item.name)
 	end
 	controls["resultDropdown"..row_idx] = new("DropDownControl", { "TOPLEFT", controls["changeButton"..row_idx], "TOPRIGHT"}, {8, 0, 280, row_height}, dropdownLabels, function(index)
@@ -1718,16 +1738,9 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 		end
 	end
 	controls["resultDropdown"..row_idx].tooltipFunc = function(tooltip, dropdown_mode, dropdown_index, dropdown_display_string)
-		local sortedRow = self.sortedResultTbl[row_idx]
-		if not sortedRow or not sortedRow[dropdown_index] then
-			return
-		end
-		local pb_index = sortedRow[dropdown_index].index
-		local result = self.resultTbl[row_idx] and self.resultTbl[row_idx][pb_index]
-		if not result then
-			return
-		end
-		local item = new("Item", result.item_string)
+		local pb_index = self.sortedResultTbl[row_idx][dropdown_index].index
+		local result = self.resultTbl[row_idx][pb_index]
+		local item = self:BuildComparableResultItem(slotName, result, true, preserveExistingEldritchImplicits())
 		tooltip:Clear()
 		self.itemsTab:AddItemTooltip(tooltip, item, slotTbl)
 		addMegalomaniacCompareToTooltipIfApplicable(tooltip, pb_index)
@@ -1735,7 +1748,9 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 		tooltip:AddLine(16, string.format("^7Price: %s %s", result.amount, result.currency))
 	end
 	controls["importButton"..row_idx] = new("ButtonControl", { "TOPLEFT", controls["resultDropdown"..row_idx], "TOPRIGHT"}, {8, 0, 100, row_height}, "Import Item", function()
-		self.itemsTab:CreateDisplayItemFromRaw(self.resultTbl[row_idx][self.itemIndexTbl[row_idx]].item_string)
+		local result = self.resultTbl[row_idx][self.itemIndexTbl[row_idx]]
+		local comparableItem = self:BuildComparableResultItem(slotName, result, true, preserveExistingEldritchImplicits())
+		self.itemsTab:CreateDisplayItemFromRaw(comparableItem:BuildRaw())
 		local item = self.itemsTab.displayItem
 		-- pass "true" to not auto equip it as we will have our own logic
 		self.itemsTab:AddDisplayItem(true)
@@ -1756,7 +1771,7 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 			-- TODO: item parsing bug caught here.
 			-- item.baseName is nil and throws error in the following AddItemTooltip func
 			-- if the item is unidentified
-			local item = new("Item", item_string)
+			local item = self:BuildComparableResultItem(slotName, self.resultTbl[row_idx][selected_result_index], true, preserveExistingEldritchImplicits())
 			self.itemsTab:AddItemTooltip(tooltip, item, slotTbl, true)
 			addMegalomaniacCompareToTooltipIfApplicable(tooltip, selected_result_index)
 		end
