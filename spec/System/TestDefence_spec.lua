@@ -1177,4 +1177,245 @@ describe("TestDefence", function()
 		assert.are.equals(0, floor(poolsRemaining.Life))
 		assert.are.equals(0, floor(poolsRemaining.OverkillDamage))
 	end)
+
+	describe("recovery between hits", function()
+		local function buildRecoveryCalcs(opts)
+			opts = opts or {}
+			build.configTab.input.enemyIsBoss = opts.enemyIsBoss or "None"
+			build.configTab.input.enemySpeed = opts.enemySpeed or 100
+			build.configTab.input.enemyDamageType = opts.enemyDamageType or "Average"
+			build.configTab.input.EnableEHPRecoveryCalcs = opts.enable == nil and true or opts.enable
+			build.configTab.input.customMods = opts.customMods or ""
+			if opts.skillGroup then
+				build.skillsTab:PasteSocketGroup(opts.skillGroup)
+				build.skillsTab:ProcessSocketGroup(build.skillsTab.socketGroupList[#build.skillsTab.socketGroupList])
+			end
+			build.configTab:BuildModList()
+			runCallback("OnFrame")
+			return build.calcsTab.calcsOutput
+		end
+
+		it("is disabled by default", function()
+			local output = buildRecoveryCalcs({ enable = false })
+
+			assert.is_nil(output.EHPRecoverySurvivalTime)
+			assert.is_nil(output.EHPRecoveryStatus)
+		end)
+
+		it("increases survival time when life regeneration is added", function()
+			local output = buildRecoveryCalcs()
+			local baseRecovery = output.LifeEHPRecoveryBetweenHits or 0
+			local baseSurvivalTime = output.EHPRecoverySurvivalTime or 0
+
+			output = buildRecoveryCalcs({
+				customMods = [[
+					Regenerate 1000 Life per second
+				]]
+			})
+
+			assert.is_true(output.LifeEHPRecoveryBetweenHits > baseRecovery)
+			assert.is_true(output.EHPRecoverySurvivalTime > baseSurvivalTime)
+		end)
+
+		it("increases survival time when life leech is added", function()
+			local output = buildRecoveryCalcs({
+				enemySpeed = 5000,
+				skillGroup = "Freezing Pulse 20/0 Default  1\n"
+			})
+			local baseLeech = output.LifeEHPLeechRate or 0
+			local baseSurvivalTime = output.EHPRecoverySurvivalTime or 0
+
+			output = buildRecoveryCalcs({
+				enemySpeed = 5000,
+				skillGroup = "Freezing Pulse 20/0 Default  1\n",
+				customMods = [[
+					100% of Spell Damage Leeched as Life
+				]]
+			})
+
+			assert.is_true(output.LifeEHPLeechRate > baseLeech)
+			assert.is_true(output.EHPRecoverySurvivalTime > baseSurvivalTime)
+		end)
+
+		it("ignores mana recovery when mana is not used as defence", function()
+			local output = buildRecoveryCalcs({
+				customMods = [[
+					+1000 to maximum Mana
+					Regenerate 500 Mana per second
+				]]
+			})
+
+			assert.are.equals(0, output.ManaEHPRecoveryRate)
+			assert.are.equals(0, output.ManaEHPRecoveryBetweenHits)
+		end)
+
+		it("counts mana recovery when mana is used as defence", function()
+			local output = buildRecoveryCalcs({
+				customMods = [[
+					50% of damage is taken from mana before life
+					+1000 to maximum Mana
+					Regenerate 500 Mana per second
+				]]
+			})
+
+			assert.is_true(output.ManaEHPRecoveryRate > 0)
+			assert.is_true(output.ManaEHPRecoveryBetweenHits > 0)
+		end)
+
+		it("counts recoup in recovery between hits", function()
+			local output = buildRecoveryCalcs()
+			local baseRecoup = output.LifeEHPRecoupRate or 0
+			local baseRecovery = output.LifeEHPRecoveryBetweenHits or 0
+
+			output = buildRecoveryCalcs({
+				customMods = [[
+					50% of Damage taken Recouped as Life
+				]]
+			})
+
+			assert.is_true(output.LifeEHPRecoupRate > baseRecoup)
+			assert.is_true(output.LifeEHPRecoveryBetweenHits > baseRecovery)
+		end)
+
+		it("counts block recovery as gain per hit", function()
+			local output = buildRecoveryCalcs({
+				enemyDamageType = "Melee",
+				customMods = [[
+					+50% chance to block attack damage
+				]]
+			})
+			local baseGain = output.LifeEHPGainPerHit or 0
+			local baseSurvivalTime = output.EHPRecoverySurvivalTime or 0
+
+			output = buildRecoveryCalcs({
+				enemyDamageType = "Melee",
+				customMods = [[
+					+50% chance to block attack damage
+					Recover 500 Life when you Block
+				]]
+			})
+
+			assert.is_true(output.LifeEHPGainPerHit > baseGain)
+			assert.is_true(output.EHPRecoverySurvivalTime > baseSurvivalTime)
+		end)
+
+		it("counts suppression recovery as gain per hit", function()
+			local output = buildRecoveryCalcs({
+				enemyDamageType = "Spell",
+				customMods = [[
+					+100% chance to suppress spell damage
+				]]
+			})
+			local baseGain = output.LifeEHPGainPerHit or 0
+			local baseSurvivalTime = output.EHPRecoverySurvivalTime or 0
+
+			output = buildRecoveryCalcs({
+				enemyDamageType = "Spell",
+				customMods = [[
+					+100% chance to suppress spell damage
+					Recover 500 Life when you Suppress Spell Damage
+				]]
+			})
+
+			assert.is_true(output.LifeEHPGainPerHit > baseGain)
+			assert.is_true(output.EHPRecoverySurvivalTime > baseSurvivalTime)
+		end)
+
+		it("increases survival time when a guard skill is active", function()
+			local output = buildRecoveryCalcs({
+				enemySpeed = 100
+			})
+			local baseSurvivalTime = output.EHPRecoverySurvivalTime or 0
+
+			output = buildRecoveryCalcs({
+				enemySpeed = 100,
+				skillGroup = "Steelskin 20/0 Default  1\n"
+			})
+
+			assert.is_true((output.sharedGuardAbsorb or 0) > 0)
+			assert.is_true(output.EHPRecoverySurvivalTime > baseSurvivalTime)
+		end)
+
+		it("only activates energy shield recharge when hits are spaced far enough apart", function()
+			local output = buildRecoveryCalcs({
+				enemySpeed = 100,
+				customMods = [[
+					You have no intelligence
+					+1000 to maximum Energy Shield
+					+60% to all elemental resistances
+				]]
+			})
+
+			assert.are.equals(0, output.EnergyShieldEHPRecoveryRate)
+			assert.are.equals(0, output.EnergyShieldEHPRecoveryBetweenHits)
+
+			output = buildRecoveryCalcs({
+				enemySpeed = 5000,
+				customMods = [[
+					You have no intelligence
+					+1000 to maximum Energy Shield
+					+60% to all elemental resistances
+				]]
+			})
+
+			assert.is_true(output.EnergyShieldEHPRechargeRate > 0)
+			assert.is_true(output.EnergyShieldEHPRecoveryBetweenHits > 0)
+		end)
+
+		it("extends time between damaging hits when avoidance is added", function()
+			local output = buildRecoveryCalcs({
+				enemySpeed = 100
+			})
+			local baseInterval = output.EHPRecoveryDamagingHitInterval or 0
+			local baseHitChance = output.EHPRecoveryHitChance or 100
+
+			output = buildRecoveryCalcs({
+				enemySpeed = 100,
+				customMods = [[
+					50% chance to Avoid All Damage from Hits
+				]]
+			})
+
+			assert.is_true(output.EHPRecoveryHitChance < baseHitChance)
+			assert.is_true(output.EHPRecoveryDamagingHitInterval > baseInterval)
+		end)
+
+		it("updates status when recovery fully covers the hit cycle", function()
+			local output = buildRecoveryCalcs({
+				enemySpeed = 100,
+				customMods = [[
+					+940 to maximum life
+					+60% to all elemental resistances
+				]]
+			})
+
+			assert.are.equals("Unsustainable", output.EHPRecoveryStatus)
+
+			output = buildRecoveryCalcs({
+				enemySpeed = 5000,
+				customMods = [[
+					+940 to maximum life
+					+60% to all elemental resistances
+					Regenerate 5000 Life per second
+				]]
+			})
+
+			assert.is_true(output.EHPRecoveryStatus == "Stable" or output.EHPRecoveryStatus == "Likely Stable")
+		end)
+
+		it("uses likely stable when the hit simulation cap is reached", function()
+			local output = buildRecoveryCalcs({
+				enemySpeed = 5000,
+				customMods = [[
+					+940 to maximum life
+					+60% to all elemental resistances
+					Regenerate 20000 Life per second
+				]]
+			})
+
+			assert.is_true(output.EHPRecoveryHitsSurvived >= 50)
+			assert.are.equals("Likely Stable", output.EHPRecoveryStatus)
+		end)
+
+	end)
 end)

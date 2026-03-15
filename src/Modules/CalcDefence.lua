@@ -155,6 +155,19 @@ local function calcLifeHitPoolWithLossPrevention(life, maxLife, lifeLossPrevente
 	return aboveLow / (1 - lifeLossPrevented / 100) + m_min(life, halfLife) / (1 - lifeLossBelowHalfPrevented / 100) / (1 - lifeLossPrevented / 100)
 end
 
+local function recoverPoolsByFlat(poolTable, recoveryTable, actor, multiplier)
+	local output = actor.output
+	local recoveryMultiplier = multiplier or 1
+	for _, resource in ipairs({ "Life", "Mana", "EnergyShield" }) do
+		local recovery = (recoveryTable[resource] or 0) * recoveryMultiplier
+		if recovery ~= 0 then
+			local maxPool = output[(resource == "Life" and "LifeRecoverable") or (resource == "Mana" and "ManaUnreserved") or "EnergyShieldRecoveryCap"] or 0
+			poolTable[resource] = m_min(m_max((poolTable[resource] or 0) + recovery, 0), maxPool)
+		end
+	end
+	return poolTable
+end
+
 ---Helper function that reduces pools according to damage taken
 ---@param poolTable table special pool values to use. Can be nil. Values from actor output are used if this is not provided or a value for some key in this is nil.
 ---@param damageTable table damage table after all the relevant reductions
@@ -2654,11 +2667,14 @@ function calcs.buildDefenceEstimations(env, actor)
 				poolTable.Mana = m_min(poolTable.Mana + DamageIn.ManaWhenHit, output.ManaUnreserved or 0)
 				poolTable.EnergyShield = m_min(poolTable.EnergyShield + DamageIn.EnergyShieldWhenHit, output.EnergyShieldRecoveryCap)
 			end
+			if DamageIn.RecoverBetweenHits and poolTable.Life > 0 then
+				poolTable = recoverPoolsByFlat(poolTable, DamageIn.RecoveryBetweenHits, actor)
+			end
 			iterationMultiplier = 1
 			-- to speed it up, run recursively but accelerated
 			local speedUp = data.misc.ehpCalcSpeedUp
 			DamageIn["cyclesRan"] = DamageIn["cyclesRan"] or false
-			if not DamageIn["cyclesRan"] and poolTable.Life > 0 and DamageIn["iterations"] < maxIterations then
+			if not DamageIn.RecoverBetweenHits and not DamageIn["cyclesRan"] and poolTable.Life > 0 and DamageIn["iterations"] < maxIterations then
 				Damage = { }
 				for _, damageType in ipairs(dmgTypeList) do
 					Damage[damageType] = DamageIn[damageType] * speedUp
@@ -2704,6 +2720,7 @@ function calcs.buildDefenceEstimations(env, actor)
 		return numHits
 	end
 	
+	local ehpRegenDamageIn
 	if damageCategoryConfig ~= "DamageOverTime" then
 		-- number of damaging hits needed to be taken to die
 		do
@@ -2808,6 +2825,7 @@ function calcs.buildDefenceEstimations(env, actor)
 			averageAvoidChance = averageAvoidChance / 5
 			output["ConfiguredDamageChance"] = 100 * (blockEffect * suppressionEffect * (1 - averageAvoidChance / 100))
 			output["NumberOfMitigatedDamagingHits"] = (output["ConfiguredDamageChance"] ~= 100 or DamageIn["TrackRecoupable"] or DamageIn["TrackLifeLossOverTime"] or DamageIn.GainWhenHit) and numberOfHitsToDie(DamageIn) or output["NumberOfDamagingHits"]
+			ehpRegenDamageIn = copyTable(DamageIn)
 			if breakdown then
 				breakdown["ConfiguredDamageChance"] = {
 					s_format("%.2f ^8(chance for block to fail)", 1 - BlockChance)
@@ -2873,6 +2891,10 @@ function calcs.buildDefenceEstimations(env, actor)
 				}
 			end
 		end
+
+		output.enemySkillTime = (env.configInput.enemySpeed or env.configPlaceholder.enemySpeed or 700) / (1 + enemyDB:Sum("INC", nil, "Speed") / 100)
+		local enemyActionSpeed = calcs.actionSpeedMod(actor.enemy)
+		output.enemySkillTime = output.enemySkillTime / 1000 / enemyActionSpeed
 		
 		-- effective hit pool
 		output["TotalEHP"] = output["TotalNumberOfHits"] * output["totalEnemyDamageIn"]
@@ -2883,12 +2905,9 @@ function calcs.buildDefenceEstimations(env, actor)
 				s_format("= %d ^8(total damage you can take)", output["TotalEHP"]),
 			}
 		end
-		
+
 		-- survival time
 		do
-			output.enemySkillTime = (env.configInput.enemySpeed or env.configPlaceholder.enemySpeed or 700) / (1 + enemyDB:Sum("INC", nil, "Speed") / 100)
-			local enemyActionSpeed = calcs.actionSpeedMod(actor.enemy)
-			output.enemySkillTime = output.enemySkillTime / 1000 / enemyActionSpeed
 			output["EHPSurvivalTime"] = output["TotalNumberOfHits"] * output.enemySkillTime
 			if breakdown then
 				breakdown["EHPSurvivalTime"] = {
@@ -3038,7 +3057,319 @@ function calcs.buildDefenceEstimations(env, actor)
 			end
 		end
 	end
-	
+
+	-- effective hit pool with sustained recovery between damaging hits
+	if env.configInput.EnableEHPRecoveryCalcs and damageCategoryConfig ~= "DamageOverTime" and ehpRegenDamageIn then
+		output["EHPRecoveryDamagePerHit"] = nil
+		output["EHPRecoveryHitChance"] = nil
+		output["EHPRecoveryDamagingHitInterval"] = nil
+		output["EHPRecoveryHitsSurvived"] = nil
+		output["EHPRecoverySurvivalTime"] = nil
+		output["EHPRecoveryStatus"] = nil
+		output["EHPRecoveryHasGainPerHit"] = nil
+		output["EHPRecoveryHasRecoveryRow"] = nil
+		output["EHPRecoveryLifeHeader"] = nil
+		output["EHPRecoveryManaHeader"] = nil
+		output["EHPRecoveryEnergyShieldHeader"] = nil
+		output["NumberOfMitigatedDamagingHitsRegen"] = nil
+		output["TotalNumberOfHitsRegen"] = nil
+		output["TotalEHPRegen"] = nil
+		for _, resource in ipairs({"Life", "Mana", "EnergyShield"}) do
+			output[resource.."EHPRecoveryRate"] = nil
+			output[resource.."EHPLeechRate"] = nil
+			output[resource.."EHPRecoupRate"] = nil
+			output[resource.."EHPRechargeRate"] = nil
+			output[resource.."EHPRecoveryBetweenHits"] = nil
+			output[resource.."EHPLossPerHit"] = nil
+			output[resource.."EHPGainPerHit"] = nil
+			output[resource.."EHPNetLossPerHit"] = nil
+			output[resource.."EHPLossPerHitDisplay"] = nil
+			output[resource.."EHPGainPerHitDisplay"] = nil
+			output[resource.."EHPRecoveryBetweenHitsDisplay"] = nil
+			output[resource.."EHPNetLossPerHitDisplay"] = nil
+		end
+		if breakdown then
+			breakdown["EHPRecoveryDamagePerHit"] = nil
+			breakdown["TotalEHPRegen"] = nil
+			breakdown["EHPRecoveryHitChance"] = nil
+			breakdown["EHPRecoveryDamagingHitInterval"] = nil
+			breakdown["EHPRecoveryHitsSurvived"] = nil
+			breakdown["EHPRecoverySurvivalTime"] = nil
+			breakdown["EHPRecoveryStatus"] = nil
+			for _, resource in ipairs({"Life", "Mana", "EnergyShield"}) do
+				breakdown[resource.."EHPRecoveryRate"] = nil
+				breakdown[resource.."EHPLeechRate"] = nil
+				breakdown[resource.."EHPRecoupRate"] = nil
+				breakdown[resource.."EHPRechargeRate"] = nil
+				breakdown[resource.."EHPRecoveryBetweenHits"] = nil
+				breakdown[resource.."EHPLossPerHit"] = nil
+				breakdown[resource.."EHPGainPerHit"] = nil
+				breakdown[resource.."EHPNetLossPerHit"] = nil
+			end
+		end
+
+		local hitChance = 1 - output["ConfiguredNotHitChance"] / 100
+		if hitChance > 0 then
+			local damagingHitInterval = output.enemySkillTime / hitChance
+			local rechargeDuration = m_max(damagingHitInterval - (output.EnergyShieldRechargeDelay or m_huge), 0)
+			local manaUsedAsDefence = false
+			for _, damageType in ipairs(dmgTypeList) do
+				if (ehpRegenDamageIn[damageType] or 0) > 0 and (output[damageType.."ManaEffectiveLife"] or 0) > (output.LifeRecoverable or 0) then
+					manaUsedAsDefence = true
+					break
+				end
+			end
+			local lifeRegenPerSecond = output.NetLifeRegen or output.LifeRegenRecovery or 0
+			local lifeLeechPerSecond = output.LifeLeechGainRate or output.LifeLeechRate or 0
+			local lifeRecoupPerSecond = output.netLifeRecoupAndLossLostOverTimeAvg or 0
+			local lifeRechargePerSecond = output.LifeRecharge or 0
+			local lifeRecoveryPerSecond = lifeRegenPerSecond + lifeLeechPerSecond + lifeRecoupPerSecond
+			local manaRegenPerSecond = manaUsedAsDefence and (output.NetManaRegen or output.ManaRegenRecovery or 0) or 0
+			local manaLeechPerSecond = manaUsedAsDefence and (output.ManaLeechGainRate or output.ManaLeechRate or 0) or 0
+			local manaRecoupPerSecond = manaUsedAsDefence and (output.ManaRecoupRecoveryAvg or 0) or 0
+			local manaRecoveryPerSecond = manaRegenPerSecond + manaLeechPerSecond + manaRecoupPerSecond
+			local energyShieldRegenPerSecond = output.NetEnergyShieldRegen or output.EnergyShieldRegenRecovery or 0
+			local energyShieldLeechPerSecond = output.EnergyShieldLeechGainRate or output.EnergyShieldLeechRate or 0
+			local energyShieldRecoupPerSecond = output.EnergyShieldRecoupRecoveryAvg or 0
+			local energyShieldRechargePerSecond = output.EnergyShieldRecharge or 0
+			local energyShieldRecoveryPerSecond = energyShieldRegenPerSecond
+				+ energyShieldLeechPerSecond
+				+ energyShieldRecoupPerSecond
+
+			local recoveryBetweenHits = {
+				Life = lifeRecoveryPerSecond * damagingHitInterval + lifeRechargePerSecond * rechargeDuration,
+				Mana = manaRecoveryPerSecond * damagingHitInterval,
+				EnergyShield = energyShieldRecoveryPerSecond * damagingHitInterval + energyShieldRechargePerSecond * rechargeDuration,
+			}
+			do
+				output["EHPRecoveryHitChance"] = hitChance * 100
+				output["EHPRecoveryDamagingHitInterval"] = damagingHitInterval
+				output["EHPRecoveryDamagePerHit"] = 0
+				output["LifeEHPRecoveryRate"] = lifeRegenPerSecond
+				output["LifeEHPLeechRate"] = lifeLeechPerSecond
+				output["LifeEHPRecoupRate"] = lifeRecoupPerSecond
+				output["LifeEHPRechargeRate"] = lifeRechargePerSecond
+				output["LifeEHPRecoveryBetweenHits"] = recoveryBetweenHits.Life
+				output["ManaEHPRecoveryRate"] = manaRegenPerSecond
+				output["ManaEHPLeechRate"] = manaLeechPerSecond
+				output["ManaEHPRecoupRate"] = manaRecoupPerSecond
+				output["ManaEHPRechargeRate"] = 0
+				output["ManaEHPRecoveryBetweenHits"] = recoveryBetweenHits.Mana
+				output["EnergyShieldEHPRecoveryRate"] = energyShieldRegenPerSecond
+				output["EnergyShieldEHPLeechRate"] = energyShieldLeechPerSecond
+				output["EnergyShieldEHPRecoupRate"] = energyShieldRecoupPerSecond
+				output["EnergyShieldEHPRechargeRate"] = energyShieldRechargePerSecond
+				output["EnergyShieldEHPRecoveryBetweenHits"] = recoveryBetweenHits.EnergyShield
+				output["EHPRecoveryLifeHeader"] = colorCodes.LIFE.."Life:"
+				output["EHPRecoveryManaHeader"] = manaUsedAsDefence and (colorCodes.MANA.."Mana:") or ""
+				output["EHPRecoveryEnergyShieldHeader"] = colorCodes.ES.."Energy Shield:"
+				for _, damageType in ipairs(dmgTypeList) do
+					output["EHPRecoveryDamagePerHit"] = output["EHPRecoveryDamagePerHit"] + (ehpRegenDamageIn[damageType] or 0)
+				end
+				if breakdown then
+					breakdown["EHPRecoveryDamagePerHit"] = {}
+					for _, damageType in ipairs(dmgTypeList) do
+						local damage = ehpRegenDamageIn[damageType] or 0
+						if damage > 0 then
+							t_insert(breakdown["EHPRecoveryDamagePerHit"], s_format("%.1f ^8(%s damage taken per damaging hit)", damage, damageType:lower()))
+						end
+					end
+					t_insert(breakdown["EHPRecoveryDamagePerHit"], s_format("= %.1f ^8(total damage taken per damaging hit)", output["EHPRecoveryDamagePerHit"]))
+					breakdown["EHPRecoveryHitChance"] = copyTable(breakdown["ConfiguredNotHitChance"] or {})
+					t_insert(breakdown["EHPRecoveryHitChance"], s_format("= %.2f%% ^8(chance to take a damaging hit)", output["EHPRecoveryHitChance"]))
+					breakdown["EHPRecoveryDamagingHitInterval"] = {
+						s_format("%.2fs ^8(time between enemy actions)", output.enemySkillTime),
+						s_format("/ %.2f ^8(chance to take a damaging hit)", hitChance),
+						s_format("= %.2fs ^8(time between damaging hits on average)", damagingHitInterval),
+					}
+					breakdown["LifeEHPRecoveryRate"] = copyTable(breakdown["NetLifeRegen"] or breakdown["LifeRegenRecovery"] or { s_format("%.1f ^8(total life net recovery per second)", lifeRegenPerSecond) })
+					breakdown["ManaEHPRecoveryRate"] = manaUsedAsDefence and copyTable(breakdown["NetManaRegen"] or breakdown["ManaRegenRecovery"] or { s_format("%.1f ^8(total mana net recovery per second)", manaRegenPerSecond) }) or { "Mana ignored in this EHP scenario", s_format("= %.1f ^8per second", manaRegenPerSecond) }
+					breakdown["EnergyShieldEHPRecoveryRate"] = copyTable(breakdown["NetEnergyShieldRegen"] or breakdown["EnergyShieldRegenRecovery"] or { s_format("%.1f ^8(total energy shield net recovery per second)", energyShieldRegenPerSecond) })
+					breakdown["LifeEHPLeechRate"] = {
+						s_format("%.1f ^8(life leech per second)", output.LifeLeechRate or 0),
+						s_format("+ %.1f ^8(life gain on hit per second)", output.LifeOnHitRate or 0),
+						s_format("= %.1f ^8per second", lifeLeechPerSecond),
+					}
+					breakdown["ManaEHPLeechRate"] = manaUsedAsDefence and {
+						s_format("%.1f ^8(mana leech per second)", output.ManaLeechRate or 0),
+						s_format("+ %.1f ^8(mana gain on hit per second)", output.ManaOnHitRate or 0),
+						s_format("= %.1f ^8per second", manaLeechPerSecond),
+					} or { "Mana ignored in this EHP scenario", s_format("= %.1f ^8per second", manaLeechPerSecond) }
+					breakdown["EnergyShieldEHPLeechRate"] = {
+						s_format("%.1f ^8(energy shield leech per second)", output.EnergyShieldLeechRate or 0),
+						s_format("+ %.1f ^8(energy shield gain on hit per second)", output.EnergyShieldOnHitRate or 0),
+						s_format("= %.1f ^8per second", energyShieldLeechPerSecond),
+					}
+					breakdown["LifeEHPRecoupRate"] = copyTable(breakdown["netLifeRecoupAndLossLostOverTimeAvg"] or breakdown["LifeRecoupRecoveryAvg"] or { s_format("%.1f ^8(net life recoup per second)", lifeRecoupPerSecond) })
+					breakdown["ManaEHPRecoupRate"] = manaUsedAsDefence and copyTable(breakdown["ManaRecoupRecoveryAvg"] or { s_format("%.1f ^8(mana recoup per second)", manaRecoupPerSecond) }) or { "Mana ignored in this EHP scenario", s_format("= %.1f ^8per second", manaRecoupPerSecond) }
+					breakdown["EnergyShieldEHPRecoupRate"] = copyTable(breakdown["EnergyShieldRecoupRecoveryAvg"] or { s_format("%.1f ^8(energy shield recoup per second)", energyShieldRecoupPerSecond) })
+					breakdown["LifeEHPRechargeRate"] = copyTable(breakdown["LifeRecharge"] or { s_format("%.1f ^8(life recharge per second)", lifeRechargePerSecond) })
+					breakdown["ManaEHPRechargeRate"] = { "Mana has no recharge contribution in this calculation", s_format("= %.1f ^8per second", 0) }
+					breakdown["EnergyShieldEHPRechargeRate"] = copyTable(breakdown["EnergyShieldRecharge"] or { s_format("%.1f ^8(energy shield recharge per second)", energyShieldRechargePerSecond) })
+					breakdown["LifeEHPRecoveryBetweenHits"] = {
+						s_format("%.1f ^8(recovery/leech/recoup per second)", lifeRecoveryPerSecond),
+						s_format("x %.2fs ^8(time between damaging hits)", damagingHitInterval),
+						s_format("+ %.1f ^8(recharge per second)", lifeRechargePerSecond),
+						s_format("x %.2fs ^8(recharge active time)", rechargeDuration),
+						s_format("= %.1f ^8(recovered between damaging hits)", recoveryBetweenHits.Life),
+					}
+					breakdown["ManaEHPRecoveryBetweenHits"] = manaUsedAsDefence and {
+						s_format("%.1f ^8(recovery/leech/recoup per second)", manaRecoveryPerSecond),
+						s_format("x %.2fs ^8(time between damaging hits)", damagingHitInterval),
+						s_format("= %.1f ^8(recovered between damaging hits)", recoveryBetweenHits.Mana),
+					} or { "Mana ignored in this EHP scenario", s_format("= %.1f ^8(recovered between damaging hits)", recoveryBetweenHits.Mana) }
+					breakdown["EnergyShieldEHPRecoveryBetweenHits"] = {
+						s_format("%.1f ^8(recovery/leech/recoup per second)", energyShieldRecoveryPerSecond),
+						s_format("x %.2fs ^8(time between damaging hits)", damagingHitInterval),
+						s_format("+ %.1f ^8(recharge per second)", energyShieldRechargePerSecond),
+						s_format("x %.2fs ^8(recharge active time)", rechargeDuration),
+						s_format("= %.1f ^8(recovered between damaging hits)", recoveryBetweenHits.EnergyShield),
+					}
+				end
+				ehpRegenDamageIn.TrackRecoupable = false
+				ehpRegenDamageIn.TrackLifeLossOverTime = false
+				ehpRegenDamageIn.cycles = 1
+				ehpRegenDamageIn.iterations = 0
+				ehpRegenDamageIn.cyclesRan = false
+				ehpRegenDamageIn.RecoverBetweenHits = true
+				ehpRegenDamageIn.RecoveryBetweenHits = recoveryBetweenHits
+				output["NumberOfMitigatedDamagingHitsRegen"] = numberOfHitsToDie(ehpRegenDamageIn)
+				output["EHPRecoveryHitsSurvived"] = output["NumberOfMitigatedDamagingHitsRegen"]
+				output["EHPRecoverySurvivalTime"] = output["EHPRecoveryHitsSurvived"] * damagingHitInterval
+				output["TotalNumberOfHitsRegen"] = output["NumberOfMitigatedDamagingHitsRegen"] / hitChance
+				output["TotalEHPRegen"] = output["TotalNumberOfHitsRegen"] * output["totalEnemyDamageIn"]
+				local startPools = {
+					Life = output.LifeRecoverable or 0,
+					Mana = output.ManaUnreserved or 0,
+					EnergyShield = output.EnergyShieldRecoveryCap or 0,
+				}
+				local hitDamage = {}
+				for _, damageType in ipairs(dmgTypeList) do
+					if (ehpRegenDamageIn[damageType] or 0) > 0 then
+						hitDamage[damageType] = ehpRegenDamageIn[damageType]
+					end
+				end
+				local poolsAfterDamage = calcs.reducePoolsByDamage(copyTable(startPools), copyTable(hitDamage), actor)
+				local poolsAfterHit = copyTable(poolsAfterDamage)
+				if ehpRegenDamageIn.GainWhenHit and poolsAfterHit.Life > 0 then
+					poolsAfterHit = recoverPoolsByFlat(poolsAfterHit, {
+						Life = ehpRegenDamageIn.LifeWhenHit or 0,
+						Mana = ehpRegenDamageIn.ManaWhenHit or 0,
+						EnergyShield = ehpRegenDamageIn.EnergyShieldWhenHit or 0,
+					}, actor)
+				end
+				local poolsAfterRecovery = recoverPoolsByFlat(copyTable(poolsAfterHit), recoveryBetweenHits, actor)
+				local totalLossPerHit = 0
+				local totalGainPerHit = 0
+				local totalLossAfterGainPerHit = 0
+				local totalRecoveryBetweenHits = 0
+				local totalNetLossPerHit = 0
+				local hitIterationCap = data.misc.ehpCalcMaxIterationsToCalc
+				local cappedHitsSurvived = output["EHPRecoveryHitsSurvived"] and output["EHPRecoveryHitsSurvived"] >= hitIterationCap
+				for _, resource in ipairs({"Life", "Mana", "EnergyShield"}) do
+					output[resource.."EHPLossPerHit"] = (startPools[resource] or 0) - (poolsAfterDamage[resource] or 0)
+					output[resource.."EHPGainPerHit"] = (poolsAfterHit[resource] or 0) - (poolsAfterDamage[resource] or 0)
+					output[resource.."EHPNetLossPerHit"] = (startPools[resource] or 0) - (poolsAfterRecovery[resource] or 0)
+					output[resource.."EHPLossPerHitDisplay"] = s_format("%.1f", output[resource.."EHPLossPerHit"] or 0)
+					output[resource.."EHPGainPerHitDisplay"] = s_format("%.1f", output[resource.."EHPGainPerHit"] or 0)
+					output[resource.."EHPRecoveryBetweenHitsDisplay"] = s_format("%.1f", output[resource.."EHPRecoveryBetweenHits"] or 0)
+					output[resource.."EHPNetLossPerHitDisplay"] = s_format("%.1f", output[resource.."EHPNetLossPerHit"] or 0)
+					if resource ~= "Mana" or manaUsedAsDefence then
+						totalLossPerHit = totalLossPerHit + output[resource.."EHPLossPerHit"]
+						totalGainPerHit = totalGainPerHit + output[resource.."EHPGainPerHit"]
+						totalLossAfterGainPerHit = totalLossAfterGainPerHit + ((startPools[resource] or 0) - (poolsAfterHit[resource] or 0))
+						totalRecoveryBetweenHits = totalRecoveryBetweenHits + (output[resource.."EHPRecoveryBetweenHits"] or 0)
+						totalNetLossPerHit = totalNetLossPerHit + output[resource.."EHPNetLossPerHit"]
+					else
+						output[resource.."EHPLossPerHitDisplay"] = ""
+						output[resource.."EHPGainPerHitDisplay"] = ""
+						output[resource.."EHPRecoveryBetweenHitsDisplay"] = ""
+						output[resource.."EHPNetLossPerHitDisplay"] = ""
+					end
+				end
+				output["EHPRecoveryHasGainPerHit"] = totalGainPerHit > 0 and 1 or nil
+				output["EHPRecoveryHasRecoveryRow"] = totalRecoveryBetweenHits > 0 and 1 or nil
+				if output["EHPRecoveryHitsSurvived"] == m_huge or totalNetLossPerHit <= 0 then
+					output["EHPRecoveryStatus"] = cappedHitsSurvived and "Likely Stable" or "Stable"
+				elseif totalLossAfterGainPerHit > 0 and totalNetLossPerHit <= totalLossAfterGainPerHit * 0.25 then
+					output["EHPRecoveryStatus"] = "Sustainable"
+				else
+					output["EHPRecoveryStatus"] = "Unsustainable"
+				end
+				if breakdown then
+					breakdown["EHPRecoveryHitsSurvived"] = {
+						s_format("%.2f ^8(damaging hits survived with recovery between hits)", output["EHPRecoveryHitsSurvived"]),
+					}
+					if cappedHitsSurvived then
+						t_insert(breakdown["EHPRecoveryHitsSurvived"], s_format("Reached %d-hit simulation cap", hitIterationCap))
+					end
+					breakdown["EHPRecoverySurvivalTime"] = {
+						s_format("%.2f ^8(damaging hits survived)", output["EHPRecoveryHitsSurvived"]),
+						s_format("x %.2fs ^8(time between damaging hits)", damagingHitInterval),
+						s_format("= %.2fs ^8(total survival time)", output["EHPRecoverySurvivalTime"]),
+					}
+					if cappedHitsSurvived then
+						t_insert(breakdown["EHPRecoverySurvivalTime"], s_format("Reached %d-hit simulation cap", hitIterationCap))
+					end
+					breakdown["EHPRecoveryStatus"] = {
+						s_format("%s ^8(status)", output["EHPRecoveryStatus"]),
+						s_format("%.1f ^8(total damage loss per damaging hit)", totalLossPerHit),
+						s_format("- %.1f ^8(total immediate gain on hit)", totalGainPerHit),
+						s_format("- %.1f ^8(total recovery between damaging hits)", totalLossAfterGainPerHit - totalNetLossPerHit),
+						s_format("= %.1f ^8(total net loss per damaging hit)", totalNetLossPerHit),
+					}
+					if cappedHitsSurvived then
+						t_insert(breakdown["EHPRecoveryStatus"], 2, s_format("Reached %d-hit simulation cap", hitIterationCap))
+					end
+					breakdown["TotalEHPRegen"] = {
+						s_format("%.2f ^8(total average number of hits you can take with sustained recovery)", output["TotalNumberOfHitsRegen"]),
+						s_format("x %d ^8(total incoming damage)", output["totalEnemyDamageIn"]),
+						s_format("= %d ^8(total damage you can take)", output["TotalEHPRegen"]),
+						"",
+						s_format("%.2fs ^8(time between enemy actions)", output.enemySkillTime),
+						s_format("/ %.2f ^8(chance to take a damaging hit)", hitChance),
+						s_format("%.2fs ^8(time between damaging hits on average)", damagingHitInterval),
+						"",
+						s_format("%+.1f ^8(life regen/recovery per second)", lifeRegenPerSecond),
+						s_format("%+.1f ^8(life leech/on hit rate per second)", lifeLeechPerSecond),
+						s_format("%+.1f ^8(life recoup net of delayed life loss per second)", lifeRecoupPerSecond),
+						s_format("%+.1f ^8(life recharge per second)", lifeRechargePerSecond),
+						s_format("%+.1f ^8(life sustained between damaging hits)", recoveryBetweenHits.Life),
+						"",
+						manaUsedAsDefence and s_format("%+.1f ^8(mana regen/recovery per second)", manaRegenPerSecond) or "0.0 ^8(mana ignored: no damage is taken from mana in this EHP scenario)",
+						manaUsedAsDefence and s_format("%+.1f ^8(mana leech/on hit rate per second)", manaLeechPerSecond) or "0.0 ^8(mana leech/on hit ignored)",
+						manaUsedAsDefence and s_format("%+.1f ^8(mana recoup per second)", manaRecoupPerSecond) or "0.0 ^8(mana recoup ignored)",
+						s_format("%+.1f ^8(mana sustained between damaging hits)", recoveryBetweenHits.Mana),
+						"",
+						s_format("%+.1f ^8(energy shield regen/recovery per second)", energyShieldRegenPerSecond),
+						s_format("%+.1f ^8(energy shield leech/on hit rate per second)", energyShieldLeechPerSecond),
+						s_format("%+.1f ^8(energy shield recoup per second)", energyShieldRecoupPerSecond),
+						s_format("%+.1f ^8(energy shield recharge per second)", energyShieldRechargePerSecond),
+						s_format("%.2fs ^8(recharge active duration between damaging hits)", rechargeDuration),
+						s_format("%+.1f ^8(energy shield sustained between damaging hits)", recoveryBetweenHits.EnergyShield),
+					}
+					for _, resource in ipairs({"Life", "Mana", "EnergyShield"}) do
+						breakdown[resource.."EHPLossPerHit"] = {
+							s_format("%.1f ^8(starting pool)", startPools[resource] or 0),
+							s_format("- %.1f ^8(pool after damage before gain on hit)", poolsAfterDamage[resource] or 0),
+							s_format("= %.1f ^8(damage loss per damaging hit)", output[resource.."EHPLossPerHit"] or 0),
+						}
+						breakdown[resource.."EHPGainPerHit"] = {
+							s_format("%.1f ^8(pool after damage before gain on hit)", poolsAfterDamage[resource] or 0),
+							s_format("+ %.1f ^8(immediate gain on hit)", output[resource.."EHPGainPerHit"] or 0),
+							s_format("= %.1f ^8(pool after immediate gain on hit)", poolsAfterHit[resource] or 0),
+						}
+						breakdown[resource.."EHPNetLossPerHit"] = {
+							s_format("%.1f ^8(starting pool)", startPools[resource] or 0),
+							s_format("- %.1f ^8(pool after recovery between hits)", poolsAfterRecovery[resource] or 0),
+							s_format("= %.1f ^8(net loss per damaging hit)", output[resource.."EHPNetLossPerHit"] or 0),
+						}
+					end
+				end
+			end
+		end
+	end
+		
 	-- pvp
 	if env.configInput.PvpScaling then
 		local PvpTvalue = output.enemySkillTime
