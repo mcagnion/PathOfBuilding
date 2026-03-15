@@ -173,6 +173,21 @@ local function getActiveSkillCount(activeSkill)
 	return 1, true
 end
 
+local function shouldScaleFullDPSBySummonedTotems(env, activeSkill, activeSkillCount)
+	if not env.configInput.fullDPSAutoMaxTotems then
+		return false
+	end
+	if activeSkillCount ~= 1 or not activeSkill.skillFlags.totem then
+		return false
+	end
+	-- Explosive Arrow already accounts for active totems in its custom DPS logic.
+	return not activeSkill.activeEffect.grantedEffect.explosiveArrowFunc
+end
+
+local function getSummonedTotemCount(output)
+	return output.TotemsSummoned or output.ActiveTotemLimit or 1
+end
+
 function calcs.calcFullDPS(build, mode, override, specEnv)
 	local fullEnv, cachedPlayerDB, cachedEnemyDB, cachedMinionDB = calcs.initEnv(build, mode, override, specEnv)
 	local usedEnv = nil
@@ -206,6 +221,9 @@ function calcs.calcFullDPS(build, mode, override, specEnv)
 				fullEnv.player.mainSkill = activeSkill
 				calcs.perform(fullEnv, true)
 				usedEnv = fullEnv
+				if shouldScaleFullDPSBySummonedTotems(fullEnv, activeSkill, activeSkillCount) then
+					activeSkillCount = getSummonedTotemCount(usedEnv.player.output)
+				end
 				local minionName = nil
 				if activeSkill.minion or usedEnv.minion then
 					if usedEnv.minion.output.TotalDPS and usedEnv.minion.output.TotalDPS > 0 then
