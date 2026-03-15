@@ -1210,6 +1210,10 @@ function ImportTabClass:ImportSocketedItems(item, socketedItems, slotName)
 						gemInstance.quality = tonumber(property.values[1][1]:match("%d+"))
 					end
 				end
+				if socketedItem.builtInSupport then
+					local supportName = socketedItem.builtInSupport:gsub("^Supported by Level 1 ", "")
+					gemInstance.imbuedSupport = "Support" .. supportName:gsub("%s+", "")
+				end
 				local groupID = item.sockets[socketedItem.socket + 1].group
 				if not itemSocketGroupList[groupID] then
 					itemSocketGroupList[groupID] = { label = "", enabled = true, gemList = { }, slot = slotName }

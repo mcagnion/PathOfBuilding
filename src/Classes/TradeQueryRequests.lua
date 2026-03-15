@@ -5,6 +5,17 @@
 --
 
 local dkjson = require "dkjson"
+local m_min = math.min
+
+local function normalizeStatusOption(statusOption)
+	if type(statusOption) == "table" then
+		statusOption = statusOption.option or statusOption.id or statusOption.value or statusOption.label
+	end
+	if type(statusOption) == "string" and statusOption ~= "" then
+		return statusOption
+	end
+	return nil
+end
 
 ---@class TradeQueryRequests
 local TradeQueryRequestsClass = newClass("TradeQueryRequests", function(self, rateLimiter)
@@ -15,8 +26,33 @@ local TradeQueryRequestsClass = newClass("TradeQueryRequests", function(self, ra
 		["search"] = {},
 		["fetch"] = {},
 	}
+	self.lastWaitLog = { }
 	self.hostName = "https://www.pathofexile.com/"
 end)
+
+function TradeQueryRequestsClass:SetStatusOption(statusOption)
+	self.statusOption = normalizeStatusOption(statusOption)
+end
+
+function TradeQueryRequestsClass:ApplyDefaultStatusOption(query)
+	if not self.statusOption or type(query) ~= "string" or query == "" then
+		return query
+	end
+	local queryJson = dkjson.decode(query)
+	if not queryJson or type(queryJson) ~= "table" then
+		return query
+	end
+	queryJson.query = queryJson.query or { }
+	if queryJson.query.status == nil then
+		queryJson.query.status = { option = self.statusOption }
+		return dkjson.encode(queryJson)
+	end
+	if type(queryJson.query.status) == "string" and queryJson.query.status ~= "" then
+		queryJson.query.status = { option = queryJson.query.status }
+		return dkjson.encode(queryJson)
+	end
+	return query
+end
 
 ---Main routine for processing request queue
 function TradeQueryRequestsClass:ProcessQueue()
@@ -27,12 +63,18 @@ function TradeQueryRequestsClass:ProcessQueue()
 			local timeNext = self.rateLimiter:NextRequestTime(policy, now)
 			if not (queue[1].retryTime and now < queue[1].retryTime) then
 				if now >= timeNext then
+					self.lastWaitLog[key] = nil
 					local request = table.remove(queue, 1)
 					local requestId = self.rateLimiter:InsertRequest(policy)
 					local onComplete = function(response, errMsg)
+						response = response or { header = "", body = "" }
+						local header = response.header or ""
 						self.rateLimiter:FinishRequest(policy, requestId)
-						self.rateLimiter:UpdateFromHeader(response.header)
-						if response.header:match("HTTP/[%d%.]+ (%d+)") == "429" then
+						if header ~= "" then
+							self.rateLimiter:UpdateFromHeader(header)
+						end
+						local responseCode = header:match("HTTP/[%d%.]+ (%d+)")
+						if responseCode == "429" then
 							request.attempts = (request.attempts or 0) + 1
 							local backoff = m_min(2 ^ request.attempts, 60)
 							request.retryTime = os.time() + backoff
@@ -40,7 +82,8 @@ function TradeQueryRequestsClass:ProcessQueue()
 							return
 						end
 						-- if limit rules don't return account then the POESESSID is invalid.
-						if response.header:match("[xX]%-[rR]ate%-[lL]imit%-[rR]ules: (.-)\n"):match("Account") == nil and main.POESESSID ~= "" then
+						local rateLimitRules = header:match("[xX]%-[rR]ate%-[lL]imit%-[rR]ules: (.-)\n")
+						if rateLimitRules and rateLimitRules:match("Account") == nil and main.POESESSID ~= "" then
 							main.POESESSID = ""
 							if errMsg then
 								errMsg = errMsg .. "\nPOESESSID is invalid. Please Re-Log and reset"
@@ -55,14 +98,23 @@ function TradeQueryRequestsClass:ProcessQueue()
 					if main.POESESSID ~= "" then
 						header = header .. "\nCookie: POESESSID=" .. main.POESESSID
 					end
+					if request.onDispatch then
+						request.onDispatch()
+					end
 					launch:DownloadPage(request.url, onComplete, {
 						header = header,
 						body = request.body,
 					})
 				else
+					local waitSeconds = timeNext - now
+					if self.lastWaitLog[key] ~= waitSeconds then
+						self.lastWaitLog[key] = waitSeconds
+					end
 					break
 				end
 			end
+		else
+			self.lastWaitLog[key] = nil
 		end
 	end
 end
@@ -83,7 +135,7 @@ function TradeQueryRequestsClass:SearchWithQuery(realm, league, query, callback,
 			return callback(nil, errMsg)
 		end
 		self:FetchResults(response.result, response.id, callback)
-	end)
+	end, params)
 end
 
 ---Performs search and fetches results, adjusting the query weight and repeating
@@ -193,10 +245,13 @@ end
 ---@param league string
 ---@param query string
 ---@param callback fun(response:table, errMsg:string)
-function TradeQueryRequestsClass:PerformSearch(realm, league, query, callback)
+function TradeQueryRequestsClass:PerformSearch(realm, league, query, callback, params)
+	params = params or {}
+	query = self:ApplyDefaultStatusOption(query)
 	table.insert(self.requestQueue["search"], {
 		url = self:buildUrl(self.hostName .. "api/trade/search", realm, league),
 		body = query,
+		onDispatch = params.onDispatch,
 		callback = function(response, errMsg)
 			if errMsg and not errMsg:find("Response code: 400") then
 				return callback(nil, errMsg)
@@ -282,11 +337,13 @@ function TradeQueryRequestsClass:FetchResultBlock(url, callback)
 			end
 			local items = {}
 			for _, trade_entry in pairs(response.result) do
+				local price = trade_entry.listing and trade_entry.listing.price or {}
+				local extendedText = trade_entry.item and trade_entry.item.extended and trade_entry.item.extended.text
 				table.insert(items, {
-					amount = trade_entry.listing.price.amount,
-					currency = trade_entry.listing.price.currency,
-					item_string = common.base64.decode(trade_entry.item.extended.text),
-					whisper = trade_entry.listing.whisper,
+					amount = price.amount,
+					currency = price.currency,
+					item_string = extendedText and common.base64.decode(extendedText) or nil,
+					whisper = trade_entry.listing and trade_entry.listing.whisper,
 					weight = trade_entry.item.pseudoMods and trade_entry.item.pseudoMods[1]:match("Sum: (.+)") or "0",
 					id = trade_entry.id
 				})
