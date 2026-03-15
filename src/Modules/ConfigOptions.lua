@@ -979,10 +979,10 @@ Huge sets the radius to 11.
 		modList:NewMod("Condition:Lifetap", "FLAG", true, "Config", { type = "Condition", var = "Combat" })
 		modList:NewMod("FlaskLifeRecovery", "INC", 20, "Lifetap")
 	end },
-	{ var = "buffOnslaught", type = "check", label = "Do you have Onslaught?", tooltip = "In addition to allowing any 'while you have Onslaught' modifiers to apply,\nthis will enable the Onslaught buff itself. (Grants 20% increased Attack, Cast, and Movement Speed)", apply = function(val, modList, enemyModList)
+	{ var = "buffOnslaught", type = "check", label = "Do you have Onslaught?", ifCond = "Onslaught", tooltip = "In addition to allowing any 'while you have Onslaught' modifiers to apply,\nthis will enable the Onslaught buff itself. (Grants 20% increased Attack, Cast, and Movement Speed)", apply = function(val, modList, enemyModList)
 		modList:NewMod("Condition:Onslaught", "FLAG", true, "Config", { type = "Condition", var = "Combat" })
 	end },
-	{ var = "buffArcaneSurge", type = "check", label = "Do you have Arcane Surge?", tooltip = "In addition to allowing any 'while you have Arcane Surge' modifiers to apply,\nthis will enable the Arcane Surge buff itself. (Grants 20% increased cast speed and 30% increased Mana Regeneration rate)", apply = function(val, modList, enemyModList)
+	{ var = "buffArcaneSurge", type = "check", label = "Do you have Arcane Surge?", ifCond = { "ArcaneSurge", "AffectedByArcaneSurge" }, tooltip = "In addition to allowing any 'while you have Arcane Surge' modifiers to apply,\nthis will enable the Arcane Surge buff itself. (Grants 20% increased cast speed and 30% increased Mana Regeneration rate)", apply = function(val, modList, enemyModList)
 		modList:NewMod("Condition:ArcaneSurge", "FLAG", true, "Config", { type = "Condition", var = "Combat" })
 	end },
 	{ var = "minionBuffOnslaught", type = "check", label = "Do your minions have Onslaught?", ifFlag = "haveMinion", tooltip = "In addition to allowing any 'while your minions have Onslaught' modifiers to apply,\nthis will enable the Onslaught buff itself. (Grants 20% increased Attack, Cast, and Movement Speed)", apply = function(val, modList, enemyModList)
@@ -1808,7 +1808,7 @@ Huge sets the radius to 11.
 	{ var = "conditionEnemyExcommunicated", type = "check", label = "Is the enemy Excommunicated?", ifFlag = "Condition:CanExcommunicate", tooltip = "Excommunicated Enemies cannot deal ^xD02090Chaos ^7Damage.", apply = function(val, modList, enemyModList)
 		enemyModList:NewMod("Condition:Excommunicated", "FLAG", true, "Config", { type = "ActorCondition", actor = "enemy", var = "CanExcommunicate" })
 	end },
-	{ var = "conditionEnemyBlinded", type = "check", label = "Is the enemy Blinded?", tooltip = "In addition to allowing 'against Blinded Enemies' modifiers to apply,\n Blind applies the following effects.\n -20% Accuracy \n -20% ^x33FF77Evasion", apply = function(val, modList, enemyModList)
+	{ var = "conditionEnemyBlinded", type = "check", label = "Is the enemy Blinded?", ifEnemyCond = "Blinded", tooltip = "In addition to allowing 'against Blinded Enemies' modifiers to apply,\n Blind applies the following effects.\n -20% Accuracy \n -20% ^x33FF77Evasion", apply = function(val, modList, enemyModList)
 		enemyModList:NewMod("Condition:Blinded", "FLAG", true, "Config", { type = "Condition", var = "Effective" })
 	end },
 	{ var = "overrideBuffBlinded", type = "count", label = "Effect of Blind (if not maximum):", ifOption = "conditionEnemyBlinded", tooltip = "If you have a guaranteed source of Blind, the strongest one will apply.", apply = function(val, modList, enemyModList)
@@ -1817,7 +1817,7 @@ Huge sets the radius to 11.
 	{ var = "conditionEnemyTaunted", type = "check", label = "Is the enemy Taunted?", ifEnemyCond = "Taunted", apply = function(val, modList, enemyModList)
 		enemyModList:NewMod("Condition:Taunted", "FLAG", true, "Config", { type = "Condition", var = "Effective" })
 	end },
-	{ var = "conditionEnemyDebilitated", type = "check", label = "Is the enemy Debilitated?", ifMod = "DebilitateChance", tooltip = "Debilitated enemies deal 10% less damage.", apply = function(val, modList, enemyModList)
+	{ var = "conditionEnemyDebilitated", type = "check", label = "Is the enemy Debilitated?", ifEnemyCond = "Debilitated", tooltip = "Debilitated enemies deal 10% less damage.", apply = function(val, modList, enemyModList)
 		enemyModList:NewMod("Condition:Debilitated", "FLAG", true, "Config", { type = "Condition", var = "Effective" })
 	end },
 	{ var = "conditionEnemyPacified", type = "check", label = "Is the enemy Pacified?", ifSkill = "Pacify", tooltip = "Enemies are Pacified after 60% of Pacify's duration has expired", apply = function(val, modList, enemyModList)
@@ -1924,10 +1924,10 @@ Huge sets the radius to 11.
 	{ var = "conditionEnemyLightningExposure", type = "check", label = "Is the enemy Exposed to ^xADAA47Lightning?", ifFlag = "applyLightningExposure", tooltip = "This applies -10% ^xADAA47Lightning Resistance ^7to the enemy.", apply = function(val, modList, enemyModList)
 		enemyModList:NewMod("LightningExposure", "BASE", -10, "Config", { type = "Condition", var = "Effective" }, { type = "ActorCondition", actor = "enemy", var = "CanApplyLightningExposure" })
 	end },
-	{ var = "conditionEnemyIntimidated", type = "check", label = "Is the enemy Intimidated?", tooltip = "Intimidated enemies take 10% increased Attack Damage.", apply = function(val, modList, enemyModList)
+	{ var = "conditionEnemyIntimidated", type = "check", label = "Is the enemy Intimidated?", ifEnemyCond = "Intimidated", tooltip = "Intimidated enemies take 10% increased Attack Damage.", apply = function(val, modList, enemyModList)
 		enemyModList:NewMod("Condition:Intimidated", "FLAG", true, "Config", { type = "Condition", var = "Effective" })
 	end },
-	{ var = "conditionEnemyCrushed", type = "check", label = "Is the enemy Crushed?", tooltip = "Crushed enemies have 15% reduced Physical Damage Reduction.", apply = function(val, modList, enemyModList)
+	{ var = "conditionEnemyCrushed", type = "check", label = "Is the enemy Crushed?", ifEnemyCond = "Crushed", tooltip = "Crushed enemies have 15% reduced Physical Damage Reduction.", apply = function(val, modList, enemyModList)
 		enemyModList:NewMod("Condition:Crushed", "FLAG", true, "Config", { type = "Condition", var = "Effective" })
 	end },
 	{ var = "conditionEnemyHallowingFlame", type = "check", label = "Is enemy affected by Hallowing Flame?", ifFlag = "Condition:CanInflictHallowingFlame", apply = function(val, modList, enemyModList)
@@ -1942,7 +1942,7 @@ Huge sets the radius to 11.
 	{ var = "conditionNearLinkedTarget", type = "check", label = "Is the enemy near you Linked target?", ifEnemyCond = "NearLinkedTarget", apply = function(val, modList, enemyModList)
 		enemyModList:NewMod("Condition:NearLinkedTarget", "FLAG", true, "Config", { type = "Condition", var = "Effective" })
 	end },
-	{ var = "conditionEnemyUnnerved", type = "check", label = "Is the enemy Unnerved?", tooltip = "Unnerved enemies take 10% increased Spell Damage.", apply = function(val, modList, enemyModList)
+	{ var = "conditionEnemyUnnerved", type = "check", label = "Is the enemy Unnerved?", ifEnemyCond = "Unnerved", tooltip = "Unnerved enemies take 10% increased Spell Damage.", apply = function(val, modList, enemyModList)
 		enemyModList:NewMod("Condition:Unnerved", "FLAG", true, "Config", { type = "Condition", var = "Effective" })
 	end },
 	{ var = "conditionEnemyCoveredInAsh", type = "check", label = "Is the enemy covered in Ash?", tooltip = "Covered in Ash applies the following to the enemy:\n\t20% increased ^xB97123Fire ^7Damage taken\n\t20% less Movement Speed", apply = function(val, modList, enemyModList)

@@ -10,6 +10,7 @@ local m_floor = math.floor
 local s_upper = string.upper
 
 local varList = LoadModule("Modules/ConfigOptions")
+local configOptionHelper = LoadModule("Modules/ConfigOptionHelper")
 
 local ConfigTabClass = newClass("ConfigTab", "UndoHandler", "ControlHost", "Control", function(self, build)
 	self.UndoHandler()
@@ -141,6 +142,11 @@ local ConfigTabClass = newClass("ConfigTab", "UndoHandler", "ControlHost", "Cont
 		end
 	end
 
+	local function getActiveConfigInput()
+		local configSet = self.configSets[self.activeConfigSetId]
+		return configSet and configSet.input or { }
+	end
+
 	local lastSection
 	for _, varData in ipairs(varList) do
 		if varData.section then
@@ -269,7 +275,11 @@ local ConfigTabClass = newClass("ConfigTab", "UndoHandler", "ControlHost", "Cont
 					if implyCond(varData) then
 						return true
 					end
+					local conditionMod = type(ifOption) == "string"
+						and self.build.calcsTab.mainEnv.modsUsed["Condition:" .. ifOption]
 					return self.build.calcsTab.mainEnv.conditionsUsed[ifOption]
+						or conditionMod
+						or self.build.calcsTab.mainEnv.modsUsed[ifOption]
 				end))
 				t_insert(tooltipFuncs, listOrSingleIfTooltip(varData.ifCond, function(ifOption)
 					if not launch.devModeAlt then
@@ -285,6 +295,14 @@ local ConfigTabClass = newClass("ConfigTab", "UndoHandler", "ControlHost", "Cont
 					end
 					return out
 				end))
+				t_insert(tooltipFuncs, function()
+					return configOptionHelper.formatConditionRecommendationHintTooltip(
+						self.build,
+						getActiveConfigInput(),
+						varData.ifCond,
+						varData.var
+					)
+				end)
 			end
 			if varData.ifMinionCond then
 				t_insert(shownFuncs, listOrSingleIfOption(varData.ifMinionCond, function(ifOption)
@@ -313,35 +331,100 @@ local ConfigTabClass = newClass("ConfigTab", "UndoHandler", "ControlHost", "Cont
 					if implyCond(varData) then
 						return true
 					end
-					return self.build.calcsTab.mainEnv.enemyConditionsUsed[ifOption]
+					return configOptionHelper.hasEnemyConditionSource(self.build, ifOption)
 				end))
 				t_insert(tooltipFuncs, listOrSingleIfTooltip(varData.ifEnemyCond, function(ifOption)
+					local mods = configOptionHelper.collectEnemyConditionMods(self.build, ifOption)
+					local effectTooltip = configOptionHelper.formatConditionEffectTooltip(
+						self.build,
+						ifOption
+					)
+					local chanceTooltip = configOptionHelper.formatConditionChanceTooltip(
+						self.build,
+						ifOption
+					)
+					local recommendationTooltip = configOptionHelper.formatConditionRecommendationTooltip(
+						self.build,
+						getActiveConfigInput(),
+						varData.ifEnemyCond,
+						varData.var
+					)
+					local tooltipPrefix = configOptionHelper.joinTooltipLines(
+						effectTooltip,
+						chanceTooltip,
+						recommendationTooltip
+					)
 					if not launch.devModeAlt then
-						return
+						return tooltipPrefix
 					end
 					local out
-					local mods = self.build.calcsTab.mainEnv.enemyConditionsUsed[ifOption]
-					if not mods then
-						return out
+					if mods then
+						for _, mod in ipairs(mods) do
+							out = (out and out.."\n" or "")
+								.. modLib.formatMod(mod) .. "|"
+								.. configOptionHelper.formatConditionSource(self.build, mod.source)
+						end
 					end
-					for _, mod in ipairs(mods) do
-						out = (out and out.."\n" or "") .. modLib.formatMod(mod) .. "|" .. mod.source
-					end
-					return out
+					return configOptionHelper.joinTooltipLines(tooltipPrefix, out)
 				end))
 			end
-			if varData.ifCondTrue then
-				t_insert(shownFuncs, listOrSingleIfOption(varData.ifCondTrue, function(ifOption)
-					return self.build.calcsTab.mainEnv.player.modDB.conditions[ifOption]
-				end))
-				t_insert(tooltipFuncs, listOrSingleIfTooltip(varData.ifCondTrue, function(ifOption)
+			local extraEnemyConditionHints =
+				configOptionHelper.getEnemyConditionHints(varData)
+			if extraEnemyConditionHints and not varData.ifEnemyCond then
+				t_insert(tooltipFuncs, function()
+					local mods = configOptionHelper.collectEnemyConditionMods(
+						self.build,
+						extraEnemyConditionHints
+					)
+					local effectTooltip = configOptionHelper.formatConditionEffectTooltip(
+						self.build,
+						extraEnemyConditionHints
+					)
+					local chanceTooltip = configOptionHelper.formatConditionChanceTooltip(
+						self.build,
+						extraEnemyConditionHints
+					)
+					local recommendationTooltip = configOptionHelper.formatConditionRecommendationTooltip(
+						self.build,
+						getActiveConfigInput(),
+						extraEnemyConditionHints,
+						varData.var
+					)
+					local tooltipPrefix = configOptionHelper.joinTooltipLines(
+						effectTooltip,
+						chanceTooltip,
+						recommendationTooltip
+					)
 					if not launch.devModeAlt then
-						return
+						return tooltipPrefix
 					end
-					local out = "Condition state: " .. ifOption .. "=" .. tostring(self.build.calcsTab.mainEnv.player.modDB.conditions[ifOption])
-					return out
-				end))
+					local out
+					if mods then
+						for _, mod in ipairs(mods) do
+							out = (out and out.."\n" or "")
+								.. modLib.formatMod(mod) .. "|"
+								.. configOptionHelper.formatConditionSource(self.build, mod.source)
+						end
+					end
+					return configOptionHelper.joinTooltipLines(tooltipPrefix, out)
+				end)
 			end
+			t_insert(tooltipFuncs, function()
+				local effectTooltip =
+					configOptionHelper.formatConfigVarEffectTooltip(self.build, varData.var)
+				if not effectTooltip then
+					return
+				end
+				return configOptionHelper.joinTooltipLines(
+					effectTooltip,
+					configOptionHelper.formatConfigVarChanceTooltip(self.build, varData.var),
+					configOptionHelper.formatConfigVarRecommendationTooltip(
+						self.build,
+						getActiveConfigInput(),
+						varData.var
+					)
+				)
+			end)
 			if varData.ifMult then
 				t_insert(shownFuncs, listOrSingleIfOption(varData.ifMult, function(ifOption)
 					if implyCond(varData) then
@@ -462,7 +545,9 @@ local ConfigTabClass = newClass("ConfigTab", "UndoHandler", "ControlHost", "Cont
 					local skillModList = self.build.calcsTab.mainEnv.player.mainSkill.skillModList
 					local skillFlags = self.build.calcsTab.mainEnv.player.mainSkill.skillFlags
 					-- Check both the skill mods for flags and flags that are set via calcPerform
-					return skillFlags[ifOption] or skillModList:Flag(nil, ifOption)
+					return skillFlags[ifOption]
+						or skillModList:Flag(nil, ifOption)
+						or configOptionHelper.hasFlagSource(self.build, ifOption)
 				end))
 			end
 			if varData.ifMod then
@@ -558,21 +643,58 @@ local ConfigTabClass = newClass("ConfigTab", "UndoHandler", "ControlHost", "Cont
 				end
 			end
 
-			local innerShown = control.shown
-			if not varData.doNotHighlight then
-				control.borderFunc = function()
-					local shown = type(innerShown) == "boolean" and innerShown or innerShown()
-					local cur = self.configSets[self.activeConfigSetId].input[varData.var]
-					local def = self:GetDefaultState(varData.var, type(cur))
-					if cur ~= nil and cur ~= def then
-						if not shown then
-							return 	0.753, 0.502, 0.502
+				local innerShown = control.shown
+				if not varData.doNotHighlight then
+					control.borderFunc = function()
+						local shown = type(innerShown) == "boolean" and innerShown or innerShown()
+						local cur = self.configSets[self.activeConfigSetId].input[varData.var]
+						local def = self:GetDefaultState(varData.var, type(cur))
+						if cur ~= nil and cur ~= def then
+							if not shown then
+								return 0.753, 0.502, 0.502
+							end
+							return 0.451, 0.576, 0.702
 						end
-						return 	0.451, 0.576, 0.702
+						if shown and varData.type == "check" then
+							local recommendation
+							local recommendationIfEnemyCond =
+								configOptionHelper.getEnemyConditionHints(varData)
+							if recommendationIfEnemyCond then
+								recommendation = configOptionHelper.getEnemyConditionRecommendationData(
+									self.build,
+									getActiveConfigInput(),
+									recommendationIfEnemyCond,
+									varData.var
+								)
+							end
+							if not recommendation and varData.ifCond then
+								recommendation = configOptionHelper.getConditionRecommendationData(
+									self.build,
+									getActiveConfigInput(),
+									varData.ifCond,
+									varData.var
+								)
+							end
+							if not recommendation then
+								recommendation = configOptionHelper.getConfigVarRecommendationData(
+									self.build,
+									getActiveConfigInput(),
+									varData.var
+								)
+							end
+							if recommendation then
+								if recommendation.level == "strong" then
+									return 0.3, 0.65, 0.35
+								end
+								if recommendation.level == "medium" then
+									return 0.7, 0.6, 0.25
+								end
+								return 0.6, 0.6, 0.4
+							end
+						end
+						return 0.5, 0.5, 0.5
 					end
-					return 0.5, 0.5, 0.5
 				end
-			end
 
 			if not varData.hideIfInvalid then
 				control.shown = function()
@@ -607,12 +729,30 @@ local ConfigTabClass = newClass("ConfigTab", "UndoHandler", "ControlHost", "Cont
 						end
 					end
 
+					self:AddDeltaTooltip(tooltip, varData, ...)
+
 					local shown = type(innerShown) == "boolean" and innerShown or innerShown()
 					local cur = self.configSets[self.activeConfigSetId].input[varData.var]
 					local def = self:GetDefaultState(varData.var, type(cur))
 					if not shown and cur ~= nil and cur ~= def then
 						tooltip:AddLine(14, colorCodes.NEGATIVE.."This config option is conditional with missing source and is invalid.")
 					end
+				end
+			else
+				local innerTooltipFunc = control.tooltipFunc
+				control.tooltipFunc = function(tooltip, ...)
+					tooltip:Clear()
+
+					if innerTooltipFunc then
+						innerTooltipFunc(tooltip, ...)
+					else
+						local tooltipText = control:GetProperty("tooltipText")
+						if tooltipText and tooltipText ~= '' then
+							tooltip:AddLine(14, tooltipText)
+						end
+					end
+
+					self:AddDeltaTooltip(tooltip, varData, ...)
 				end
 			end
 
@@ -851,25 +991,22 @@ function ConfigTabClass:Draw(viewPort, inputEvents)
 end
 
 function ConfigTabClass:UpdateLevel()
-	local input = self.configSets[self.activeConfigSetId].input
-	local placeholder = self.configSets[self.activeConfigSetId].placeholder
-	if input.enemyLevel and input.enemyLevel > 0 then
-		self.enemyLevel = m_min(data.misc.MaxEnemyLevel, input.enemyLevel)
-	elseif placeholder.enemyLevel and placeholder.enemyLevel > 0 then
-		self.enemyLevel = m_min(data.misc.MaxEnemyLevel, placeholder.enemyLevel)
-	else
-		self.enemyLevel = m_min(data.misc.MaxEnemyLevel, self.build.characterLevel)
-	end
+	self.enemyLevel = self:GetEnemyLevelForState(
+		self.configSets[self.activeConfigSetId].input,
+		self.configSets[self.activeConfigSetId].placeholder
+	)
 end
 
-function ConfigTabClass:BuildModList()
-	local modList = new("ModList")
-	self.modList = modList
-	local enemyModList = new("ModList")
-	self.enemyModList = enemyModList
-	local input = self.configSets[self.activeConfigSetId].input
-	local placeholder = self.configSets[self.activeConfigSetId].placeholder
-	self:UpdateLevel() -- enemy level handled here because it's needed to correctly set boss stats
+function ConfigTabClass:GetEnemyLevelForState(input, placeholder)
+	if input.enemyLevel and input.enemyLevel > 0 then
+		return m_min(data.misc.MaxEnemyLevel, input.enemyLevel)
+	elseif placeholder.enemyLevel and placeholder.enemyLevel > 0 then
+		return m_min(data.misc.MaxEnemyLevel, placeholder.enemyLevel)
+	end
+	return m_min(data.misc.MaxEnemyLevel, self.build.characterLevel)
+end
+
+function ConfigTabClass:ApplyConfigStateToModLists(input, placeholder, modList, enemyModList)
 	for _, varData in ipairs(varList) do
 		if varData.apply then
 			if varData.type == "check" then
@@ -892,6 +1029,148 @@ function ConfigTabClass:BuildModList()
 				end
 			end
 		end
+	end
+end
+
+function ConfigTabClass:BuildModListsForState(input, placeholder)
+	local modList = new("ModList")
+	local enemyModList = new("ModList")
+	local savedSelIndexes = { }
+	local savedControlState = { }
+	local configSet = self.configSets[self.activeConfigSetId]
+	local oldConfigInput = configSet.input
+	local oldConfigPlaceholder = configSet.placeholder
+	local oldBuildFlag = self.build.buildFlag
+	local oldInput = self.input
+	local oldPlaceholder = self.placeholder
+	local oldEnemyLevel = self.enemyLevel
+	configSet.input = input
+	configSet.placeholder = placeholder
+	self.input = input
+	self.placeholder = placeholder
+	self.enemyLevel = self:GetEnemyLevelForState(input, placeholder)
+
+	for var, control in pairs(self.varControls) do
+		savedControlState[var] = {
+			placeholder = control.placeholder,
+			enabled = control.enabled,
+		}
+	end
+	for _, varData in ipairs(varList) do
+		if varData.type == "list" and varData.var then
+			local control = self.varControls[varData.var]
+			if control then
+				savedSelIndexes[varData.var] = control.selIndex
+				control:SelByValue(input[varData.var] or self.defaultState[varData.var], "val")
+			end
+		end
+	end
+
+	self:ApplyConfigStateToModLists(input, placeholder, modList, enemyModList)
+
+	for var, selIndex in pairs(savedSelIndexes) do
+		self.varControls[var].selIndex = selIndex
+	end
+	for var, controlState in pairs(savedControlState) do
+		local control = self.varControls[var]
+		control.placeholder = controlState.placeholder
+		control.enabled = controlState.enabled
+	end
+	configSet.input = oldConfigInput
+	configSet.placeholder = oldConfigPlaceholder
+	self.build.buildFlag = oldBuildFlag
+	self.input = oldInput
+	self.placeholder = oldPlaceholder
+	self.enemyLevel = oldEnemyLevel
+	return modList, enemyModList, self:GetEnemyLevelForState(input, placeholder)
+end
+
+function ConfigTabClass:BuildModList()
+	local modList = new("ModList")
+	self.modList = modList
+	local enemyModList = new("ModList")
+	self.enemyModList = enemyModList
+	local input = self.configSets[self.activeConfigSetId].input
+	local placeholder = self.configSets[self.activeConfigSetId].placeholder
+	self:UpdateLevel() -- enemy level handled here because it's needed to correctly set boss stats
+	self:ApplyConfigStateToModLists(input, placeholder, modList, enemyModList)
+end
+
+function ConfigTabClass:GetConfigTooltipTargetValue(varData, ...)
+	if not varData.var then
+		return
+	end
+	local currentValue = self.configSets[self.activeConfigSetId].input[varData.var]
+	local defaultValue = self:GetDefaultState(varData.var, type(currentValue))
+	if varData.type == "check" then
+		local currentState = select(1, ...) == nil and currentValue or select(1, ...)
+		local targetValue = not currentState
+		return targetValue,
+			targetValue and "^7Activating this option will give you:"
+				or "^7Deactivating this option will give you:"
+	elseif varData.type == "list" then
+		local mode, _, value = ...
+		if mode == "HOVER" and value then
+			local targetValue = value.val or value
+			local targetLabel = value.label or tostring(targetValue)
+			if targetValue ~= currentValue then
+				return targetValue, "^7Selecting " .. targetLabel .. " will give you:"
+			end
+			return
+		end
+		if mode == "BODY" and currentValue ~= nil and currentValue ~= defaultValue then
+			return defaultValue, "^7Resetting this option to default will give you:"
+		end
+		return
+	end
+	if currentValue ~= nil and currentValue ~= defaultValue then
+		return defaultValue, "^7Resetting this option to default will give you:"
+	end
+end
+
+function ConfigTabClass:BuildConfigTooltipOverride(varData, targetValue)
+	if not varData.var then
+		return
+	end
+	local input = copyTable(self.configSets[self.activeConfigSetId].input)
+	local placeholder = copyTable(self.configSets[self.activeConfigSetId].placeholder)
+	if input[varData.var] == targetValue then
+		return
+	end
+	input[varData.var] = targetValue
+	local modList, enemyModList, enemyLevel = self:BuildModListsForState(input, placeholder)
+	return {
+		configInput = input,
+		configPlaceholder = placeholder,
+		configModList = modList,
+		enemyConfigModList = enemyModList,
+		enemyLevel = enemyLevel,
+	}
+end
+
+function ConfigTabClass:AddDeltaTooltip(tooltip, varData, ...)
+	local targetValue, header = self:GetConfigTooltipTargetValue(varData, ...)
+	if targetValue == nil or not header then
+		return
+	end
+	local override = self:BuildConfigTooltipOverride(varData, targetValue)
+	if not override then
+		return
+	end
+	local calcFunc, calcBase = self.build.calcsTab:GetMiscCalculator()
+	if not calcFunc then
+		return
+	end
+	local errMsg, output = PCall(calcFunc, override)
+	if errMsg or not output then
+		return
+	end
+	if #tooltip.lines > 0 then
+		tooltip:AddSeparator(8)
+	end
+	local count = self.build:AddStatComparesToTooltip(tooltip, calcBase, output, header)
+	if count == 0 then
+		tooltip:AddLine(14, "^7No measurable stat change for current config.")
 	end
 end
 

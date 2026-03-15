@@ -6,8 +6,12 @@
 local pairs = pairs
 local ipairs = ipairs
 local t_insert = table.insert
+local t_sort = table.sort
+local t_concat = table.concat
 local m_max = math.max
 local m_floor = math.floor
+local powerReportUtils = LoadModule("Modules/PowerReportUtils")
+local powerReportTattooEvaluator = LoadModule("Modules/PowerReportTattooEvaluator")
 
 local buffModeDropList = {
 	{ label = "Unbuffed", buffMode = "UNBUFFED" },
@@ -477,6 +481,125 @@ function CalcsTabClass:PowerBuilder()
 	local useFullDPS = self.powerStat and self.powerStat.stat == "FullDPS"
 	local calcFunc, calcBase = self:GetMiscCalculator()
 	local cache = { }
+	local cacheOwner = { }
+	local masteryChoiceCache = { }
+	local usedMasteryEffects = { }
+	local ascendancyContext = powerReportUtils.makeAscendancyContext(self.build.spec)
+	local function canUsePathPower(node)
+		return node.path and (
+			not node.ascendancyName
+			or powerReportUtils.isCurrentAscendancyNode(ascendancyContext, node)
+		)
+	end
+	local function isRemoteAscendancyCandidate(node)
+		return powerReportUtils.isRemoteAscendancyCandidate(ascendancyContext, node)
+	end
+	local function buildAssumeEnemyConditions(output)
+		local assumptions
+		local candidates = output and output.PowerReportEnemyConditionsAvailable
+		local usedConditions = (output and output.PowerReportEnemyConditionsUsed)
+			or self.mainEnv.enemyConditionsUsed
+		if not candidates then
+			return assumptions
+		end
+		for condition in pairs(candidates) do
+			if usedConditions and usedConditions[condition] then
+				assumptions = assumptions or { }
+				assumptions[condition] = true
+			end
+		end
+		return assumptions
+	end
+	local function encodeAssumeEnemyConditions(assumptions)
+		if not assumptions then
+			return ""
+		end
+		local conditions = { }
+		for condition in pairs(assumptions) do
+			t_insert(conditions, condition)
+		end
+		t_sort(conditions)
+		return t_concat(conditions, ",")
+	end
+	local function conditionSetToList(conditions)
+		if not conditions then
+			return nil
+		end
+		local out = { }
+		for condition in pairs(conditions) do
+			t_insert(out, condition)
+		end
+		if #out == 0 then
+			return nil
+		end
+		t_sort(out)
+		return out
+	end
+	local function calcWithPowerReportAssumptions(override, cacheKey)
+		local output = cache[cacheKey]
+		if not output then
+			output = calcFunc(override, useFullDPS)
+			cache[cacheKey] = output
+		end
+		local assumptions = buildAssumeEnemyConditions(output)
+		local assumptionKey = encodeAssumeEnemyConditions(assumptions)
+		if assumptionKey == "" then
+			return output, nil
+		end
+		local assumedKey = cacheKey .. "|assumeEnemyConditions:" .. assumptionKey
+		if not cache[assumedKey] then
+			local assumedOverride = { assumeEnemyConditions = assumptions }
+			for key, value in pairs(override) do
+				assumedOverride[key] = value
+			end
+			cache[assumedKey] = calcFunc(assumedOverride, useFullDPS)
+		end
+		return cache[assumedKey], conditionSetToList(assumptions)
+	end
+	cache.__base = calcBase
+	local baseAssumedEnemyConditions
+	calcBase, baseAssumedEnemyConditions = calcWithPowerReportAssumptions(
+		{ },
+		"__base"
+	)
+	local function getPowerSelectionValue(selection, output)
+		if not (selection and selection.stat and output) then
+			return nil
+		end
+		local value
+		if output.Minion and selection.stat ~= "FullDPS" and output.Minion[selection.stat] ~= nil then
+			value = output.Minion[selection.stat]
+		else
+			value = output[selection.stat]
+		end
+		if value == nil then
+			value = 0
+		end
+		if selection.transform then
+			value = selection.transform(value)
+		end
+		return value
+	end
+	self.powerBaseStatValue = getPowerSelectionValue(self.powerStat, calcBase)
+	self.powerBaseAssumedEnemyConditions = baseAssumedEnemyConditions
+	for masteryNodeId, effectId in pairs(self.build.spec.masterySelections) do
+		if self.build.spec.allocNodes[masteryNodeId] then
+			usedMasteryEffects[effectId] = masteryNodeId
+		end
+	end
+	local function calculatePowerScore(output)
+		if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
+			return self:CalculatePowerStat(self.powerStat, output, calcBase)
+		end
+		return self:CalculateCombinedOffDefStat(output, calcBase)
+	end
+	self.powerTattooOptions = powerReportTattooEvaluator.buildOptions({
+		spec = self.build.spec,
+		grantedPassives = self.mainEnv.grantedPassives,
+		canUsePathPower = canUsePathPower,
+		calcWithPowerReportAssumptions = calcWithPowerReportAssumptions,
+		calculatePowerScore = calculatePowerScore,
+	})
 	local distanceMap = { }
 	local distanceList = { }
 	local newPowerMax = {
@@ -492,7 +615,7 @@ function CalcsTabClass:PowerBuilder()
 	if coroutine.running() then
 		coroutine.yield()
 	end
-	
+
 	local start = GetTime()
 	local nodeIndex = 0
 	local total = 0
@@ -500,9 +623,10 @@ function CalcsTabClass:PowerBuilder()
 	for nodeId, node in pairs(self.build.spec.nodes) do
 		wipeTable(node.power)
 		if node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] then
-			distanceMap[node.pathDist or 1000] = distanceMap[node.pathDist or 1000] or { }
-			distanceMap[node.pathDist or 1000][nodeId] = node
-			if not (self.nodePowerMaxDepth and self.nodePowerMaxDepth < node.pathDist) then
+			local nodeDistance = isRemoteAscendancyCandidate(node) and 1 or (node.pathDist or 1000)
+			distanceMap[nodeDistance] = distanceMap[nodeDistance] or { }
+			distanceMap[nodeDistance][nodeId] = node
+			if not (self.nodePowerMaxDepth and self.nodePowerMaxDepth < nodeDistance) then
 				total = total + 1
 			end
 		end
@@ -526,27 +650,145 @@ function CalcsTabClass:PowerBuilder()
 		end
 		for nodeId, node in pairs(nodes) do
 			if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] then
+				local nodeOverride = { addNodes = { [node] = true } }
 				if not cache[node.modKey] then
-					cache[node.modKey] = calcFunc({ addNodes = { [node] = true } }, useFullDPS)
+					cache[node.modKey] = calcFunc(nodeOverride, useFullDPS)
+					cacheOwner[node.modKey] = nodeId
 				end
-				local output = cache[node.modKey]
+				local output, assumedEnemyConditions = calcWithPowerReportAssumptions(
+					nodeOverride,
+					node.modKey
+				)
+				local pathCalcNode = node
+				node.power.cacheOwner = cacheOwner[node.modKey] == nodeId
+				node.power.assumedEnemyConditions = assumedEnemyConditions
+
+				if node.type == "Mastery" and node.masteryEffects and #node.masteryEffects > 0 then
+					local masteryChoice = masteryChoiceCache[node.modKey]
+					if not masteryChoice then
+						masteryChoice = { options = { } }
+						local bestScore
+						for _, effectRef in ipairs(node.masteryEffects) do
+							local effect = self.build.spec.tree.masteryEffects[effectRef.effect]
+							local assignedNodeId = effect and usedMasteryEffects[effect.id]
+							-- A mastery effect can only be selected once across allocated masteries.
+							-- Skip effects already used by another allocated node.
+							if effect and effect.modList and (not assignedNodeId or assignedNodeId == node.id) then
+								local effectNode = {
+									id = node.id,
+									type = "Mastery",
+									name = node.name,
+									modList = effect.modList,
+									modKey = effect.modKey
+								}
+								local effectKey = "masteryEffect:"..node.modKey..":"..effect.id
+								local effectOverride = { addNodes = { [effectNode] = true } }
+								if not cache[effectKey] then
+									cache[effectKey] = calcFunc(effectOverride, useFullDPS)
+								end
+								local effectOutput, optionAssumedEnemyConditions = calcWithPowerReportAssumptions(
+									effectOverride,
+									effectKey
+								)
+								local optionScore
+								local optionPathScore
+								local optionPathAssumedEnemyConditions
+								if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
+									optionScore = self:CalculatePowerStat(self.powerStat, effectOutput, calcBase)
+									optionPathScore = optionScore
+									if canUsePathPower(node) and node.pathDist > 1 then
+										local effectPathNodes = { }
+										for _, pathNode in pairs(node.path) do
+											if pathNode == node then
+												effectPathNodes[effectNode] = true
+											else
+												effectPathNodes[pathNode] = true
+											end
+										end
+										local effectPathOutput
+										effectPathOutput, optionPathAssumedEnemyConditions = calcWithPowerReportAssumptions(
+											{ addNodes = effectPathNodes },
+											effectKey .. ":path:" .. node.id
+										)
+										optionPathScore = self:CalculatePowerStat(self.powerStat, effectPathOutput, calcBase)
+									end
+								else
+									optionScore = self:CalculateCombinedOffDefStat(effectOutput, calcBase)
+									optionPathScore = optionScore
+									if canUsePathPower(node) and node.pathDist > 1 then
+										local effectPathNodes = { }
+										for _, pathNode in pairs(node.path) do
+											if pathNode == node then
+												effectPathNodes[effectNode] = true
+											else
+												effectPathNodes[pathNode] = true
+											end
+										end
+										local effectPathOutput
+										effectPathOutput, optionPathAssumedEnemyConditions = calcWithPowerReportAssumptions(
+											{ addNodes = effectPathNodes },
+											effectKey .. ":path:" .. node.id
+										)
+										optionPathScore = self:CalculateCombinedOffDefStat(effectPathOutput, calcBase)
+									end
+								end
+
+								t_insert(masteryChoice.options, {
+									id = effect.id,
+									sd = effect.sd,
+									singleStat = optionScore,
+									pathPower = optionPathScore,
+									assumedEnemyConditions = optionAssumedEnemyConditions,
+									pathAssumedEnemyConditions = optionPathAssumedEnemyConditions
+								})
+
+								if bestScore == nil or optionScore > bestScore then
+									bestScore = optionScore
+									masteryChoice.output = effectOutput
+									masteryChoice.effect = effect
+									masteryChoice.effectNode = effectNode
+									masteryChoice.assumedEnemyConditions = optionAssumedEnemyConditions
+								end
+							end
+						end
+						masteryChoiceCache[node.modKey] = masteryChoice
+					end
+
+					node.power.masteryOptions = masteryChoice.options
+					if masteryChoice.output then
+						output = masteryChoice.output
+						pathCalcNode = masteryChoice.effectNode
+						node.power.masteryEffectSd = masteryChoice.effect.sd
+						node.power.assumedEnemyConditions = masteryChoice.assumedEnemyConditions
+					end
+				end
+
 				if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
 					node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
-					if node.path and not node.ascendancyName then
+					if canUsePathPower(node) then
 						newPowerMax.singleStat = m_max(newPowerMax.singleStat, node.power.singleStat)
 						node.power.pathPower = node.power.singleStat
 						local pathNodes = { }
-						for _, node in pairs(node.path) do
-							pathNodes[node] = true
+						for _, pathNode in pairs(node.path) do
+							pathNodes[pathNode] = true
+						end
+						if pathCalcNode ~= node and pathNodes[node] then
+							pathNodes[node] = nil
+							pathNodes[pathCalcNode] = true
 						end
 						if node.pathDist > 1 then
-							node.power.pathPower = self:CalculatePowerStat(self.powerStat, calcFunc({ addNodes = pathNodes }, useFullDPS), calcBase)
+							local pathOutput
+							pathOutput, node.power.pathAssumedEnemyConditions = calcWithPowerReportAssumptions(
+								{ addNodes = pathNodes },
+								"nodePath:" .. node.id
+							)
+							node.power.pathPower = self:CalculatePowerStat(self.powerStat, pathOutput, calcBase)
 						end
 					end
 				elseif not self.powerStat or not self.powerStat.ignoreForNodes then
 					node.power.offence, node.power.defence = self:CalculateCombinedOffDefStat(output, calcBase)
 					node.power.singleStat = node.power.offence
-					if node.path and not node.ascendancyName then
+					if canUsePathPower(node) then
 						newPowerMax.offence = m_max(newPowerMax.offence, node.power.offence)
 						newPowerMax.defence = m_max(newPowerMax.defence, node.power.defence)
 						newPowerMax.offencePerPoint = m_max(newPowerMax.offencePerPoint, node.power.offence / node.pathDist)
@@ -554,20 +796,36 @@ function CalcsTabClass:PowerBuilder()
 					end
 				end
 			elseif node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] then
-				if not cache[node.modKey.."_remove"] then
-					cache[node.modKey.."_remove"] = calcFunc({ removeNodes = { [node] = true } }, useFullDPS)
+				local removeKey = node.modKey.."_remove"
+				local removeOverride = { removeNodes = { [node] = true } }
+				if not cache[removeKey] then
+					cache[removeKey] = calcFunc(removeOverride, useFullDPS)
+					cacheOwner[removeKey] = nodeId
 				end
-				local output = cache[node.modKey.."_remove"]
+				local output, assumedEnemyConditions = calcWithPowerReportAssumptions(
+					removeOverride,
+					removeKey
+				)
+				node.power.cacheOwner = cacheOwner[removeKey] == nodeId
+				node.power.assumedEnemyConditions = assumedEnemyConditions
 				if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
 					node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
-					if node.depends and not node.ascendancyName then
+					if node.depends and (
+						not node.ascendancyName
+						or powerReportUtils.isCurrentAscendancyNode(ascendancyContext, node)
+					) then
 						node.power.pathPower = node.power.singleStat
 						local pathNodes = { }
-						for _, node in pairs(node.depends) do
-							pathNodes[node] = true
+						for _, depNode in pairs(node.depends) do
+							pathNodes[depNode] = true
 						end
 						if #node.depends > 1 then
-							node.power.pathPower = self:CalculatePowerStat(self.powerStat, calcFunc({ removeNodes = pathNodes }, useFullDPS), calcBase)
+							local pathOutput
+							pathOutput, node.power.pathAssumedEnemyConditions = calcWithPowerReportAssumptions(
+								{ removeNodes = pathNodes },
+								"removePath:" .. node.id
+							)
+							node.power.pathPower = self:CalculatePowerStat(self.powerStat, pathOutput, calcBase)
 						end
 					end
 				end
@@ -587,14 +845,19 @@ function CalcsTabClass:PowerBuilder()
 	-- used for the power report screen
 	for nodeName, node in pairs(self.build.spec.tree.clusterNodeMap) do
 		if not node.power then
-			node.power = {}
+			node.power = { }
 		end
 		wipeTable(node.power)
 		if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[node.id] then
+			local clusterOverride = { addNodes = { [node] = true } }
 			if not cache[node.modKey] then
-				cache[node.modKey] = calcFunc({ addNodes = { [node] = true } }, useFullDPS)
+				cache[node.modKey] = calcFunc(clusterOverride, useFullDPS)
 			end
-			local output = cache[node.modKey]
+			local output, assumedEnemyConditions = calcWithPowerReportAssumptions(
+				clusterOverride,
+				node.modKey
+			)
+			node.power.assumedEnemyConditions = assumedEnemyConditions
 			if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
 				node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
 			end
@@ -612,7 +875,6 @@ function CalcsTabClass:PowerBuilder()
 	self.powerBuilderInitialized = true
 	-- ConPrintf("Power Build time: %d ms", GetTime() - timer_start)
 end
-
 function CalcsTabClass:CalculatePowerStat(selection, original, modified)
 	if modified.Minion and selection.stat ~= "FullDPS" then
 		original = original.Minion

@@ -8,11 +8,14 @@ local pairs = pairs
 local ipairs = ipairs
 local t_insert = table.insert
 local t_remove = table.remove
+local t_concat = table.concat
+local t_sort = table.sort
 local m_min = math.min
 local m_max = math.max
 local m_floor = math.floor
 local band = bit.band
 local b_rshift = bit.rshift
+local enemyConditionUtils = LoadModule("Modules/EnemyConditionUtils")
 
 local PassiveTreeViewClass = newClass("PassiveTreeView", function(self)
 	self.ring = NewImageHandle()
@@ -1247,6 +1250,93 @@ function PassiveTreeViewClass:AddNodeTooltip(tooltip, node, build)
 			-- Power debugging info
 			tooltip:AddLine(16, string.format("DPS power: %g   Defence power: %g", node.power.offence, node.power.defence))
 		end
+	end
+	local function addAssumptionWarning(title, conditionList)
+		if not conditionList or #conditionList == 0 then
+			return false
+		end
+		tooltip:AddSeparator(14)
+		tooltip:AddLine(14, title)
+		for _, condition in ipairs(conditionList) do
+			local sources = { }
+			local sourceSeen = { }
+			for _, mod in ipairs(build.calcsTab.mainEnv.enemyConditionsUsed[condition] or { }) do
+				local source = mod and enemyConditionUtils.formatConditionSource(build, mod.source)
+				if source and source ~= "Base" and not sourceSeen[source] then
+					sourceSeen[source] = true
+					t_insert(sources, source)
+				end
+			end
+			if #sources > 0 then
+				t_sort(sources)
+				local sourceLabel = t_concat(sources, ", ")
+				if #sourceLabel > 70 then
+					sourceLabel = sourceLabel:sub(1, 67) .. "..."
+				end
+				tooltip:AddLine(14, "^7- " .. condition .. "^8 (" .. sourceLabel .. ")")
+			else
+				tooltip:AddLine(14, "^7- " .. condition)
+			end
+		end
+		return true
+	end
+	local hasAssumptionWarning = false
+	if node.power then
+		local baseAssumptions = build.calcsTab.powerBaseAssumedEnemyConditions
+		local nodeAssumptions = enemyConditionUtils.subtractConditionLists(
+			node.power.assumedEnemyConditions,
+			baseAssumptions
+		)
+		local pathAssumptions = enemyConditionUtils.subtractConditionLists(
+			node.power.pathAssumedEnemyConditions,
+			baseAssumptions
+		)
+		hasAssumptionWarning = addAssumptionWarning(
+			"^7Heat map assumptions added by this node:",
+			nodeAssumptions
+		) or hasAssumptionWarning
+		if enemyConditionUtils.conditionKey(pathAssumptions) ~= enemyConditionUtils.conditionKey(nodeAssumptions) then
+			hasAssumptionWarning = addAssumptionWarning(
+				"^7Path/per-point assumptions added by node/path:",
+				pathAssumptions
+			) or hasAssumptionWarning
+		end
+		if node.type == "Mastery" and node.power.masteryOptions and #node.power.masteryOptions > 0 then
+			local optionAssumptions = { }
+			local optionPathAssumptions = { }
+			for _, option in ipairs(node.power.masteryOptions) do
+				optionAssumptions = enemyConditionUtils.unionConditionLists(
+					optionAssumptions,
+					enemyConditionUtils.subtractConditionLists(
+						option.assumedEnemyConditions,
+						baseAssumptions
+					)
+				)
+				optionPathAssumptions = enemyConditionUtils.unionConditionLists(
+					optionPathAssumptions,
+					enemyConditionUtils.subtractConditionLists(
+						option.pathAssumedEnemyConditions,
+						baseAssumptions
+					)
+				)
+			end
+			if enemyConditionUtils.conditionKey(optionAssumptions) ~= enemyConditionUtils.conditionKey(nodeAssumptions) then
+				hasAssumptionWarning = addAssumptionWarning(
+					"^7Mastery option assumptions added by option node:",
+					optionAssumptions
+				) or hasAssumptionWarning
+			end
+			if enemyConditionUtils.conditionKey(optionPathAssumptions) ~= enemyConditionUtils.conditionKey(optionAssumptions) then
+				hasAssumptionWarning = addAssumptionWarning(
+					"^7Mastery option assumptions added by option path:",
+					optionPathAssumptions
+				) or hasAssumptionWarning
+			end
+		end
+	end
+	if hasAssumptionWarning then
+		tooltip:AddLine(14, "^8These assumptions affect power estimates, not node text below.")
+		tooltip:AddLine(14, "^8Configuration is not auto-updated from these assumptions.")
 	end
 
 	local function addModInfoToTooltip(node, i, line)

@@ -18,6 +18,9 @@ local s_format = string.format
 local s_gsub = string.gsub
 local s_byte = string.byte
 local dkjson = require "dkjson"
+local powerReportOptions = LoadModule("Modules/PowerReportOptions")
+local enemyConditionUtils = LoadModule("Modules/EnemyConditionUtils")
+local powerReportUtils = LoadModule("Modules/PowerReportUtils")
 
 local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 	self.ControlHost()
@@ -25,6 +28,7 @@ local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 	self.build = build
 	self.isComparing = false;
 	self.isCustomMaxDepth = false;
+	powerReportOptions.applyDefaults(self)
 
 	self.viewer = new("PassiveTreeView")
 
@@ -194,6 +198,7 @@ local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 	self.controls.treeHeatMap = new("CheckBoxControl", { "LEFT", self.controls.findTimelessJewel, "RIGHT" }, { 130, 0, 20 }, "Show Node Power:", function(state)
 		self.viewer.showHeatMap = state
 		self.controls.treeHeatMapStatSelect.shown = state
+		self.controls.powerReportOptions.shown = state
 
 		if state == false then
 			self.controls.powerReportList.shown = false 
@@ -262,9 +267,21 @@ local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 
 	-- Show/Hide Power Report Button
 	self.controls.powerReport = new("ButtonControl", { "LEFT", self.controls.treeHeatMapStatSelect, "RIGHT" }, { 8, 0, 150, 20 },
-		function() return self.controls.powerReportList.shown and "Hide Power Report" or "Show Power Report" end, function()
-		self.controls.powerReportList.shown = not self.controls.powerReportList.shown
-	end)
+			function() return self.controls.powerReportList.shown and "Hide Power Report" or "Show Power Report" end, function()
+			self.controls.powerReportList.shown = not self.controls.powerReportList.shown
+		end)
+
+	-- Power Report inclusion options
+	self.controls.powerReportOptions = new(
+		"ButtonControl",
+		{ "LEFT", self.controls.powerReport, "RIGHT" },
+		{ 8, 0, 150, 20 },
+		"Power Options...",
+		function()
+			self:OpenPowerReportOptionsPopup()
+		end
+	)
+	self.controls.powerReportOptions.shown = false
 
 	-- Power Report List
 	local yPos = self.controls.treeHeatMap.y == 0 and self.controls.specSelect.height + 4 or self.controls.specSelect.height * 2 + 8
@@ -277,6 +294,10 @@ local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 			self.jumpToY = selectedNode.y
 		end
 	end)
+	self.controls.powerReportList.build = self.build
+	self.controls.powerReportList.getShowStatDifferences = function()
+		return self.viewer.showStatDifferences
+	end
 	self.controls.powerReportList.shown = false
 	-- Progress callback from the CalcsTab power builder coroutine
 	self.powerBuilderToastId = nil
@@ -304,10 +325,7 @@ local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 	end
 	-- Completion callback from the CalcsTab power builder coroutine
 	self.build.powerBuilderCallback = function()
-		local powerStat = self.build.calcsTab.powerStat or data.powerStatList[1]
-		local report = self:BuildPowerReportList(powerStat)
-		self.controls.powerReportList:SetReport(powerStat, report)
-
+		self:RefreshPowerReportList()
 		if self.powerBuilderToastId then
 			ToastNotification:ClearDismissed(self.powerBuilderToastId)
 			ToastNotification:Remove(self.powerBuilderToastId)
@@ -396,8 +414,11 @@ function TreeTabClass:Draw(viewPort, inputEvents)
 									+ self.controls.treeHeatMap.width + 130
 									+ self.controls.nodePowerMaxDepthSelect.width + self.controls.nodePowerMaxDepthSelect.x
 									+ (self.isCustomMaxDepth and (self.controls.nodePowerMaxDepthCustom.width + self.controls.nodePowerMaxDepthCustom.x) or 0)
-									+ (self.viewer.showHeatMap and (self.controls.treeHeatMapStatSelect.width + self.controls.treeHeatMapStatSelect.x 
-																	+ self.controls.powerReport.width + self.controls.powerReport.x) or 0)
+									+ (self.viewer.showHeatMap and (
+										self.controls.treeHeatMapStatSelect.width + self.controls.treeHeatMapStatSelect.x
+										+ self.controls.powerReportOptions.width + self.controls.powerReportOptions.x
+										+ self.controls.powerReport.width + self.controls.powerReport.x
+									) or 0)
 	
 	-- Check first line
 	if viewPort.width >= widthFirstLineControls + widthSecondLineControls + rightMargin then
@@ -454,6 +475,7 @@ function TreeTabClass:Draw(viewPort, inputEvents)
 
 	self.controls.treeHeatMap.state = self.viewer.showHeatMap
 	self.controls.treeHeatMapStatSelect.shown = self.viewer.showHeatMap
+	self.controls.powerReportOptions.shown = self.viewer.showHeatMap
 	self.controls.treeHeatMapStatSelect.list = self.powerStatList
 	self.controls.treeHeatMapStatSelect.selIndex = 1
 	self.controls.treeHeatMapStatSelect:CheckDroppedWidth(true)
@@ -513,6 +535,7 @@ function TreeTabClass:Load(xml, dbFileName)
 	if not self.specList[1] then
 		self.specList[1] = new("PassiveSpec", self.build, latestTreeVersion)
 	end
+	powerReportOptions.readFromXmlAttrib(self, xml.attrib)
 	self:SetActiveSpec(tonumber(xml.attrib.activeSpec) or 1)
 end
 
@@ -524,8 +547,9 @@ end
 
 function TreeTabClass:Save(xml)
 	xml.attrib = {
-		activeSpec = tostring(self.activeSpec)
+		activeSpec = tostring(self.activeSpec),
 	}
+	powerReportOptions.writeToXmlAttrib(self, xml.attrib)
 	for specId, spec in ipairs(self.specList) do
 		local child = {
 			elem = "Spec"
@@ -1022,8 +1046,63 @@ function TreeTabClass:SetPowerCalc(powerStat)
 	end
 end
 
+function TreeTabClass:RefreshPowerReportList()
+	local powerStat = self.build.calcsTab.powerStat or data.powerStatList[1]
+	local report = self:BuildPowerReportList(powerStat)
+	self.controls.powerReportList:SetReport(powerStat, report)
+end
+
+function TreeTabClass:OpenPowerReportOptionsPopup()
+	local controls = { }
+	local y = 30
+	local options = powerReportOptions.getList()
+	local optionKeys = powerReportOptions.getKeys()
+	local maxLabelWidth = 0
+	for _, option in ipairs(options) do
+		maxLabelWidth = m_max(maxLabelWidth, DrawStringWidth(16, "VAR", option.label))
+	end
+	local popupWidth = m_max(520, maxLabelWidth + 170)
+	local checkOffset = m_floor(popupWidth / 2) - 28
+	for _, option in ipairs(options) do
+		local key = option.key
+		local label = option.label
+		controls[key] = new("CheckBoxControl", nil, { checkOffset, y, 20 }, label, function(state)
+			self[key] = state
+			self:RefreshPowerReportList()
+		end)
+		controls[key].state = self[key]
+		y = y + 24
+	end
+
+	local function applyOptionStates(stateByKey)
+		for _, key in ipairs(optionKeys) do
+			self[key] = stateByKey[key] or false
+			controls[key].state = self[key]
+		end
+		self:RefreshPowerReportList()
+	end
+
+	controls.defaults = new("ButtonControl", nil, { -130, y + 8, 120, 20 }, "Defaults", function()
+		applyOptionStates(powerReportOptions.buildStateByKey(nil))
+	end)
+	controls.none = new("ButtonControl", nil, { 0, y + 8, 90, 20 }, "None", function()
+		applyOptionStates(powerReportOptions.buildStateByKey(false))
+	end)
+	controls.close = new("ButtonControl", nil, { 130, y + 8, 90, 20 }, "Close", function()
+		main:ClosePopup()
+	end)
+
+	main:OpenPopup(popupWidth, y + 45, "Power Options", controls)
+end
+
 function TreeTabClass:BuildPowerReportList(currentStat)
 	local report = {}
+	local includeMasteries = self.includePowerReportMasteries
+	local includeTattoos = self.includePowerReportTattoos
+	local includeRunegrafts = self.includePowerReportRunegrafts
+	local includeNormals = self.includePowerReportNormals
+	local includeNotables = self.includePowerReportNotables
+	local includeKeystones = self.includePowerReportKeystones
 
 	if not (currentStat and currentStat.stat) then
 		return report
@@ -1050,49 +1129,173 @@ function TreeTabClass:BuildPowerReportList(currentStat)
 			fmt = ".1f"
 		}
 	end
+	local statScale = (displayStat.pc or displayStat.mod) and 100 or 1
+	local ascendancyContext = powerReportUtils.makeAscendancyContext(self.build.spec)
+	local includeAscendancyOptions = {
+		includePowerReportBloodlineAscendancy = self.includePowerReportBloodlineAscendancy,
+		includePowerReportAscNotables = self.includePowerReportAscNotables,
+		includePowerReportAscKeystones = self.includePowerReportAscKeystones,
+		includePowerReportAscSmalls = self.includePowerReportAscSmalls,
+		includePowerReportForbiddenAscendancy = self.includePowerReportForbiddenAscendancy,
+	}
+	local function isRunegraftName(name)
+		return powerReportUtils.isRunegraftName(name)
+	end
+	local function isForbiddenAscendancyNode(node)
+		return powerReportUtils.isForbiddenAscendancyNode(
+			ascendancyContext,
+			includeAscendancyOptions,
+			node
+		)
+	end
+	local function isIncludedAscendancyNode(node)
+		return powerReportUtils.isIncludedAscendancyNode(
+			ascendancyContext,
+			includeAscendancyOptions,
+			node
+		)
+	end
+	local function formatSinglePowerValue(power)
+		local powerStr = s_format("%"..displayStat.fmt, power)
+		powerStr = formatNumSep(powerStr)
+		if (power > 0 and not displayStat.lowerIsBetter) or (power < 0 and displayStat.lowerIsBetter) then
+			powerStr = colorCodes.POSITIVE .. powerStr
+		elseif (power < 0 and not displayStat.lowerIsBetter) or (power > 0 and displayStat.lowerIsBetter) then
+			powerStr = colorCodes.NEGATIVE .. powerStr
+		end
+		return powerStr
+	end
+	local function formatPowerValues(nodePower, pathPower)
+		return formatSinglePowerValue(nodePower), formatSinglePowerValue(pathPower)
+	end
+	local function reportTattooType(category)
+		return powerReportUtils.reportTattooType(category)
+	end
+	local function reportNodeType(node, isForbiddenNode)
+		return powerReportUtils.reportNodeType(node, isForbiddenNode)
+	end
+	local enemyConditionSourceMap = enemyConditionUtils.buildEnemyConditionSourceMap(
+		self.build,
+		self.build.calcsTab.mainEnv.enemyConditionsUsed
+	)
+	local basePowerValue = self.build.calcsTab.powerBaseStatValue
+	local function formatPercentPowerValue(power)
+		if not basePowerValue or basePowerValue == 0 then
+			return nil, "--"
+		end
+		local powerPct = power / m_abs(basePowerValue) * 100
+		local powerPctStr = s_format("%+.2f%%", powerPct)
+		if (powerPct > 0 and not displayStat.lowerIsBetter) or (powerPct < 0 and displayStat.lowerIsBetter) then
+			powerPctStr = colorCodes.POSITIVE .. powerPctStr
+		elseif (powerPct < 0 and not displayStat.lowerIsBetter) or (powerPct > 0 and displayStat.lowerIsBetter) then
+			powerPctStr = colorCodes.NEGATIVE .. powerPctStr
+		end
+		return powerPct, powerPctStr
+	end
+	local baseAssumedEnemyConditions =
+		self.build.calcsTab.powerBaseAssumedEnemyConditions
 
-	-- search all nodes, ignoring ascendancies, sockets, etc.
+	-- search all nodes, ignoring sockets and start nodes
 	for nodeId, node in pairs(self.build.spec.nodes) do
 		local isAlloc = node.alloc or self.build.calcsTab.mainEnv.grantedPassives[nodeId]
-		if (node.type == "Normal" or node.type == "Keystone" or node.type == "Notable") and not node.ascendancyName then
+		local isForbiddenNode = (not isAlloc) and isForbiddenAscendancyNode(node)
+		local isNormalNode = node.type == "Normal"
+		local isNotableNode = node.type == "Notable"
+		local isKeystoneNode = node.type == "Keystone"
+		local isAscendancyNode = node.ascendancyName ~= nil
+		local isRegularNode = (isNormalNode or isNotableNode or isKeystoneNode) and (
+			isAscendancyNode
+			or (isNormalNode and includeNormals)
+			or (isNotableNode and includeNotables)
+			or (isKeystoneNode and includeKeystones)
+		)
+		local isRunegraftMasteryNode = node.type == "Mastery" and node.isTattoo and isRunegraftName(node.dn)
+		local isTattooMasteryNode = node.type == "Mastery" and node.isTattoo and not isRunegraftMasteryNode
+		local isMasteryNode = node.type == "Mastery" and (
+			includeMasteries
+			or (includeTattoos and isTattooMasteryNode)
+			or (includeRunegrafts and isRunegraftMasteryNode)
+		)
+		local includeNode = (isRegularNode or isMasteryNode)
+			and node.type ~= "ClassStart"
+			and node.type ~= "AscendClassStart"
+			and isIncludedAscendancyNode(node)
+		if includeNode then
 			local pathDist
 			if isAlloc then
 				pathDist = #(node.depends or { }) == 0 and 1 or #node.depends
+			elseif isForbiddenNode then
+				pathDist = 1
 			else
 				pathDist = #(node.path or { }) == 0 and 1 or #node.path
 			end
-			local nodePower = (node.power.singleStat or 0) * ((displayStat.pc or displayStat.mod) and 100 or 1)
-			local pathPower = (node.power.pathPower or 0) / pathDist * ((displayStat.pc or displayStat.mod) and 100 or 1)
-			local nodePowerStr = s_format("%"..displayStat.fmt, nodePower)
-			local pathPowerStr = s_format("%"..displayStat.fmt, pathPower)
-
-			nodePowerStr = formatNumSep(nodePowerStr)
-			pathPowerStr = formatNumSep(pathPowerStr)
-
-			if (nodePower > 0 and not displayStat.lowerIsBetter) or (nodePower < 0 and displayStat.lowerIsBetter) then
-				nodePowerStr = colorCodes.POSITIVE .. nodePowerStr
-			elseif (nodePower < 0 and not displayStat.lowerIsBetter) or (nodePower > 0 and displayStat.lowerIsBetter) then
-				nodePowerStr = colorCodes.NEGATIVE .. nodePowerStr
+			local masteryOptions = isMasteryNode and node.power and node.power.masteryOptions
+			if masteryOptions and #masteryOptions > 0 then
+				for _, option in ipairs(masteryOptions) do
+					local nodePower = (option.singleStat or 0) * statScale
+					local pathPower = (option.pathPower or 0) / pathDist * statScale
+					local nodePowerStr, pathPowerStr = formatPowerValues(nodePower, pathPower)
+					local nodePowerPct, nodePowerPctStr = formatPercentPowerValue(nodePower)
+					local pathPowerPct, pathPowerPctStr = formatPercentPowerValue(pathPower)
+					local optionLabel = option.sd and t_concat(option.sd, " / ") or "Mastery Option"
+					t_insert(report, {
+						name = node.dn .. ": " .. optionLabel,
+						power = nodePower,
+						powerStr = nodePowerStr,
+						powerPercent = nodePowerPct,
+						powerPercentStr = nodePowerPctStr,
+						pathPower = pathPower,
+						pathPowerStr = pathPowerStr,
+						pathPowerPercent = pathPowerPct,
+						pathPowerPercentStr = pathPowerPctStr,
+						stats = option.sd,
+						assumedEnemyConditions = option.assumedEnemyConditions,
+						pathAssumedEnemyConditions = option.pathAssumedEnemyConditions,
+						baseAssumedEnemyConditions = baseAssumedEnemyConditions,
+						enemyConditionSourceMap = enemyConditionSourceMap,
+						allocated = isAlloc,
+						id = node.id,
+						x = node.x,
+						y = node.y,
+						type = reportNodeType(node, isForbiddenNode),
+						pathDist = pathDist
+					})
+				end
+			else
+				local nodePower = (node.power.singleStat or 0) * statScale
+				local pathPower
+				if isForbiddenNode then
+					pathPower = (node.power.singleStat or 0) / pathDist * statScale
+				else
+					pathPower = (node.power.pathPower or 0) / pathDist * statScale
+				end
+				local nodePowerStr, pathPowerStr = formatPowerValues(nodePower, pathPower)
+				local pathPowerPct, pathPowerPctStr = formatPercentPowerValue(pathPower)
+				local nodePowerPct, nodePowerPctStr = formatPercentPowerValue(nodePower)
+				local reportStats = (isMasteryNode and node.power and node.power.masteryEffectSd) or node.sd
+				t_insert(report, {
+					name = node.dn,
+					power = nodePower,
+					powerStr = nodePowerStr,
+					powerPercent = nodePowerPct,
+					powerPercentStr = nodePowerPctStr,
+					pathPower = pathPower,
+					pathPowerStr = pathPowerStr,
+					pathPowerPercent = pathPowerPct,
+					pathPowerPercentStr = pathPowerPctStr,
+					stats = reportStats,
+					assumedEnemyConditions = node.power.assumedEnemyConditions,
+					pathAssumedEnemyConditions = node.power.pathAssumedEnemyConditions,
+					baseAssumedEnemyConditions = baseAssumedEnemyConditions,
+					enemyConditionSourceMap = enemyConditionSourceMap,
+					allocated = isAlloc,
+					id = node.id,
+					x = node.x,
+					y = node.y,
+					type = reportNodeType(node, isForbiddenNode),
+					pathDist = pathDist
+				})
 			end
-			if (pathPower > 0 and not displayStat.lowerIsBetter) or (pathPower < 0 and displayStat.lowerIsBetter) then
-				pathPowerStr = colorCodes.POSITIVE .. pathPowerStr
-			elseif (pathPower < 0 and not displayStat.lowerIsBetter) or (pathPower > 0 and displayStat.lowerIsBetter) then
-				pathPowerStr = colorCodes.NEGATIVE .. pathPowerStr
-			end
-
-			t_insert(report, {
-				name = node.dn,
-				power = nodePower,
-				powerStr = nodePowerStr,
-				pathPower = pathPower,
-				pathPowerStr = pathPowerStr,
-				allocated = isAlloc,
-				id = node.id,
-				x = node.x,
-				y = node.y,
-				type = node.type,
-				pathDist = pathDist
-			})
 		end
 	end
 
@@ -1100,26 +1303,76 @@ function TreeTabClass:BuildPowerReportList(currentStat)
 	for nodeName, node in pairs(self.build.spec.tree.clusterNodeMap) do
 		local isAlloc = node.alloc
 		if not isAlloc then
-			local nodePower = (node.power and node.power.singleStat or 0) * ((displayStat.pc or displayStat.mod) and 100 or 1)
-			local nodePowerStr = s_format("%"..displayStat.fmt, nodePower)
-
-			nodePowerStr = formatNumSep(nodePowerStr)
-
-			if (nodePower > 0 and not displayStat.lowerIsBetter) or (nodePower < 0 and displayStat.lowerIsBetter) then
-				nodePowerStr = colorCodes.POSITIVE .. nodePowerStr
-			elseif (nodePower < 0 and not displayStat.lowerIsBetter) or (nodePower > 0 and displayStat.lowerIsBetter) then
-				nodePowerStr = colorCodes.NEGATIVE .. nodePowerStr
-			end
-
+			local nodePower = (node.power and node.power.singleStat or 0) * statScale
+			local nodePowerStr = formatSinglePowerValue(nodePower)
+			local nodePowerPct, nodePowerPctStr = formatPercentPowerValue(nodePower)
 			t_insert(report, {
 				name = node.dn,
 				power = nodePower,
 				powerStr = nodePowerStr,
+				powerPercent = nodePowerPct,
+				powerPercentStr = nodePowerPctStr,
 				pathPower = 0,
 				pathPowerStr = "--",
+				pathPowerPercent = nil,
+				pathPowerPercentStr = "--",
+				stats = node.sd,
+				assumedEnemyConditions = node.power and node.power.assumedEnemyConditions,
+				baseAssumedEnemyConditions = baseAssumedEnemyConditions,
+				enemyConditionSourceMap = enemyConditionSourceMap,
 				id = node.id,
-				type = node.type,
-				pathDist = "Cluster"
+				type = reportNodeType(node, false),
+				pathDist = "Cluster",
+				cluster = true
+			})
+		end
+	end
+
+	for _, tattooOption in ipairs(self.build.calcsTab.powerTattooOptions or { }) do
+		local tattooName = tattooOption.tattooName or "Tattoo"
+		local isRunegraftOption = tattooOption.isRunegraft or isRunegraftName(tattooName)
+		local includeOption = (isRunegraftOption and includeRunegrafts)
+			or ((not isRunegraftOption) and includeTattoos)
+		if includeOption then
+			local tattooPower = (tattooOption.singleStat or 0) * statScale
+			local tattooPowerStr = formatSinglePowerValue(tattooPower)
+			local tattooPowerPct, tattooPowerPctStr = formatPercentPowerValue(tattooPower)
+			local pathDist = tattooOption.pathDist
+			local pathPower = tattooOption.pathPower
+			local pathPowerStr = "--"
+			local pathPowerPct, pathPowerPctStr = nil, "--"
+			if type(pathDist) == "number" and pathDist > 0 and pathPower then
+				pathPower = pathPower / pathDist * statScale
+				pathPowerStr = formatSinglePowerValue(pathPower)
+				pathPowerPct, pathPowerPctStr = formatPercentPowerValue(pathPower)
+			else
+				pathPower = 0
+			end
+			local displayName = tattooOption.displayName
+				or (tattooName .. " (" .. (tattooOption.baseNodeName or "node") .. ")")
+			t_insert(report, {
+				name = displayName,
+				power = tattooPower,
+				powerStr = tattooPowerStr,
+				powerPercent = tattooPowerPct,
+				powerPercentStr = tattooPowerPctStr,
+				pathPower = pathPower,
+				pathPowerStr = pathPowerStr,
+				pathPowerPercent = pathPowerPct,
+				pathPowerPercentStr = pathPowerPctStr,
+				stats = tattooOption.stats,
+				assumedEnemyConditions = tattooOption.assumedEnemyConditions,
+				pathAssumedEnemyConditions = tattooOption.pathAssumedEnemyConditions,
+				baseAssumedEnemyConditions = baseAssumedEnemyConditions,
+				enemyConditionSourceMap = enemyConditionSourceMap,
+				allocated = tattooOption.allocated,
+				id = tattooOption.baseNodeId,
+				x = tattooOption.baseNodeX,
+				y = tattooOption.baseNodeY,
+				type = isRunegraftOption and "Runegraft" or reportTattooType(tattooOption.tattooCategory),
+				pathDist = pathDist,
+				alwaysShow = true,
+				cluster = false
 			})
 		end
 	end

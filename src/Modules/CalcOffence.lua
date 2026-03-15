@@ -3906,6 +3906,36 @@ function calcs.offence(env, actor, activeSkill)
 		else
 			output.KnockbackChanceOnCrit = skillModList:Sum("BASE", cfg, "EnemyKnockbackChance")
 		end
+		if not skillFlags.hit then
+			output.HinderChanceOnCrit = 0
+		else
+			output.HinderChanceOnCrit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyHinderChance"))
+		end
+		if not skillFlags.hit then
+			output.TauntChanceOnCrit = 0
+		else
+			output.TauntChanceOnCrit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyTauntChance"))
+		end
+		if not skillFlags.hit then
+			output.UnnerveChanceOnCrit = 0
+		else
+			output.UnnerveChanceOnCrit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyUnnerveChance"))
+		end
+		if not skillFlags.hit then
+			output.CrushChanceOnCrit = 0
+		else
+			output.CrushChanceOnCrit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyCrushChance"))
+		end
+		if not skillFlags.hit then
+			output.DebilitateChanceOnCrit = 0
+		else
+			output.DebilitateChanceOnCrit = m_min(100, skillModList:Sum("BASE", cfg, "DebilitateChance"))
+		end
+		if not skillFlags.hit then
+			output.MaimChanceOnCrit = 0
+		else
+			output.MaimChanceOnCrit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyMaimChance"))
+		end
 		cfg.skillCond["CriticalStrike"] = false
 		if not skillFlags.attack or skillModList:Flag(cfg, "CannotBleed") then
 			output.BleedChanceOnHit = 0
@@ -3956,6 +3986,50 @@ function calcs.offence(env, actor, activeSkill)
 			output.KnockbackChanceOnHit = 0
 		else
 			output.KnockbackChanceOnHit = skillModList:Sum("BASE", cfg, "EnemyKnockbackChance")
+		end
+		if not skillFlags.hit or skillModList:Flag(cfg, "CannotBlind") then
+			output.BlindChanceOnHit = 0
+			output.BlindChanceOnCrit = 0
+		else
+			output.BlindChanceOnHit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyBlindChance"))
+			output.BlindChanceOnCrit = output.BlindChanceOnHit
+		end
+		if not skillFlags.hit then
+			output.HinderChanceOnHit = 0
+		else
+			output.HinderChanceOnHit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyHinderChance"))
+		end
+		if not skillFlags.hit then
+			output.TauntChanceOnHit = 0
+		else
+			output.TauntChanceOnHit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyTauntChance"))
+		end
+		if not skillFlags.hit then
+			output.UnnerveChanceOnHit = 0
+		else
+			output.UnnerveChanceOnHit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyUnnerveChance"))
+		end
+		if not skillFlags.hit then
+			output.CrushChanceOnHit = 0
+		else
+			output.CrushChanceOnHit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyCrushChance"))
+		end
+		if not skillFlags.hit then
+			output.DebilitateChanceOnHit = 0
+		else
+			output.DebilitateChanceOnHit = m_min(100, skillModList:Sum("BASE", cfg, "DebilitateChance"))
+		end
+		if not skillFlags.hit then
+			output.MaimChanceOnHit = 0
+		else
+			output.MaimChanceOnHit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyMaimChance"))
+		end
+		if not skillFlags.hit then
+			output.IntimidateChanceOnHit = 0
+			output.IntimidateChanceOnCrit = 0
+		else
+			output.IntimidateChanceOnHit = m_min(100, skillModList:Sum("BASE", cfg, "EnemyIntimidateChance"))
+			output.IntimidateChanceOnCrit = output.IntimidateChanceOnHit
 		end
 		output.ImpaleChance = env.mode_effective and m_min(100, skillModList:Sum("BASE", cfg, "ImpaleChance")) or 0
 		if skillModList:Sum("BASE", cfg, "FireExposureChance") > 0 then
@@ -5214,6 +5288,47 @@ function calcs.offence(env, actor, activeSkill)
 				}
 			end
 		end
+		output.BlindChance = m_min(
+			100,
+			output.BlindChanceOnHit * (1 - output.CritChance / 100)
+			+ output.BlindChanceOnCrit * output.CritChance / 100
+			+ enemyDB:Sum("BASE", nil, "SelfBlindChance")
+		)
+		output.HinderChance = m_min(
+			100,
+			output.HinderChanceOnHit * (1 - output.CritChance / 100)
+			+ output.HinderChanceOnCrit * output.CritChance / 100
+		)
+		output.TauntChance = m_min(
+			100,
+			output.TauntChanceOnHit * (1 - output.CritChance / 100)
+			+ output.TauntChanceOnCrit * output.CritChance / 100
+		)
+		output.UnnerveChance = m_min(
+			100,
+			output.UnnerveChanceOnHit * (1 - output.CritChance / 100)
+			+ output.UnnerveChanceOnCrit * output.CritChance / 100
+		)
+		output.CrushChance = m_min(
+			100,
+			output.CrushChanceOnHit * (1 - output.CritChance / 100)
+			+ output.CrushChanceOnCrit * output.CritChance / 100
+		)
+		output.DebilitateChance = m_min(
+			100,
+			output.DebilitateChanceOnHit * (1 - output.CritChance / 100)
+			+ output.DebilitateChanceOnCrit * output.CritChance / 100
+		)
+		output.MaimChance = m_min(
+			100,
+			output.MaimChanceOnHit * (1 - output.CritChance / 100)
+			+ output.MaimChanceOnCrit * output.CritChance / 100
+		)
+		output.IntimidateChance = m_min(
+			100,
+			output.IntimidateChanceOnHit * (1 - output.CritChance / 100)
+			+ output.IntimidateChanceOnCrit * output.CritChance / 100
+		)
 
 		-- Calculate enemy stun modifiers
 		local enemyStunThresholdRed = -skillModList:Sum("INC", cfg, "EnemyStunThreshold")
@@ -5382,6 +5497,14 @@ function calcs.offence(env, actor, activeSkill)
 		combineStat("SapChance", "AVERAGE")
 		combineStat("SapEffectMod", "AVERAGE")
 		combineStat("SapDuration", "AVERAGE")
+		combineStat("BlindChance", "AVERAGE")
+		combineStat("HinderChance", "AVERAGE")
+		combineStat("TauntChance", "AVERAGE")
+		combineStat("UnnerveChance", "AVERAGE")
+		combineStat("CrushChance", "AVERAGE")
+		combineStat("DebilitateChance", "AVERAGE")
+		combineStat("MaimChance", "AVERAGE")
+		combineStat("IntimidateChance", "AVERAGE")
 		combineStat("ImpaleChance", "AVERAGE")
 		combineStat("ImpaleStoredDamage", "AVERAGE")
 		combineStat("ImpaleModifier", "CHANCE", "ImpaleChance")

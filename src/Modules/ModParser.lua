@@ -725,6 +725,56 @@ local modNameList = {
 	["to scorch enemies"] = "EnemyScorchChance",
 	["to inflict brittle"] = "EnemyBrittleChance",
 	["to sap enemies"] = "EnemySapChance",
+	["to blind"] = "EnemyBlindChance",
+	["to blind enemies"] = "EnemyBlindChance",
+	["to blind enemies on hit"] = "EnemyBlindChance",
+	["to blind enemies with attacks"] = { "EnemyBlindChance", flags = ModFlag.Attack },
+	["to blind enemies on hit with attacks"] = { "EnemyBlindChance", flags = ModFlag.Attack },
+	["to blind enemies with melee weapons"] = { "EnemyBlindChance", flags = ModFlag.Melee },
+	["to blind enemies on hit with melee weapons"] = { "EnemyBlindChance", flags = ModFlag.Melee },
+	["to blind with hits against bleeding enemies"] = {
+		"EnemyBlindChance",
+		flags = ModFlag.Hit,
+		tag = { type = "ActorCondition", actor = "enemy", var = "Bleeding" },
+	},
+	["blind chance"] = "EnemyBlindChance",
+	["to hinder enemies on hit"] = "EnemyHinderChance",
+	["to hinder on hit"] = "EnemyHinderChance",
+	["to hinder enemies on hit with spells"] = { "EnemyHinderChance", flags = ModFlag.Spell },
+	["to hinder on hit with spells"] = { "EnemyHinderChance", flags = ModFlag.Spell },
+	["hinder chance"] = "EnemyHinderChance",
+	["to taunt"] = "EnemyTauntChance",
+	["to taunt enemies"] = "EnemyTauntChance",
+	["to taunt on hit"] = "EnemyTauntChance",
+	["to taunt enemies on hit"] = "EnemyTauntChance",
+	["to taunt enemies on hit with attacks"] = { "EnemyTauntChance", flags = ModFlag.Attack },
+	["to taunt on hit with attacks"] = { "EnemyTauntChance", flags = ModFlag.Attack },
+	["taunt chance"] = "EnemyTauntChance",
+	["to unnerve enemies for 4 seconds on hit"] = "EnemyUnnerveChance",
+	["to unnerve for 4 seconds on hit"] = "EnemyUnnerveChance",
+	["to unnerve enemies for 4 seconds on hit with spells"] = { "EnemyUnnerveChance", flags = ModFlag.Spell },
+	["to unnerve for 4 seconds on hit with spells"] = { "EnemyUnnerveChance", flags = ModFlag.Spell },
+	["unnerve chance"] = "EnemyUnnerveChance",
+	["to crush on hit"] = "EnemyCrushChance",
+	["to crush for 2 seconds on hit"] = "EnemyCrushChance",
+	["to crush enemies for 4 seconds on hit"] = "EnemyCrushChance",
+	["crush chance"] = "EnemyCrushChance",
+	["to maim"] = "EnemyMaimChance",
+	["to maim enemies"] = "EnemyMaimChance",
+	["to maim on hit"] = "EnemyMaimChance",
+	["to maim enemies on hit"] = "EnemyMaimChance",
+	["to maim enemies with attacks"] = { "EnemyMaimChance", flags = ModFlag.Attack },
+	["to maim enemies on hit with attacks"] = { "EnemyMaimChance", flags = ModFlag.Attack },
+	["to maim with attacks"] = { "EnemyMaimChance", flags = ModFlag.Attack },
+	["to maim with hits against blinded enemies"] = {
+		"EnemyMaimChance",
+		flags = ModFlag.Hit,
+		tag = { type = "ActorCondition", actor = "enemy", var = "Blinded" },
+	},
+	["maim chance"] = "EnemyMaimChance",
+	["to intimidate enemies for 4 seconds on hit"] = "EnemyIntimidateChance",
+	["to intimidate enemies for 4 seconds on hit with attacks"] = { "EnemyIntimidateChance", flags = ModFlag.Attack },
+	["to intimidate for 4 seconds on hit"] = "EnemyIntimidateChance",
 	["effect of scorch"] = "EnemyScorchEffect",
 	["effect of sap"] = "EnemySapEffect",
 	["effect of brittle"] = "EnemyBrittleEffect",
@@ -4851,8 +4901,115 @@ local specialModList = {
 	["culling strike against marked enemy"] = { mod("CullPercent", "MAX", 10, { type = "ActorCondition", actor = "enemy", var = "Marked" }) },
 	["nearby allies have culling strike"] = { mod("ExtraAura", "LIST", {onlyAllies = true, mod = mod("CullPercent", "MAX", 10) }) },
 	["hits that stun enemies have culling strike"] = { flag("Condition:maceMasteryStunCullSpecced") },
-	-- Intimidate
+	-- Hinder / Taunt / Unnerve / Crush / Maim / Intimidate
 	["permanently intimidate enemies on block"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Intimidated") }, { type = "Condition", var = "BlockedRecently" }) },
+	["(%d+)%% chance to hinder enemies on hit with spells"] = function(num) return {
+		mod("EnemyHinderChance", "BASE", num, nil, ModFlag.Spell)
+	} end,
+	["spell hits have (%d+)%% chance to hinder cursed enemies"] = function(num) return {
+		mod("EnemyHinderChance", "BASE", num, nil, ModFlag.Spell, 0, { type = "ActorCondition", actor = "enemy", var = "Cursed" })
+	} end,
+	["chaos spells have (%d+)%% chance to hinder enemies on hit"] = function(num) return {
+		mod("EnemyHinderChance", "BASE", num, nil, ModFlag.Spell, KeywordFlag.Chaos)
+	} end,
+	["hinder enemies on hit with spells"] = { mod("EnemyHinderChance", "BASE", 100, nil, ModFlag.Spell) },
+	["minions have (%d+)%% chance to hinder enemies on hit with spells"] = function(num) return {
+		mod("MinionModifier", "LIST", { mod = mod("EnemyHinderChance", "BASE", num, nil, ModFlag.Spell) })
+	} end,
+	["minions hinder enemies on hit with spells"] = {
+		mod("MinionModifier", "LIST", { mod = mod("EnemyHinderChance", "BASE", 100, nil, ModFlag.Spell) })
+	},
+	["(%d+)%% chance to taunt on hit"] = function(num) return {
+		mod("EnemyTauntChance", "BASE", num)
+	} end,
+	["(%d+)%% chance to taunt enemies on hit with attacks"] = function(num) return {
+		mod("EnemyTauntChance", "BASE", num, nil, ModFlag.Attack)
+	} end,
+	["(%d+)%% chance to taunt enemies on projectile hit"] = function(num) return {
+		mod("EnemyTauntChance", "BASE", num, nil, ModFlag.Projectile)
+	} end,
+	["taunt on hit"] = { mod("EnemyTauntChance", "BASE", 100) },
+	["taunt enemies on hit with attacks"] = { mod("EnemyTauntChance", "BASE", 100, nil, ModFlag.Attack) },
+	["minions have (%d+)%% chance to taunt on hit with attacks"] = function(num) return {
+		mod("MinionModifier", "LIST", { mod = mod("EnemyTauntChance", "BASE", num, nil, ModFlag.Attack) })
+	} end,
+	["raised zombies have (%d+)%% chance to taunt enemies on hit"] = function(num) return {
+		mod("MinionModifier", "LIST", { mod = mod("EnemyTauntChance", "BASE", num) }, { type = "SkillName", skillName = "Raise Zombie", includeTransfigured = true })
+	} end,
+	["socketed golem skills have (%d+)%% chance to taunt on hit"] = function(num) return {
+		mod("ExtraSkillMod", "LIST", { mod = mod("EnemyTauntChance", "BASE", num) }, { type = "SocketedIn", slotName = "{SlotName}", keyword = "golem" })
+	} end,
+	["(%d+)%% chance to unnerve enemies for (%d+) seconds on hit"] = function(num, _) return {
+		mod("EnemyUnnerveChance", "BASE", num)
+	} end,
+	["(%d+)%% chance to unnerve enemies for (%d+) seconds on hit with spells"] = function(num, _) return {
+		mod("EnemyUnnerveChance", "BASE", num, nil, ModFlag.Spell)
+	} end,
+	["unnerve enemies for (%d+) seconds on hit"] = { mod("EnemyUnnerveChance", "BASE", 100) },
+	["spells unnerve enemies for (%d+) seconds on hit"] = { mod("EnemyUnnerveChance", "BASE", 100, nil, ModFlag.Spell) },
+	["spells triggered by arcanist brand unnerve enemies on hit for (%d+) seconds"] = {
+		mod("EnemyUnnerveChance", "BASE", 100, nil, ModFlag.Spell, { type = "SkillName", skillName = "Arcanist Brand", includeTransfigured = true })
+	},
+	["attacks inflict unnerve on critical strike for (%d+) seconds"] = {
+		mod("EnemyUnnerveChance", "BASE", 100, nil, ModFlag.Attack, { type = "Condition", var = "CriticalStrike" })
+	},
+	["enemies taunted by your warcries are unnerved"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Unnerved", { type = "Condition", var = "Taunted" }) }, { type = "Condition", var = "UsedWarcryRecently" }) },
+	["enemies you curse are unnerved"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Unnerved", { type = "Condition", var = "Cursed" }) }) },
+	["nearby enemies are unnerved"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Unnerved") }) },
+	["summoned arbalists have (%d+)%% chance to unnerve for (%d+) seconds on hit"] = function(num, _) return {
+		mod("MinionModifier", "LIST", { mod = mod("EnemyUnnerveChance", "BASE", num) }, { type = "SkillName", skillName = "Summon Arbalists" })
+	} end,
+	["unnerve enemies for (%d+) seconds on hit with wands"] = { mod("EnemyUnnerveChance", "BASE", 100, nil, ModFlag.Wand) },
+	["(%d+)%% chance to crush on hit"] = function(num) return {
+		mod("EnemyCrushChance", "BASE", num)
+	} end,
+	["(%d+)%% chance to crush for (%d+) seconds on hit"] = function(num, _) return {
+		mod("EnemyCrushChance", "BASE", num)
+	} end,
+	["(%d+)%% chance to crush enemies for (%d+) seconds on hit"] = function(num, _) return {
+		mod("EnemyCrushChance", "BASE", num)
+	} end,
+	["crush on hit"] = { mod("EnemyCrushChance", "BASE", 100) },
+	["summoned arbalists have (%d+)%% chance to crush on hit"] = function(num) return {
+		mod("MinionModifier", "LIST", { mod = mod("EnemyCrushChance", "BASE", num) }, { type = "SkillName", skillName = "Summon Arbalists" })
+	} end,
+	["(%d+)%% chance to maim on hit"] = function(num) return {
+		mod("EnemyMaimChance", "BASE", num)
+	} end,
+	["(%d+)%% chance to maim enemies on hit"] = function(num) return {
+		mod("EnemyMaimChance", "BASE", num)
+	} end,
+	["(%d+)%% chance to maim enemies with main hand hits"] = function(num) return {
+		mod("EnemyMaimChance", "BASE", num, nil, ModFlag.MainHand)
+	} end,
+	["(%d+)%% chance to maim enemies on critical strike with attacks"] = function(num) return {
+		mod("EnemyMaimChance", "BASE", num, nil, ModFlag.Attack, { type = "Condition", var = "CriticalStrike" })
+	} end,
+	["attacks have (%d+)%% chance to maim on hit"] = function(num) return {
+		mod("EnemyMaimChance", "BASE", num, nil, ModFlag.Attack)
+	} end,
+	["attack hits have (%d+)%% chance to maim"] = function(num) return {
+		mod("EnemyMaimChance", "BASE", num, nil, ModFlag.Attack)
+	} end,
+	["attack hits against blinded enemies have (%d+)%% chance to maim"] = function(num) return {
+		mod("EnemyMaimChance", "BASE", num, nil, bor(ModFlag.Attack, ModFlag.Hit), { type = "ActorCondition", actor = "enemy", var = "Blinded" })
+	} end,
+	["projectiles from attacks have (%d+)%% chance to maim on hit while you have a bestial minion"] = function(num) return {
+		mod("EnemyMaimChance", "BASE", num, nil, bor(ModFlag.Attack, ModFlag.Projectile), { type = "Condition", var = "HaveBestialMinion" })
+	} end,
+	["maim enemies for (%d+) seconds on hit"] = { mod("EnemyMaimChance", "BASE", 100) },
+	["maim enemies for (%d+) seconds on hit with attacks"] = { mod("EnemyMaimChance", "BASE", 100, nil, ModFlag.Attack) },
+	["minions have (%d+)%% chance to maim enemies on hit with attacks"] = function(num) return {
+		mod("MinionModifier", "LIST", { mod = mod("EnemyMaimChance", "BASE", num, nil, ModFlag.Attack) })
+	} end,
+	["(%d+)%% chance to intimidate enemies for (%d+) seconds on hit"] = function(num, _) return {
+		mod("EnemyIntimidateChance", "BASE", num)
+	} end,
+	["(%d+)%% chance to intimidate enemies for (%d+) seconds on hit with attacks"] = function(num, _) return {
+		mod("EnemyIntimidateChance", "BASE", num, nil, ModFlag.Attack)
+	} end,
+	["intimidate enemies for (%d+) seconds on hit"] = { mod("EnemyIntimidateChance", "BASE", 100) },
+	["intimidate enemies for (%d+) seconds on hit with attacks"] = { mod("EnemyIntimidateChance", "BASE", 100, nil, ModFlag.Attack) },
 	["with a murderous eye jewel socketed, intimidate enemies for (%d) seconds on hit with attacks"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Intimidated") }, { type = "Condition", var = "HaveMurderousEyeJewelIn{SlotName}" }) },
 	["enemies taunted by your warcries are intimidated"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Intimidated", { type = "Condition", var = "Taunted" }) }, { type = "Condition", var = "UsedWarcryRecently" }) },
 	["intimidate enemies for (%d+) seconds on block while holding a shield"] = { mod("EnemyModifier", "LIST", { mod = flag("Condition:Intimidated") }, { type = "Condition", var = "BlockedRecently" }, { type = "Condition", var = "UsingShield" }) },

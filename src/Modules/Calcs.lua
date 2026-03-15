@@ -119,6 +119,217 @@ function calcs.getNodeCalculator(build)
 	end)
 end
 
+local function getPowerReportEnemyConditionCandidates(env)
+	local candidates = { }
+	local enemyMods = env.enemyDB and env.enemyDB.mods
+	if enemyMods then
+		for modName, modList in pairs(enemyMods) do
+			local condition = modName:match("^Condition:(.+)$")
+			if condition and modList and #modList > 0 then
+				candidates[condition] = true
+			end
+		end
+	end
+
+	local output = env.player and env.player.output
+	if output then
+		local minionOutput = output.Minion
+		local function hasChance(statName)
+			return (output[statName] or 0) > 0 or (minionOutput and (minionOutput[statName] or 0) > 0)
+		end
+		if hasChance("BleedChance") then
+			candidates.Bleeding = true
+		end
+		if hasChance("PoisonChance") then
+			candidates.Poisoned = true
+		end
+		if hasChance("IgniteChance") or hasChance("IgniteChancePerHit") then
+			candidates.Ignited = true
+			candidates.Burning = true
+		end
+		if hasChance("FreezeChance") then
+			candidates.Frozen = true
+			candidates.Chilled = true
+		end
+		if hasChance("ShockChance") then
+			candidates.Shocked = true
+		end
+		if hasChance("ScorchChance") then
+			candidates.Scorched = true
+		end
+		if hasChance("BrittleChance") then
+			candidates.Brittle = true
+		end
+		if hasChance("SapChance") then
+			candidates.Sapped = true
+		end
+		if hasChance("BlindChance") then
+			candidates.Blinded = true
+		end
+		if hasChance("HinderChance") then
+			candidates.Hindered = true
+		end
+		if hasChance("TauntChance") then
+			candidates.Taunted = true
+		end
+		if hasChance("UnnerveChance") then
+			candidates.Unnerved = true
+		end
+		if hasChance("CrushChance") then
+			candidates.Crushed = true
+		end
+		if hasChance("DebilitateChance") then
+			candidates.Debilitated = true
+		end
+		if hasChance("MaimChance") then
+			candidates.Maimed = true
+		end
+		if hasChance("IntimidateChance") then
+			candidates.Intimidated = true
+		end
+	end
+
+	return next(candidates) and candidates or nil
+end
+
+local function getPowerReportEnemyConditionsUsed(env)
+	local used = { }
+	local enemyConditionsUsed = env.enemyConditionsUsed
+	if enemyConditionsUsed then
+		for condition, mods in pairs(enemyConditionsUsed) do
+			if mods and #mods > 0 then
+				used[condition] = true
+			end
+		end
+		return next(used) and used or nil
+	end
+
+	local function addVar(var)
+		if var then
+			used[var] = true
+		end
+	end
+
+	local function addVarTag(tag)
+		if tag.varList then
+			for _, var in ipairs(tag.varList) do
+				addVar(var)
+			end
+		else
+			addVar(tag.var)
+		end
+	end
+
+	local function addImplicitConditionsFromName(modName)
+		if not modName then
+			return
+		end
+		for dmgType, conditions in pairs({
+			["[fi][ig][rn][ei]t?e?"] = { "Ignited", "Burning" },
+			["[cf][or][le][de]z?e?"] = { "Frozen" },
+		}) do
+			if modName:lower():match(dmgType) then
+				for _, condition in ipairs(conditions) do
+					addVar(condition)
+				end
+			end
+		end
+	end
+
+	local function addFromMod(mod, fromEnemyDB)
+		if not mod or mod.source == "Base" then
+			return
+		end
+		if not fromEnemyDB then
+			addImplicitConditionsFromName(mod.name)
+		end
+		for _, tag in ipairs(mod) do
+			if tag.type == "IgnoreCond" then
+				break
+			elseif fromEnemyDB then
+				if tag.type == "Condition" then
+					addVarTag(tag)
+				elseif tag.type == "ActorCondition" and tag.var then
+					if tag.actor ~= "enemy" and tag.actor ~= "player" then
+						addVar(tag.var)
+					end
+				end
+			elseif tag.type == "ActorCondition" then
+				if tag.actor == "enemy" then
+					addVarTag(tag)
+				end
+			end
+		end
+	end
+
+	for _, actor in ipairs({ env.player, env.minion }) do
+		if actor and actor.modDB and actor.modDB.mods then
+			for _, modList in pairs(actor.modDB.mods) do
+				for _, mod in ipairs(modList) do
+					addFromMod(mod, false)
+				end
+			end
+		end
+	end
+
+	if env.player and env.player.activeSkillList then
+		for _, activeSkill in pairs(env.player.activeSkillList) do
+			if activeSkill.baseSkillModList then
+				for _, mod in ipairs(activeSkill.baseSkillModList) do
+					addFromMod(mod, false)
+				end
+			end
+			if activeSkill.minion and activeSkill.minion.activeSkillList then
+				for _, minionSkill in pairs(activeSkill.minion.activeSkillList) do
+					if minionSkill.baseSkillModList then
+						for _, mod in ipairs(minionSkill.baseSkillModList) do
+							addFromMod(mod, false)
+						end
+					end
+				end
+			end
+		end
+	end
+
+	if env.enemyDB and env.enemyDB.mods then
+		for _, modList in pairs(env.enemyDB.mods) do
+			for _, mod in ipairs(modList) do
+				addFromMod(mod, true)
+			end
+		end
+	end
+	return next(used) and used or nil
+end
+
+local function mergePowerReportConditionSet(dst, src)
+	if not src then
+		return dst
+	end
+	dst = dst or { }
+	for condition in pairs(src) do
+		dst[condition] = true
+	end
+	return dst
+end
+
+local function applyPowerReportEnemyConditions(output, env, fullDPSOutput, preferFullDPS)
+	local envAvailable = getPowerReportEnemyConditionCandidates(env)
+	local envUsed = getPowerReportEnemyConditionsUsed(env)
+	if preferFullDPS and fullDPSOutput then
+		output.PowerReportEnemyConditionsAvailable = mergePowerReportConditionSet(
+			mergePowerReportConditionSet(nil, fullDPSOutput.PowerReportEnemyConditionsAvailable),
+			envAvailable
+		)
+		output.PowerReportEnemyConditionsUsed = mergePowerReportConditionSet(
+			mergePowerReportConditionSet(nil, fullDPSOutput.PowerReportEnemyConditionsUsed),
+			envUsed
+		)
+		return
+	end
+	output.PowerReportEnemyConditionsAvailable = envAvailable
+	output.PowerReportEnemyConditionsUsed = envUsed
+end
+
 -- Get calculator for other changes (adding/removing nodes, items, gems, etc)
 function calcs.getMiscCalculator(build)
 	-- Run base calculation pass
@@ -131,18 +342,41 @@ function calcs.getMiscCalculator(build)
 		env.player.output.FullDPS = fullDPS.combinedDPS
 		env.player.output.FullDotDPS = fullDPS.TotalDotDPS
 	end
+	applyPowerReportEnemyConditions(
+		env.player.output,
+		env,
+		fullDPS,
+		usedFullDPS and (build.viewMode == "TREE")
+	)
 	return function(override, useFullDPS)
 		local env, cachedPlayerDB, cachedEnemyDB, cachedMinionDB = calcs.initEnv(build, "CALCULATOR", override)
 		calcs.perform(env)
+		local fullDPSOutput = fullDPS
 		if (useFullDPS ~= false or build.viewMode == "TREE") and usedFullDPS then
 			-- prevent upcoming calculation from using Cached Data and thus forcing it to re-calculate new FullDPS roll-up 
 			-- without this, FullDPS increase/decrease when for node/item/gem comparison would be all 0 as it would be comparing
 			-- A with A (due to cache reuse) instead of A with B
-			local fullDPS = calcs.calcFullDPS(build, "CALCULATOR", override, { cachedPlayerDB = cachedPlayerDB, cachedEnemyDB = cachedEnemyDB, cachedMinionDB = cachedMinionDB, env = nil})
-			env.player.output.SkillDPS = fullDPS.skills
-			env.player.output.FullDPS = fullDPS.combinedDPS
-			env.player.output.FullDotDPS = fullDPS.TotalDotDPS
+			fullDPSOutput = calcs.calcFullDPS(
+				build,
+				"CALCULATOR",
+				override,
+				{
+					cachedPlayerDB = cachedPlayerDB,
+					cachedEnemyDB = cachedEnemyDB,
+					cachedMinionDB = cachedMinionDB,
+					env = nil
+				}
+			)
+			env.player.output.SkillDPS = fullDPSOutput.skills
+			env.player.output.FullDPS = fullDPSOutput.combinedDPS
+			env.player.output.FullDotDPS = fullDPSOutput.TotalDotDPS
 		end
+		applyPowerReportEnemyConditions(
+			env.player.output,
+			env,
+			fullDPSOutput,
+			usedFullDPS and (useFullDPS ~= false or build.viewMode == "TREE")
+		)
 		return env.player.output
 	end, env.player.output
 end
@@ -205,7 +439,9 @@ function calcs.calcFullDPS(build, mode, override, specEnv)
 		corruptingBloodDPS = 0,
 		decayDPS = 0,
 		dotDPS = 0,
-		cullingMulti = 0
+		cullingMulti = 0,
+		PowerReportEnemyConditionsAvailable = nil,
+		PowerReportEnemyConditionsUsed = nil,
 	}
 
 	local bleedSource = ""
@@ -225,6 +461,14 @@ function calcs.calcFullDPS(build, mode, override, specEnv)
 					activeSkillCount = getSummonedTotemCount(usedEnv.player.output)
 				end
 				local minionName = nil
+					fullDPS.PowerReportEnemyConditionsAvailable = mergePowerReportConditionSet(
+						fullDPS.PowerReportEnemyConditionsAvailable,
+						getPowerReportEnemyConditionCandidates(fullEnv)
+					)
+					fullDPS.PowerReportEnemyConditionsUsed = mergePowerReportConditionSet(
+						fullDPS.PowerReportEnemyConditionsUsed,
+						getPowerReportEnemyConditionsUsed(fullEnv)
+					)
 				if activeSkill.minion or usedEnv.minion then
 					if usedEnv.minion.output.TotalDPS and usedEnv.minion.output.TotalDPS > 0 then
 						minionName = (activeSkill.minion and activeSkill.minion.minionData.name..": ") or (usedEnv.minion and usedEnv.minion.minionData.name..": ") or ""
