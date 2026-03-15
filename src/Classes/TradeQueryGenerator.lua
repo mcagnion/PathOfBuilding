@@ -99,6 +99,13 @@ local eldritchModSlots = {
 }
 
 local MAX_FILTERS = 35
+local rarityFilterOptions = { "Any", "Unique only", "Non-unique only" }
+local rarityFilterByIndex = { "any", "unique", "nonunique" }
+local rarityFilterIndexByValue = {
+	any = 1,
+	unique = 2,
+	nonunique = 3
+}
 
 local function logToFile(...)
 	ConPrintf(...)
@@ -894,6 +901,7 @@ end
 function TradeQueryGeneratorClass:FinishQuery()
 	-- Calc original item Stats without anoint or enchant, and use that diff as a basis for default min sum.
 	local originalItem = self.calcContext.slot and self.itemsTab.items[self.calcContext.slot.selItemId]
+	local options = self.calcContext.options
 	self.calcContext.testItem.explicitModLines = { }
 	if originalItem then
 		for _, modLine in ipairs(originalItem.explicitModLines) do
@@ -930,16 +938,30 @@ function TradeQueryGeneratorClass:FinishQuery()
 	
 	-- Generate trade query str and open in browser
 	local filters = 0
+	local filtersTable = self.calcContext.special.queryFilters or { type_filters = { filters = { } } }
+	filtersTable.type_filters = filtersTable.type_filters or { filters = { } }
+	filtersTable.type_filters.filters = filtersTable.type_filters.filters or { }
+	if self.calcContext.itemCategoryQueryStr then
+		filtersTable.type_filters.filters.category = filtersTable.type_filters.filters.category or { option = self.calcContext.itemCategoryQueryStr }
+	end
+	local rarityFilter = options.rarityFilter
+	if not rarityFilter then
+		if options.requireUnique == true then
+			rarityFilter = "unique"
+		elseif options.requireUnique == false then
+			rarityFilter = "nonunique"
+		else
+			rarityFilter = "any"
+		end
+	end
+	if rarityFilter == "unique" or rarityFilter == "nonunique" then
+		filtersTable.type_filters.filters.rarity = { option = rarityFilter }
+	else
+		filtersTable.type_filters.filters.rarity = nil
+	end
 	local queryTable = {
 		query = {
-			filters = self.calcContext.special.queryFilters or {
-				type_filters = {
-					filters = {
-						category = { option = self.calcContext.itemCategoryQueryStr },
-						rarity = { option = "nonunique" }
-					}
-				}
-			},
+			filters = filtersTable,
 			status = { option = "available" },
 			stats = {
 				{
@@ -952,8 +974,6 @@ function TradeQueryGeneratorClass:FinishQuery()
 		sort = { ["statgroup.0"] = "desc" },
 		engine = "new"
 	}
-
-	local options = self.calcContext.options
 
 	local num_extra = 2
 	if not options.includeMirrored then
@@ -985,9 +1005,8 @@ function TradeQueryGeneratorClass:FinishQuery()
 	for k, v in pairs(self.calcContext.special.queryExtra or {}) do
 		queryTable.query[k] = v
 	end
-
+	
 	local andFilters = { type = "and", filters = { } }
-	local options = self.calcContext.options
 	if options.influence1 > 1 then
 		t_insert(andFilters.filters, { id = hasInfluenceModIds[options.influence1 - 1] })
 		filters = filters + 1
@@ -1116,7 +1135,26 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		options.special = { itemName = context.slotTbl.slotName }
 	end
 
-	controls.includeMirrored = new("CheckBoxControl", {"TOPRIGHT",lastItemAnchor,"BOTTOMRIGHT"}, {0, 5, 18}, "Mirrored items:", function(state) end)
+	local selectedRarityFilter
+	if context.slotTbl.unique then
+		selectedRarityFilter = "unique"
+	elseif self.lastRarityFilter then
+		selectedRarityFilter = self.lastRarityFilter
+	elseif self.lastRequireUnique == true then
+		selectedRarityFilter = "unique"
+	elseif self.lastRequireUnique == false then
+		selectedRarityFilter = "nonunique"
+	else
+		selectedRarityFilter = "nonunique"
+	end
+
+	controls.rarityFilter = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 120, 18}, rarityFilterOptions, nil)
+	controls.rarityFilter.selIndex = rarityFilterIndexByValue[selectedRarityFilter] or 3
+	controls.rarityFilterLabel = new("LabelControl", {"RIGHT",controls.rarityFilter,"LEFT"}, {-5, 0, 0, 16}, "Rarity:")
+	controls.rarityFilter.enabled = not context.slotTbl.unique
+	updateLastAnchor(controls.rarityFilter)
+
+	controls.includeMirrored = new("CheckBoxControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 18}, "Mirrored items:", function(state) end)
 	controls.includeMirrored.state = (self.lastIncludeMirrored == nil or self.lastIncludeMirrored == true)
 	updateLastAnchor(controls.includeMirrored)
 
@@ -1221,6 +1259,17 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		end
 		if controls.includeCorrupted then
 			self.lastIncludeCorrupted, options.includeCorrupted = controls.includeCorrupted.state, controls.includeCorrupted.state
+		end
+		if controls.rarityFilter then
+			self.lastRarityFilter = rarityFilterByIndex[controls.rarityFilter.selIndex] or "any"
+			options.rarityFilter = self.lastRarityFilter
+			if self.lastRarityFilter == "unique" then
+				self.lastRequireUnique, options.requireUnique = true, true
+			elseif self.lastRarityFilter == "nonunique" then
+				self.lastRequireUnique, options.requireUnique = false, false
+			else
+				self.lastRequireUnique, options.requireUnique = nil, nil
+			end
 		end
 		if controls.includeSynthesis then
 			self.lastIncludeSynthesis, options.includeSynthesis = controls.includeSynthesis.state, controls.includeSynthesis.state
