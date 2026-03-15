@@ -415,11 +415,6 @@ describe("TradeQueryGenerator", function()
             main.ClosePopup = function() end
 
             local queryGen = new("TradeQueryGenerator", { itemsTab = { items = {} } })
-            queryGen.queryTab = {
-                GetTradeStatusOption = function()
-                    return "available"
-                end
-            }
             queryGen.requesterCallback = function(_, payload, errMsg)
                 assert.is_nil(errMsg)
                 queryJson = payload
