@@ -28,10 +28,18 @@ local TradeQueryRequestsClass = newClass("TradeQueryRequests", function(self, ra
 	}
 	self.lastWaitLog = { }
 	self.hostName = "https://www.pathofexile.com/"
+	self.statusOption = "securable"
 end)
 
-function TradeQueryRequestsClass:SetStatusOption(statusOption)
-	self.statusOption = normalizeStatusOption(statusOption)
+function TradeQueryRequestsClass:SetStatusOption(option)
+	local normalized = normalizeStatusOption(option)
+	if normalized then
+		self.statusOption = normalized
+	end
+end
+
+function TradeQueryRequestsClass:GetStatusOption()
+	return self.statusOption or "online"
 end
 
 function TradeQueryRequestsClass:ApplyDefaultStatusOption(query)
@@ -434,7 +442,13 @@ function TradeQueryRequestsClass:FetchSearchQueryHTML(realm, league, queryId, ca
 			else
 				query.sort = { price = "asc"}
 			end
-			query.query.status = { option = query.query.status} -- works either way?
+			local statusOption = self:GetStatusOption()
+			if type(query.query.status) == "table" and query.query.status.option then
+				statusOption = normalizeStatusOption(query.query.status.option) or statusOption
+			elseif type(query.query.status) == "string" then
+				statusOption = normalizeStatusOption(query.query.status) or statusOption
+			end
+			query.query.status = { option = statusOption }
 			local queryStr = dkjson.encode(query)
 			callback(queryStr, errMsg)
 		end,

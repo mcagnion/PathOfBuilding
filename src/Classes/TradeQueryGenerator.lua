@@ -7,6 +7,7 @@
 local dkjson = require "dkjson"
 local curl = require("lcurl.safe")
 local m_max = math.max
+local m_min = math.min
 local s_format = string.format
 local t_insert = table.insert
 
@@ -1004,7 +1005,7 @@ function TradeQueryGeneratorClass:FinishQuery()
 	local queryTable = {
 		query = {
 			filters = filtersTable,
-			status = { option = "available" },
+			status = { option = self.queryTab and self.queryTab.GetTradeStatusOption and self.queryTab:GetTradeStatusOption() or "online" },
 			stats = {
 				{
 					type = "weight",
