@@ -107,6 +107,9 @@ local rarityFilterIndexByValue = {
 	nonunique = 3
 }
 
+-- Forward declaration: used by SetSavedOptions before table initialization below.
+local currencyTable
+
 local function logToFile(...)
 	ConPrintf(...)
 end
@@ -119,6 +122,7 @@ local TradeQueryGeneratorClass = newClass("TradeQueryGenerator", function(self, 
 	self.lastMaxPrice = nil
 	self.lastMaxPriceTypeIndex = nil
 	self.lastMaxLevel = nil
+	self.savedOptions = { }
 end)
 
 local function fetchStats()
@@ -133,6 +137,33 @@ local function fetchStats()
 	easy:perform()
 	easy:close()
 	return tradeStats
+end
+
+function TradeQueryGeneratorClass:SetSavedOptions(savedOptions)
+	self.savedOptions = savedOptions or { }
+	local function clampSelection(value, maxValue)
+		if not value then
+			return nil
+		end
+		return m_max(1, m_min(value, maxValue))
+	end
+	-- persisted checkbox states
+	self.lastIncludeMirrored = self.savedOptions.includeMirrored
+	self.lastIncludeCorrupted = self.savedOptions.includeCorrupted
+	self.lastOnlyImplicit = self.savedOptions.onlyImplicitWeights
+	self.lastRequireUnique = self.savedOptions.requireUnique
+	self.lastIncludeSynthesis = self.savedOptions.includeSynthesis
+	self.lastIncludeEldritch = self.savedOptions.includeEldritch
+	self.lastIncludeScourge = self.savedOptions.includeScourge
+	self.lastIncludeTalisman = self.savedOptions.includeTalisman
+	self.lastIncludeAttrReqs = self.savedOptions.includeAttrReqs
+	-- persisted dropdown / numeric states
+	self.lastInfluence1 = clampSelection(self.savedOptions.influence1, #influenceDropdownNames)
+	self.lastInfluence2 = clampSelection(self.savedOptions.influence2, #influenceDropdownNames)
+	self.lastJewelType = clampSelection(self.savedOptions.jewelType, 3)
+	self.lastMaxPrice = self.savedOptions.maxPrice
+	self.lastMaxPriceTypeIndex = clampSelection(self.savedOptions.maxPriceTypeIndex, #currencyTable)
+	self.lastMaxLevel = self.savedOptions.maxLevel
 end
 
 local function stripInfluenceSuffix(key)
@@ -686,7 +717,7 @@ function TradeQueryGeneratorClass:OnFrame()
 	end
 end
 
-local currencyTable = {
+currencyTable = {
 	{ name = "Chaos Orb Equivalent", id = nil },
 	{ name = "Chaos Orb", id = "chaos" },
 	{ name = "Divine Orb", id = "divine" },
@@ -1351,6 +1382,24 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 			options.links = tonumber(controls.links.buf)
 		end
 		options.statWeights = statWeights
+
+		if self.savedOptions then
+			self.savedOptions.includeMirrored = self.lastIncludeMirrored
+			self.savedOptions.includeCorrupted = self.lastIncludeCorrupted
+			self.savedOptions.onlyImplicitWeights = self.lastOnlyImplicit
+			self.savedOptions.requireUnique = self.lastRequireUnique
+			self.savedOptions.includeSynthesis = self.lastIncludeSynthesis
+			self.savedOptions.includeEldritch = self.lastIncludeEldritch
+			self.savedOptions.includeScourge = self.lastIncludeScourge
+			self.savedOptions.includeTalisman = self.lastIncludeTalisman
+			self.savedOptions.includeAttrReqs = self.lastIncludeAttrReqs
+			self.savedOptions.influence1 = self.lastInfluence1
+			self.savedOptions.influence2 = self.lastInfluence2
+			self.savedOptions.jewelType = self.lastJewelType
+			self.savedOptions.maxPrice = self.lastMaxPrice
+			self.savedOptions.maxPriceTypeIndex = self.lastMaxPriceTypeIndex
+			self.savedOptions.maxLevel = self.lastMaxLevel
+		end
 
 		self:StartQuery(slot, options)
 	end)

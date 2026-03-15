@@ -218,6 +218,7 @@ end
 -- Opens the item pricing popup
 function TradeQueryClass:PriceItem()
 	self.tradeQueryGenerator = new("TradeQueryGenerator", self)
+	self.tradeQueryGenerator:SetSavedOptions(self.queryOptionState)
 	main.onFrameFuncs["TradeQueryGenerator"] = function()
 		self.tradeQueryGenerator:OnFrame()
 	end
