@@ -786,6 +786,7 @@ function TradeQueryClass:UpdateControlsWithItems(row_idx)
 		amount = self.resultTbl[row_idx][pb_index].amount,
 	}
 	self.controls.fullPrice.label = "Total Price: " .. self:GetTotalPriceString()
+	if not self.slotTables[row_idx] then return end
 	local dropdownLabels = {}
 	local slotName = self.slotTables[row_idx].nodeId and "Jewel " .. tostring(self.slotTables[row_idx].nodeId) or self.slotTables[row_idx].slotName
 	local preserveExistingEldritchImplicits = self.resultQueryOptions[row_idx] and self.resultQueryOptions[row_idx].includeEldritch == true
