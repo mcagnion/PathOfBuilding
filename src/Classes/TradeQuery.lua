@@ -1200,10 +1200,77 @@ function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, ba
 		}
 		table.sort(result.evaluation, function(a, b) return a.weight > b.weight end)
 	else
-		local item = self:BuildComparableResultItem(slotName, result, self.enchantInSort, preserveExistingEldritchImplicits)
-		local output = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = item }))
-		local weight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, output, self.statSortSelectionList)
-		result.evaluation = {{ output = output, weight = weight }}
+		local function buildItem(itemString)
+			local item = new("Item", itemString)
+			if not self.enchantInSort then -- Calc item DPS without anoint or enchant as these can generally be added after.
+				item.enchantModLines = { }
+				item:BuildAndParseRaw()
+			end
+			return item
+		end
+		if self.slotTables[row_idx].groupResists then
+			local baseItem = buildItem(result.item_string)
+			-- Corrupted and mirrored items cannot be modified via Harvest
+			if baseItem.corrupted or baseItem.mirrored then
+				local output = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = baseItem }))
+				local weight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, output, self.statSortSelectionList)
+				result.evaluation = {{ output = output, weight = weight }}
+			else
+			-- Only single-element explicit resistance mods are Harvest-swappable:
+			-- implicits/enchants excluded (explicitModLines), fractured mods are locked,
+			-- dual-element and element+chaos hybrids are not swappable via Harvest
+			local elemTypes = { "Fire", "Cold", "Lightning" }
+			-- Collect explicit single-element non-fractured resistance mod indices (with original type)
+			local resistMods = {} -- { idx, originalType }
+			for i, modLine in ipairs(baseItem.explicitModLines or {}) do
+				local t = modLine.line and modLine.line:match("to (%a+) Resistance$")
+				if (t == "Fire" or t == "Cold" or t == "Lightning") and not modLine.fractured then
+					t_insert(resistMods, { idx = i, originalType = t })
+				end
+			end
+			local N = #resistMods
+			local bestWeight, bestOutput, bestCombo
+			local combo = {}
+			for i = 1, N do combo[i] = 1 end
+			for _ = 1, (N == 0 and 1 or 3 ^ N) do
+				-- Apply this combination to explicit mod lines and rebuild
+				for j, mod in ipairs(resistMods) do
+					local modLine = baseItem.explicitModLines[mod.idx]
+					modLine.line = modLine.line:gsub("to %a+ Resistance$", "to "..elemTypes[combo[j]].." Resistance")
+				end
+				baseItem:BuildAndParseRaw()
+				local output = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = baseItem }))
+				local weight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, output, self.statSortSelectionList)
+				if not bestWeight or weight > bestWeight then
+					bestWeight, bestOutput = weight, output
+					bestCombo = {}
+					for i = 1, N do bestCombo[i] = combo[i] end
+				end
+				-- Increment mixed-radix counter
+				for j = N, 1, -1 do
+					combo[j] = combo[j] + 1
+					if combo[j] <= 3 then break end
+					combo[j] = 1
+				end
+			end
+			-- Derive which mods need swapping (original type -> best assigned type)
+			local resistSwaps = {}
+			if bestCombo then
+				for j, mod in ipairs(resistMods) do
+					local targetType = elemTypes[bestCombo[j]]
+					if mod.originalType ~= targetType then
+						t_insert(resistSwaps, { from = mod.originalType, to = targetType })
+					end
+				end
+			end
+			result.evaluation = {{ output = bestOutput, weight = bestWeight, resistSwaps = resistSwaps }}
+			end -- corrupted check
+		else
+			local item = self:BuildComparableResultItem(slotName, result, self.enchantInSort, preserveExistingEldritchImplicits)
+			local output = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = item }))
+			local weight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, output, self.statSortSelectionList)
+			result.evaluation = {{ output = output, weight = weight }}
+		end
 	end
 	return result.evaluation
 end
@@ -1796,6 +1863,19 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 		addMegalomaniacCompareToTooltipIfApplicable(tooltip, pb_index)
 		tooltip:AddSeparator(10)
 		tooltip:AddLine(16, string.format("^7Price: %s %s", result.amount, result.currency))
+		-- Show Harvest resistance swap suggestions when groupResists is active
+		if slotTbl.groupResists and result.evaluation then
+			local eval = result.evaluation[1]
+			if eval and eval.resistSwaps and #eval.resistSwaps > 0 then
+				local resistColors = { Fire = colorCodes.FIRE, Cold = colorCodes.COLD, Lightning = colorCodes.LIGHTNING }
+				tooltip:AddSeparator(6)
+				for _, swap in ipairs(eval.resistSwaps) do
+					local fromColor = resistColors[swap.from] or "^7"
+					local toColor = resistColors[swap.to] or "^7"
+					tooltip:AddLine(16, string.format("^8Harvest: %s%s Resistance ^8-> %s%s Resistance", fromColor, swap.from, toColor, swap.to))
+				end
+			end
+		end
 	end
 	controls["importButton"..row_idx] = new("ButtonControl", { "TOPLEFT", controls["resultDropdown"..row_idx], "TOPRIGHT"}, {8, 0, 100, row_height}, "Import Item", function()
 		local result = self.resultTbl[row_idx][self.itemIndexTbl[row_idx]]

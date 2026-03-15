@@ -1285,7 +1285,39 @@ function TradeQueryGeneratorClass:GenerateModWeights(modsToTest)
 			local output = self.calcContext.calcFunc({ repSlotName = self.calcContext.slot.slotName, repItem = self.calcContext.testItem })
 			local meanStatDiff = TradeQueryGeneratorClass.WeightedRatioOutputs(self.calcContext.baseOutput, output, self.calcContext.options.statWeights) * 1000 - (self.calcContext.baseStatValue or 0)
 			if meanStatDiff > 0.01 then
-				t_insert(self.modWeights, { tradeModId = entry.tradeMod.id, weight = meanStatDiff / modValue, meanStatDiff = meanStatDiff, invert = entry.sign == "-" and true or false })
+				local resistTag
+				local resistFactor = 1  -- number of elemental types contributed (used to normalise pseudo_total weight)
+				local modText = entry.tradeMod.text
+				local elemType = modText:match("to (%a+) Resistance$")
+				if elemType == "Fire" or elemType == "Cold" or elemType == "Lightning" then
+					resistTag = { elem = true }
+				elseif elemType == "Chaos" then
+					resistTag = { chaos = true }
+				else
+					local hybridElem = modText:match("to (%a+) and Chaos Resistances$")
+					if hybridElem == "Fire" or hybridElem == "Cold" or hybridElem == "Lightning" then
+						-- element+Chaos hybrid: contributes 1 type to elem pseudo-total and 1 to chaos pseudo-total
+						resistTag = { elem = true, chaos = true }
+					elseif modText:match("^%+#%% to all Elemental Resistances$") then
+						-- all-elemental mod: contributes 3× (Fire+Cold+Lightning) to pseudo_total_elemental
+						resistTag = { elem = true }
+						resistFactor = 3
+					else
+						-- dual-elemental mod (e.g. Fire and Lightning, Fire and Cold, Cold and Lightning)
+						local dualA, dualB = modText:match("^%+#%% to (%a+) and (%a+) Resistances$")
+						if dualA and dualB then
+							local aElem = dualA == "Fire" or dualA == "Cold" or dualA == "Lightning"
+							local bElem = dualB == "Fire" or dualB == "Cold" or dualB == "Lightning"
+							if aElem and bElem then
+								-- contributes 2× to pseudo_total_elemental
+								resistTag = { elem = true }
+								resistFactor = 2
+							end
+						end
+					end
+				end
+				local weight = meanStatDiff / modValue
+				t_insert(self.modWeights, { tradeModId = entry.tradeMod.id, weight = weight, normalizedWeight = weight / resistFactor, meanStatDiff = meanStatDiff, invert = entry.sign == "-" and true or false, resistTag = resistTag })
 			end
 			self.alreadyWeightedMods[entry.tradeMod.id] = true
 			self.calcContext.progress.current = self.calcContext.progress.current + 1
@@ -1759,10 +1791,35 @@ function TradeQueryGeneratorClass:FinishQuery()
 
 	local effective_max = MAX_FILTERS - num_extra
 
+	-- Merge elemental/chaos resistance mods into pseudo stats if option enabled
+	if self.calcContext.options.groupResists then
+		local elemMax, chaosMax = 0, 0
+		local filtered = { }
+		for _, entry in ipairs(self.modWeights) do
+			if entry.resistTag then
+				-- Use normalizedWeight (weight / resistFactor) so that dual/all-elem mods don't
+				-- inflate the pseudo_total filter threshold relative to single-element mods.
+				local nw = entry.normalizedWeight or entry.weight
+				if entry.resistTag.elem and nw > elemMax then elemMax = nw end
+				if entry.resistTag.chaos and nw > chaosMax then chaosMax = nw end
+			else
+				t_insert(filtered, entry)
+			end
+		end
+		if elemMax > 0 then
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_total_elemental_resistance", weight = elemMax, meanStatDiff = elemMax, invert = false })
+		end
+		if chaosMax > 0 then
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_total_chaos_resistance", weight = chaosMax, meanStatDiff = chaosMax, invert = false })
+		end
+		self.modWeights = filtered
+	end
+
 	-- Prioritize top mods by abs(weight)
 	table.sort(self.modWeights, function(a, b) return math.abs(a.weight) > math.abs(b.weight) end)
 
-	local prioritizedMods = { }
+
+	local prioritizedMods = {}
 	for _, entry in ipairs(self.modWeights) do
 		if #prioritizedMods < effective_max then
 			table.insert(prioritizedMods, entry)
@@ -1970,7 +2027,11 @@ function TradeQueryGeneratorClass:FinishQuery()
 	if self.requesterContext then
 		self.requesterContext.tradeQueryPlan = queryPlan
 	end
-
+	-- Propagate groupResists to the slot table so result evaluation can use it
+	if self.requesterContext and self.requesterContext.slotTbl then
+		self.requesterContext.slotTbl.groupResists = options.groupResists
+	end
+
 	local queryJson = dkjson.encode(queryTable)
 	-- Close blocker popup
 	main:ClosePopup()
@@ -2183,6 +2244,12 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 	controls.includeAttrReqs = new("CheckBoxControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 18}, "Attributes Requirements:", function(state) end)
 	controls.includeAttrReqs.state = (self.lastIncludeAttrReqs == nil or self.lastIncludeAttrReqs == true)
 	updateLastAnchor(controls.includeAttrReqs)
+	-- When enabled, elemental/chaos resistance mods are merged into pseudo stats (reflects swappable nature, saves filter slots)
+	controls.groupResists = new("CheckBoxControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 18}, "Pseudo Resistances:", function(state) end)
+	controls.groupResists.state = (self.lastGroupResists == true)
+	controls.groupResists.tooltipText = "Merges Fire/Cold/Lightning resistance mods (including hybrid Elemental+Chaos)\ninto pseudo.pseudo_total_elemental_resistance and pseudo.pseudo_total_chaos_resistance.\nSaves filter slots and reflects the interchangeable nature of elemental resistance suffixes."
+	updateLastAnchor(controls.groupResists)
+	popupHeight = popupHeight + 28
 
 	-- basic filtering by slot for sockets and links, Megalomaniac does not have slot and Sockets use "Jewel nodeId"
 	if slot and not isJewelSlot and not isAbyssalJewelSlot and not slot.slotName:find("Flask") then
@@ -2297,6 +2364,8 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		end
 		if controls.includeAttrReqs then
 			self.lastIncludeAttrReqs, options.includeAttrReqs = controls.includeAttrReqs.state, controls.includeAttrReqs.state
+		if controls.groupResists then
+			self.lastGroupResists, options.groupResists = controls.groupResists.state, controls.groupResists.state
 		end
 		if controls.sockets and controls.sockets.buf then
 			options.sockets = tonumber(controls.sockets.buf)
