@@ -347,7 +347,6 @@ local function getBaseDefenceRangeParts(baseData)
 	end)
 	return #rangeParts > 0 and rangeParts or nil
 end
-end
 
 local TradeQueryGeneratorClass = newClass("TradeQueryGenerator", function(self, queryTab)
 	self:InitMods()
@@ -2035,7 +2034,7 @@ function TradeQueryGeneratorClass:FinishQuery()
 	if self.requesterContext and self.requesterContext.slotTbl then
 		self.requesterContext.slotTbl.considerBenchCraft = options.considerBenchCraft
 	end
-
+
 	local queryJson = dkjson.encode(queryTable)
 	-- Close blocker popup
 	main:ClosePopup()
