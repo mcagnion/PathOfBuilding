@@ -100,6 +100,7 @@ describe("TradeQuery Currency Conversion", function()
                     }
                 }
             }
+            mock_tradeQuery.slotTables = { [1] = { slotName = "Ring 1" } }
             mock_tradeQuery.totalPrice = {}
             mock_tradeQuery.itemIndexTbl = {}
             mock_tradeQuery.sortedResultTbl = {}

@@ -1862,7 +1862,7 @@ function TradeQueryGeneratorClass:FinishQuery()
 		local queryTable = {
 			query = {
 				filters = queryFilters,
-				status = { option = self.queryTab:GetTradeStatusOption() },
+				status = { option = self.queryTab and self.queryTab.GetTradeStatusOption and self.queryTab:GetTradeStatusOption() or "online" },
 				stats = {
 					{
 						type = "weight",
