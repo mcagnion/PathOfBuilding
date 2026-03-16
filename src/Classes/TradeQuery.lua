@@ -1905,6 +1905,8 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 					local toColor = resistColors[swap.to] or "^7"
 					tooltip:AddLine(16, string.format("^8Harvest: %s%s Resistance ^8-> %s%s Resistance", fromColor, swap.from, toColor, swap.to))
 				end
+			end
+		end
 		if result.evaluation then
 			local eval = result.evaluation[1]
 			if eval and eval.benchCraft then
