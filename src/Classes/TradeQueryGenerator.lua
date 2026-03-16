@@ -2374,6 +2374,7 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		end
 		if controls.includeAttrReqs then
 			self.lastIncludeAttrReqs, options.includeAttrReqs = controls.includeAttrReqs.state, controls.includeAttrReqs.state
+		end
 		if controls.groupResists then
 			self.lastGroupResists, options.groupResists = controls.groupResists.state, controls.groupResists.state
 		end
