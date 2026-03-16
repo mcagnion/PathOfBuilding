@@ -4,7 +4,6 @@
 -- Provides PoB Trader pane for interacting with PoE Trade
 --
 
-
 local dkjson = require "dkjson"
 
 local get_time = os.time
@@ -97,7 +96,6 @@ function TradeQueryClass:FetchCurrencyConversionTable(callback)
 			end
 		end)
 end
-
 
 -- Method to pull down and interpret available leagues from PoE
 function TradeQueryClass:PullLeagueList()
@@ -778,7 +776,6 @@ Highest Weight - Displays the order retrieved from trade]]
 	self.includeUnusable = self.includeUnusable == true
 	self.controls.includeUnusableCheck.state = self.includeUnusable
 
-
 	-- Realm selection
 	self.controls.realmLabel = new("LabelControl", {"LEFT", self.controls.setSelect, "RIGHT"}, {18, 0, 20, row_height - 4}, "^7Realm:")
 	self.controls.realm = new("DropDownControl", {"LEFT", self.controls.realmLabel, "RIGHT"}, {6, 0, 150, row_height}, self.realmDropList, function(index, value)
@@ -1269,7 +1266,41 @@ function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, ba
 			local item = self:BuildComparableResultItem(slotName, result, self.enchantInSort, preserveExistingEldritchImplicits)
 			local output = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = item }))
 			local weight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, output, self.statSortSelectionList)
-			result.evaluation = {{ output = output, weight = weight }}
+			local benchCraft = nil
+			if self.slotTables[row_idx].considerBenchCraft and not item.corrupted and not item.mirrored then
+				local affixMax = 0
+				if item.rarity == "RARE" then
+					local defaultHalf = (item.type == "Jewel") and 2 or 3
+					affixMax = (item.prefixes.limit or 0) + defaultHalf + (item.suffixes.limit or 0) + defaultHalf
+				elseif item.rarity == "MAGIC" then
+					affixMax = (item.prefixes.limit or 0) + 1 + (item.suffixes.limit or 0) + 1
+				end
+				if affixMax > 0 then
+					local explicitCount = #(item.explicitModLines or {})
+					if explicitCount < affixMax then
+						for _, craft in ipairs(self.itemsTab.build.data.masterMods or {}) do
+							if craft.types[item.type] then
+								local craftedItem = new("Item", result.item_string)
+								if not self.enchantInSort then
+									craftedItem.enchantModLines = { }
+								end
+								for _, line in ipairs(craft) do
+									t_insert(craftedItem.explicitModLines, { line = line, modTags = craft.modTags, crafted = true })
+								end
+								craftedItem:BuildAndParseRaw()
+								local craftOutput = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = craftedItem }))
+								local craftWeight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, craftOutput, self.statSortSelectionList)
+								if craftWeight > weight then
+									weight = craftWeight
+									output = craftOutput
+									benchCraft = table.concat(craft, "/") .. " ^8(" .. craft.type .. ")"
+								end
+							end
+						end
+					end
+				end
+			end
+			result.evaluation = {{ output = output, weight = weight, benchCraft = benchCraft }}
 		end
 	end
 	return result.evaluation
@@ -1874,6 +1905,11 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 					local toColor = resistColors[swap.to] or "^7"
 					tooltip:AddLine(16, string.format("^8Harvest: %s%s Resistance ^8-> %s%s Resistance", fromColor, swap.from, toColor, swap.to))
 				end
+		if result.evaluation then
+			local eval = result.evaluation[1]
+			if eval and eval.benchCraft then
+				tooltip:AddSeparator(6)
+				tooltip:AddLine(16, "^8Bench: ^7" .. eval.benchCraft)
 			end
 		end
 	end

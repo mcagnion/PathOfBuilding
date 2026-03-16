@@ -2031,6 +2031,10 @@ function TradeQueryGeneratorClass:FinishQuery()
 	if self.requesterContext and self.requesterContext.slotTbl then
 		self.requesterContext.slotTbl.groupResists = options.groupResists
 	end
+	-- Propagate considerBenchCraft to the slot table so result evaluation can use it
+	if self.requesterContext and self.requesterContext.slotTbl then
+		self.requesterContext.slotTbl.considerBenchCraft = options.considerBenchCraft
+	end
 
 	local queryJson = dkjson.encode(queryTable)
 	-- Close blocker popup
@@ -2106,6 +2110,13 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 	controls.includeMirrored = new("CheckBoxControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 18}, "Mirrored items:", function(state) end)
 	controls.includeMirrored.state = (self.lastIncludeMirrored == nil or self.lastIncludeMirrored == true)
 	updateLastAnchor(controls.includeMirrored)
+
+	if not isJewelSlot and not isAbyssalJewelSlot and not context.slotTbl.unique then
+		controls.considerBenchCraft = new("CheckBoxControl", {"TOPRIGHT",lastItemAnchor,"BOTTOMRIGHT"}, {0, 5, 18}, "Bench Craft:", function(state) end)
+		controls.considerBenchCraft.state = (self.lastConsiderBenchCraft == true)
+		controls.considerBenchCraft.tooltipText = "Simulates adding the best available bench craft to a free affix slot when evaluating results."
+		updateLastAnchor(controls.considerBenchCraft)
+	end
 
 	if not isJewelSlot and not isAbyssalJewelSlot and includeScourge then
 		controls.includeScourge = new("CheckBoxControl", {"TOPRIGHT",lastItemAnchor,"BOTTOMRIGHT"}, {0, 5, 18}, "Scourge Mods:", function(state) end)
@@ -2373,6 +2384,9 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		end
 		if controls.links and controls.links.buf then
 			options.links = tonumber(controls.links.buf)
+		end
+		if controls.considerBenchCraft then
+			self.lastConsiderBenchCraft, options.considerBenchCraft = controls.considerBenchCraft.state, controls.considerBenchCraft.state
 		end
 		options.statWeights = statWeights
 		self.requesterContext.includeEldritch = options.includeEldritch == true
