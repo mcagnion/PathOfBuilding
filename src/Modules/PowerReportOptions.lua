@@ -63,4 +63,13 @@ function powerReportOptions.getKeys()
 	return keys
 end
 
+function powerReportOptions.hasAnyEnabled(target)
+	for _, option in ipairs(optionList) do
+		if target[option.key] then
+			return true
+		end
+	end
+	return false
+end
+
 return powerReportOptions
