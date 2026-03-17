@@ -4027,7 +4027,7 @@ function ItemsTabClass:AddItemTooltip(tooltip, item, slot, dbMode)
 			if not main.slotOnlyTooltips or (slot and (slot.nodeId == compareSlot.nodeId or slot.slotName == compareSlot.slotName)) or not slot or slot == compareSlot then
 				local selItem = self.items[compareSlot.selItemId]
 
-				if not (main.compareJewelsOfSameType and item.type == "Jewel" and not self:IsSameBase(item, selItem)) then
+				if not (main.compareJewelsOfSameType and item.type == "Jewel" and selItem and not self:IsSameBase(item, selItem)) then
 					local output = calcFunc({ repSlotName = compareSlot.slotName, repItem = item ~= selItem and item or nil})
 					local header
 					if item == selItem then
