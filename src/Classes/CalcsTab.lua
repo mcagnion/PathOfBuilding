@@ -11,6 +11,7 @@ local t_concat = table.concat
 local m_max = math.max
 local m_floor = math.floor
 local powerReportUtils = LoadModule("Modules/PowerReportUtils")
+local powerReportOptions = LoadModule("Modules/PowerReportOptions")
 local powerReportTattooEvaluator = LoadModule("Modules/PowerReportTattooEvaluator")
 
 local buffModeDropList = {
@@ -478,6 +479,13 @@ end
 -- Estimate the offensive and defensive power of all unallocated nodes
 function CalcsTabClass:PowerBuilder()
 	-- local timer_start = GetTime()
+	local treeTab = self.build.treeTab
+	if treeTab and not powerReportOptions.hasAnyEnabled(treeTab) then
+		self.powerMax = { singleStat = 0, offence = 0, offencePerPoint = 0, defence = 0, defencePerPoint = 0 }
+		self.powerBuilderInitialized = true
+		self.powerTattooOptions = { }
+		return
+	end
 	local useFullDPS = self.powerStat and self.powerStat.stat == "FullDPS"
 	local calcFunc, calcBase = self:GetMiscCalculator()
 	local cache = { }
@@ -485,6 +493,18 @@ function CalcsTabClass:PowerBuilder()
 	local masteryChoiceCache = { }
 	local usedMasteryEffects = { }
 	local ascendancyContext = powerReportUtils.makeAscendancyContext(self.build.spec)
+	local includeNormals = not treeTab or treeTab.includePowerReportNormals
+	local includeNotables = not treeTab or treeTab.includePowerReportNotables
+	local includeKeystones = not treeTab or treeTab.includePowerReportKeystones
+	local includeMasteries = not treeTab or treeTab.includePowerReportMasteries
+	local function isIncludedNodeType(node)
+		if node.type == "Normal" then return includeNormals
+		elseif node.type == "Notable" then return includeNotables
+		elseif node.type == "Keystone" then return includeKeystones
+		elseif node.type == "Mastery" then return includeMasteries
+		end
+		return true
+	end
 	local function canUsePathPower(node)
 		return node.path and (
 			not node.ascendancyName
@@ -599,6 +619,9 @@ function CalcsTabClass:PowerBuilder()
 		canUsePathPower = canUsePathPower,
 		calcWithPowerReportAssumptions = calcWithPowerReportAssumptions,
 		calculatePowerScore = calculatePowerScore,
+		includeTattoos = treeTab and treeTab.includePowerReportTattoos,
+		includeRunegrafts = treeTab and treeTab.includePowerReportRunegrafts,
+		nodePowerMaxDepth = self.nodePowerMaxDepth,
 	})
 	local distanceMap = { }
 	local distanceList = { }
@@ -649,7 +672,7 @@ function CalcsTabClass:PowerBuilder()
 			break
 		end
 		for nodeId, node in pairs(nodes) do
-			if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] then
+			if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] and isIncludedNodeType(node) then
 				local nodeOverride = { addNodes = { [node] = true } }
 				if not cache[node.modKey] then
 					cache[node.modKey] = calcFunc(nodeOverride, useFullDPS)
@@ -795,7 +818,7 @@ function CalcsTabClass:PowerBuilder()
 						newPowerMax.defencePerPoint = m_max(newPowerMax.defencePerPoint, node.power.defence / node.pathDist)
 					end
 				end
-			elseif node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] then
+			elseif node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] and isIncludedNodeType(node) then
 				local removeKey = node.modKey.."_remove"
 				local removeOverride = { removeNodes = { [node] = true } }
 				if not cache[removeKey] then
