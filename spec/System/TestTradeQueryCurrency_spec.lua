@@ -1,5 +1,5 @@
 describe("TradeQuery Currency Conversion", function()
-    local mock_tradeQuery = new("TradeQuery", { itemsTab = {} })
+    local mock_tradeQuery = new("TradeQuery", { itemsTab = {}, ApplyComparisonItemOverrides = function() end })
 
     -- test case for commit: "Skip callback on errors to prevent incomplete conversions"
     describe("FetchCurrencyConversionTable", function()

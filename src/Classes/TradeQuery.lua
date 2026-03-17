@@ -1365,10 +1365,11 @@ function TradeQueryClass:UpdateControlsWithItems(row_idx)
 	local dropdownLabels = {}
 	local slotName = self.slotTables[row_idx].nodeId and "Jewel " .. tostring(self.slotTables[row_idx].nodeId) or self.slotTables[row_idx].slotName
 	local preserveExistingEldritchImplicits = self.resultQueryOptions[row_idx] and self.resultQueryOptions[row_idx].includeEldritch == true
-	for result_index = 1, #self.resultTbl[row_idx] do
-		local pb_index = self.sortedResultTbl[row_idx][result_index].index
-		local item = self:BuildComparableResultItem(slotName, self.resultTbl[row_idx][pb_index], true, preserveExistingEldritchImplicits)
-		table.insert(dropdownLabels, colorCodes[item.rarity]..item.name)
+	for _, sorted in ipairs(self.sortedResultTbl[row_idx]) do
+		if sorted and sorted.index and self.resultTbl[row_idx][sorted.index] then
+			local item = self:BuildComparableResultItem(slotName, self.resultTbl[row_idx][sorted.index], true, preserveExistingEldritchImplicits)
+			table.insert(dropdownLabels, colorCodes[item.rarity]..item.name)
+		end
 	end
 	if self.controls["resultDropdown".. row_idx] then
 		self.controls["resultDropdown".. row_idx].selIndex = 1
