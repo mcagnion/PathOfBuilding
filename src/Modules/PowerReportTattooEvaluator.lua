@@ -203,6 +203,9 @@ local function makeTattooNearestPathOverride(baseNodes, tattooByBaseId)
 end
 
 function powerReportTattooEvaluator.buildOptions(context)
+	if not context.includeTattoos and not context.includeRunegrafts then
+		return { }
+	end
 	local spec = context.spec
 	local grantedPassives = context.grantedPassives or { }
 	local canUsePathPower = context.canUsePathPower
@@ -211,35 +214,45 @@ function powerReportTattooEvaluator.buildOptions(context)
 
 	local powerTattooOptions = { }
 	local tattooCases = { }
+	local noNearestCandidates = context.nodePowerMaxDepth and context.nodePowerMaxDepth <= 0
 	for _, node in pairs(spec.nodes) do
-		if isTattooEditableNode(node) and not grantedPassives[node.id] then
+		local canBeReplacement = node.alloc
+		local canBeNearest = not noNearestCandidates and not node.alloc
+		if isTattooEditableNode(node) and not grantedPassives[node.id] and (canBeReplacement or canBeNearest) then
 			for _, tattoo in ipairs(getTattooCandidatesForNode(spec, node)) do
-				local tattooCategory = getTattooCategory(tattoo)
-				-- Keystone tattoos are intentionally ignored in power report calculations.
-				if tattooCategory ~= "Keystone" then
-					-- Skip no-op replacement (same underlying mod set)
-					if not (node.isTattoo and node.modKey == tattoo.modKey) then
-						local case = tattooCases[tattoo.id]
-						if not case then
-							case = {
-								tattoo = tattoo,
-								category = tattooCategory,
-								replacementByKey = { },
-								replacementCandidates = { },
-								nearestCandidates = { },
-							}
-							tattooCases[tattoo.id] = case
-						end
-						if node.alloc then
-							local groupKey = makeTattooGroupKey(node)
-							if not case.replacementByKey[groupKey] then
-								case.replacementByKey[groupKey] = node
-								t_insert(case.replacementCandidates, node)
+				local isRunegraft = isRunegraftTattoo(tattoo)
+				if isRunegraft and not context.includeRunegrafts then
+					-- skip
+				elseif not isRunegraft and not context.includeTattoos then
+					-- skip
+				else
+					local tattooCategory = getTattooCategory(tattoo)
+					-- Keystone tattoos are intentionally ignored in power report calculations.
+					if tattooCategory ~= "Keystone" then
+						-- Skip no-op replacement (same underlying mod set)
+						if not (node.isTattoo and node.modKey == tattoo.modKey) then
+							local case = tattooCases[tattoo.id]
+							if not case then
+								case = {
+									tattoo = tattoo,
+									category = tattooCategory,
+									replacementByKey = { },
+									replacementCandidates = { },
+									nearestCandidates = { },
+								}
+								tattooCases[tattoo.id] = case
 							end
-						else
-							local pathDist = getReachablePathDist(node)
-							if pathDist and canUsePathPower(node) then
-								t_insert(case.nearestCandidates, { node = node, pathDist = pathDist })
+							if canBeReplacement then
+								local groupKey = makeTattooGroupKey(node)
+								if not case.replacementByKey[groupKey] then
+									case.replacementByKey[groupKey] = node
+									t_insert(case.replacementCandidates, node)
+								end
+							else
+								local pathDist = getReachablePathDist(node)
+								if pathDist and (not context.nodePowerMaxDepth or pathDist <= context.nodePowerMaxDepth) and canUsePathPower(node) then
+									t_insert(case.nearestCandidates, { node = node, pathDist = pathDist })
+								end
 							end
 						end
 					end
