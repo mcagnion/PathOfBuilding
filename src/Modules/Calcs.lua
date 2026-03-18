@@ -371,12 +371,19 @@ function calcs.getMiscCalculator(build)
 			env.player.output.FullDPS = fullDPSOutput.combinedDPS
 			env.player.output.FullDotDPS = fullDPSOutput.TotalDotDPS
 		end
-		applyPowerReportEnemyConditions(
-			env.player.output,
-			env,
-			fullDPSOutput,
-			usedFullDPS and (useFullDPS ~= false or build.viewMode == "TREE")
-		)
+		if override.assumeEnemyConditions then
+			-- The assumed rerun reuses the assumptions computed from the first pass.
+			-- Rebuilding the condition metadata here adds work but no caller reads it.
+			env.player.output.PowerReportEnemyConditionsAvailable = nil
+			env.player.output.PowerReportEnemyConditionsUsed = nil
+		else
+			applyPowerReportEnemyConditions(
+				env.player.output,
+				env,
+				fullDPSOutput,
+				usedFullDPS and (useFullDPS ~= false or build.viewMode == "TREE")
+			)
+		end
 		return env.player.output
 	end, env.player.output
 end
@@ -410,6 +417,9 @@ end
 function calcs.calcFullDPS(build, mode, override, specEnv)
 	local fullEnv, cachedPlayerDB, cachedEnemyDB, cachedMinionDB = calcs.initEnv(build, mode, override, specEnv)
 	local usedEnv = nil
+	-- Assumed reruns only need the DPS result; the Power Report condition metadata
+	-- is derived from the initial pass that selected the assumptions.
+	local collectPowerReportEnemyConditions = not (override and override.assumeEnemyConditions)
 
 	local fullDPS = {
 		combinedDPS = 0,
@@ -442,6 +452,7 @@ function calcs.calcFullDPS(build, mode, override, specEnv)
 				fullEnv.player.mainSkill = activeSkill
 				calcs.perform(fullEnv, true)
 				usedEnv = fullEnv
+				if collectPowerReportEnemyConditions then
 					fullDPS.PowerReportEnemyConditionsAvailable = mergePowerReportConditionSet(
 						fullDPS.PowerReportEnemyConditionsAvailable,
 						getPowerReportEnemyConditionCandidates(fullEnv)
@@ -450,7 +461,8 @@ function calcs.calcFullDPS(build, mode, override, specEnv)
 						fullDPS.PowerReportEnemyConditionsUsed,
 						getPowerReportEnemyConditionsUsed(fullEnv)
 					)
-					local minionName = nil
+				end
+				local minionName = nil
 				if activeSkill.minion or usedEnv.minion then
 					if usedEnv.minion.output.TotalDPS and usedEnv.minion.output.TotalDPS > 0 then
 						minionName = (activeSkill.minion and activeSkill.minion.minionData.name..": ") or (usedEnv.minion and usedEnv.minion.minionData.name..": ") or ""
