@@ -172,4 +172,34 @@ describe("TestPowerReport", function()
 		assert.is_not_nil(build.calcsTab.powerMax)
 		assert.is_true(build.calcsTab.powerBuilderInitialized)
 	end)
+
+	-- Benchmarks (run with: busted --lua=luajit --no-coverage -r benchmark --filter=TestPowerReport)
+	-- Ces tests sont commités mais exclus de la suite par défaut.
+	-- Ils mesurent les performances et génèrent un rapport de profiling.
+	-- Ils ne font pas d'assertions strictes de performance.
+
+	it("benchmark: all options enabled #benchmark", function()
+		setAllOptions(true)
+		local p = require("jit.p")
+		p.start("i10", "profiler_bench.log")
+		local t0 = os.clock()
+		drainPowerBuild()
+		local elapsed = os.clock() - t0
+		p.stop()
+		print(string.format("\n  [bench] all options enabled: %.2fs CPU  (profiler -> profiler_bench.log)", elapsed))
+		assert.is_not_nil(build.calcsTab.powerMax)
+	end)
+
+	it("benchmark: all options enabled, nodePowerMaxDepth=0 #benchmark", function()
+		setAllOptions(true)
+		build.calcsTab.nodePowerMaxDepth = 0
+		local p = require("jit.p")
+		p.start("i10", "profiler_bench_depth0.log")
+		local t0 = os.clock()
+		drainPowerBuild()
+		local elapsed = os.clock() - t0
+		p.stop()
+		print(string.format("\n  [bench] all options, depth=0: %.2fs CPU  (profiler -> profiler_bench_depth0.log)", elapsed))
+		assert.is_not_nil(build.calcsTab.powerMax)
+	end)
 end)
