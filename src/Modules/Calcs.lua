@@ -394,7 +394,7 @@ function calcs.getMiscCalculator(build)
 			env.player.output.FullDPS = fullDPSOutput.combinedDPS
 			env.player.output.FullDotDPS = fullDPSOutput.TotalDotDPS
 		end
-		if override.assumeEnemyConditions then
+		if override and override.assumeEnemyConditions then
 			-- The assumed rerun reuses the assumptions computed from the first pass.
 			-- Rebuilding the condition metadata here adds work but no caller reads it.
 			env.player.output.PowerReportEnemyConditionsAvailable = nil
