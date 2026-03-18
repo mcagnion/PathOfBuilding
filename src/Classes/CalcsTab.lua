@@ -530,30 +530,19 @@ function CalcsTabClass:PowerBuilder()
 		end
 		return assumptions
 	end
-	local function encodeAssumeEnemyConditions(assumptions)
+	local function buildAssumptionInfo(assumptions)
 		if not assumptions then
-			return ""
+			return "", nil
 		end
 		local conditions = { }
 		for condition in pairs(assumptions) do
 			t_insert(conditions, condition)
 		end
+		if #conditions == 0 then
+			return "", nil
+		end
 		t_sort(conditions)
-		return t_concat(conditions, ",")
-	end
-	local function conditionSetToList(conditions)
-		if not conditions then
-			return nil
-		end
-		local out = { }
-		for condition in pairs(conditions) do
-			t_insert(out, condition)
-		end
-		if #out == 0 then
-			return nil
-		end
-		t_sort(out)
-		return out
+		return t_concat(conditions, ","), conditions
 	end
 	local function calcWithPowerReportAssumptions(override, cacheKey)
 		local output = cache[cacheKey]
@@ -562,7 +551,7 @@ function CalcsTabClass:PowerBuilder()
 			cache[cacheKey] = output
 		end
 		local assumptions = buildAssumeEnemyConditions(output)
-		local assumptionKey = encodeAssumeEnemyConditions(assumptions)
+		local assumptionKey, assumptionList = buildAssumptionInfo(assumptions)
 		if assumptionKey == "" then
 			return output, nil
 		end
@@ -574,7 +563,7 @@ function CalcsTabClass:PowerBuilder()
 			end
 			cache[assumedKey] = calcFunc(assumedOverride, useFullDPS)
 		end
-		return cache[assumedKey], conditionSetToList(assumptions)
+		return cache[assumedKey], assumptionList
 	end
 	cache.__base = calcBase
 	local baseAssumedEnemyConditions
