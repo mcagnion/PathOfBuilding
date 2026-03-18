@@ -7,6 +7,7 @@ local pairs = pairs
 local ipairs = ipairs
 local t_insert = table.insert
 local s_format = string.format
+local s_lower = string.lower
 local m_min = math.min
 local m_ceil = math.ceil
 
@@ -19,6 +20,12 @@ LoadModule("Modules/CalcDefence", calcs)
 LoadModule("Modules/CalcOffence", calcs)
 LoadModule("Modules/CalcTriggers", calcs)
 LoadModule("Modules/CalcMirages.lua", calcs)
+
+local powerReportImplicitConditionPatterns = {
+	{ pattern = "[fi][ig][rn][ei]t?e?", conditions = { "Ignited", "Burning" } },
+	{ pattern = "[cf][or][le][de]z?e?", conditions = { "Frozen" } },
+}
+local powerReportImplicitConditionNameCache = { }
 
 -- Get the average value of a table -- note this is unused
 function math.average(t)
@@ -224,14 +231,30 @@ local function getPowerReportEnemyConditionsUsed(env)
 		if not modName then
 			return
 		end
-		for dmgType, conditions in pairs({
-			["[fi][ig][rn][ei]t?e?"] = { "Ignited", "Burning" },
-			["[cf][or][le][de]z?e?"] = { "Frozen" },
-		}) do
-			if modName:lower():match(dmgType) then
-				for _, condition in ipairs(conditions) do
-					addVar(condition)
+		local cachedConditions = powerReportImplicitConditionNameCache[modName]
+		if cachedConditions == false then
+			return
+		end
+		if cachedConditions then
+			for _, condition in ipairs(cachedConditions) do
+				addVar(condition)
+			end
+			return
+		end
+		local matchedConditions
+		local modNameLower = s_lower(modName)
+		for _, entry in ipairs(powerReportImplicitConditionPatterns) do
+			if modNameLower:match(entry.pattern) then
+				matchedConditions = matchedConditions or { }
+				for _, condition in ipairs(entry.conditions) do
+					t_insert(matchedConditions, condition)
 				end
+			end
+		end
+		powerReportImplicitConditionNameCache[modName] = matchedConditions or false
+		if matchedConditions then
+			for _, condition in ipairs(matchedConditions) do
+				addVar(condition)
 			end
 		end
 	end
