@@ -80,6 +80,156 @@ describe("TradeQueryGenerator", function()
             assert.are.same({ "A Armour", "B Armour" }, bases)
         end)
 
+        it("lists compatible ring bases for the slot", function()
+            local queryGen = new("TradeQueryGenerator", {
+                itemsTab = {
+                    build = {
+                        data = {
+                            itemBases = {
+                                ["Iron Ring"] = { type = "Ring" },
+                                ["Coral Ring"] = { type = "Ring" },
+                                ["Amber Amulet"] = { type = "Amulet" },
+                            }
+                        }
+                    }
+                }
+            })
+
+            local bases = queryGen:GetSelectableBaseNames({ slotName = "Ring 1" }, { type = "Ring", baseName = "Coral Ring" })
+            assert.are.same({ "Coral Ring", "Iron Ring" }, bases)
+        end)
+
+        it("lists compatible belt bases for the slot", function()
+            local queryGen = new("TradeQueryGenerator", {
+                itemsTab = {
+                    build = {
+                        data = {
+                            itemBases = {
+                                ["Leather Belt"] = { type = "Belt" },
+                                ["Heavy Belt"] = { type = "Belt" },
+                                ["Iron Ring"] = { type = "Ring" },
+                            }
+                        }
+                    }
+                }
+            })
+
+            local bases = queryGen:GetSelectableBaseNames({ slotName = "Belt" }, { type = "Belt", baseName = "Leather Belt" })
+            assert.are.same({ "Heavy Belt", "Leather Belt" }, bases)
+        end)
+
+        it("lists compatible belt bases even when the slot is empty", function()
+            local queryGen = new("TradeQueryGenerator", {
+                itemsTab = {
+                    build = {
+                        data = {
+                            itemBases = {
+                                ["Leather Belt"] = { type = "Belt" },
+                                ["Heavy Belt"] = { type = "Belt" },
+                                ["Iron Ring"] = { type = "Ring" },
+                            }
+                        }
+                    }
+                }
+            })
+
+            local bases = queryGen:GetSelectableBaseNames({ slotName = "Belt" }, nil)
+            assert.are.same({ "Heavy Belt", "Leather Belt" }, bases)
+        end)
+
+        it("limits unique searches to bases that have unique items", function()
+            local originalUniques = data.uniques
+            local ok, bases = pcall(function()
+                data.uniques = {
+                    belt = {
+                        "Headhunter\nLeather Belt",
+                        "Meginord's Girdle\nHeavy Belt",
+                    },
+                }
+
+                local queryGen = new("TradeQueryGenerator", {
+                    itemsTab = {
+                        build = {
+                            data = {
+                                itemBases = {
+                                    ["Leather Belt"] = { type = "Belt" },
+                                    ["Heavy Belt"] = { type = "Belt" },
+                                    ["Chain Belt"] = { type = "Belt" },
+                                }
+                            }
+                        }
+                    }
+                })
+
+                return queryGen:GetSelectableBaseNames({ slotName = "Belt" }, { type = "Belt", baseName = "Leather Belt", rarity = "UNIQUE" })
+            end)
+
+            data.uniques = originalUniques
+            assert.is_true(ok)
+            assert.are.same({ "Heavy Belt", "Leather Belt" }, bases)
+        end)
+
+        it("offers auto base profiles for empty armour slots", function()
+            local queryGen = new("TradeQueryGenerator", {
+                itemsTab = {
+                    build = {
+                        data = {
+                            itemBases = {
+                                ["Armour Helm"] = { type = "Helmet", armour = { ArmourBaseMin = 1 } },
+                                ["Evasion Helm"] = { type = "Helmet", armour = { EvasionBaseMin = 1 } },
+                            }
+                        }
+                    }
+                }
+            })
+
+            local options = queryGen:GetAutoBaseOptionEntries({ slotName = "Helmet" }, nil)
+            assert.is_not_nil(options)
+            assert.are.equal("any", options[1].key)
+        end)
+
+        it("limits flask bases to the matching flask subtype", function()
+            local queryGen = new("TradeQueryGenerator", {
+                itemsTab = {
+                    build = {
+                        data = {
+                            itemBases = {
+                                ["Small Life Flask"] = { type = "Flask", subType = "Life" },
+                                ["Medium Life Flask"] = { type = "Flask", subType = "Life" },
+                                ["Quicksilver Flask"] = { type = "Flask", subType = "Utility" },
+                            }
+                        }
+                    }
+                }
+            })
+
+            local bases = queryGen:GetSelectableBaseNames({ slotName = "Flask 1" }, { type = "Flask", baseName = "Small Life Flask" })
+            assert.are.same({ "Medium Life Flask", "Small Life Flask" }, bases)
+        end)
+
+        it("limits jewel bases to the matching jewel subtype", function()
+            local queryGen = new("TradeQueryGenerator", {
+                itemsTab = {
+                    build = {
+                        data = {
+                            itemBases = {
+                                ["Crimson Jewel"] = { type = "Jewel" },
+                                ["Viridian Jewel"] = { type = "Jewel" },
+                                ["Hypnotic Eye Jewel"] = { type = "Jewel", subType = "Abyss" },
+                                ["Large Cluster Jewel"] = { type = "Jewel", subType = "Cluster" },
+                            }
+                        }
+                    }
+                }
+            })
+
+            local regularBases = queryGen:GetSelectableBaseNames({ slotName = "Jewel 1" }, { type = "Jewel", baseName = "Crimson Jewel" })
+            assert.are.same({ "Crimson Jewel", "Viridian Jewel" }, regularBases)
+
+            local abyssBases = queryGen:GetSelectableBaseNames({ slotName = "Abyssal Jewel 1" }, { type = "Jewel", baseName = "Hypnotic Eye Jewel" })
+            assert.are.same({ "Hypnotic Eye Jewel" }, abyssBases)
+        end)
+
         it("filters compatible bases by defence profile", function()
             local queryGen = new("TradeQueryGenerator", {
                 itemsTab = {
@@ -97,6 +247,24 @@ describe("TradeQueryGenerator", function()
 
             local bases = queryGen:GetSelectableBaseNames({ slotName = "Helmet" }, { type = "Helmet", baseName = "Armour Helm" }, "armour/energy_shield")
             assert.are.same({ "Armour ES Helm" }, bases)
+        end)
+
+        it("does not add auto options when the slot has no defence profiles", function()
+            local queryGen = new("TradeQueryGenerator", {
+                itemsTab = {
+                    build = {
+                        data = {
+                            itemBases = {
+                                ["Iron Ring"] = { type = "Ring" },
+                                ["Coral Ring"] = { type = "Ring" },
+                            }
+                        }
+                    }
+                }
+            })
+
+            local options = queryGen:GetAutoBaseOptionEntries({ slotName = "Ring 1" }, { type = "Ring", baseName = "Iron Ring" })
+            assert.is_nil(options)
         end)
 
         it("formats base defence ranges for display", function()
