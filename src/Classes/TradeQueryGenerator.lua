@@ -519,31 +519,8 @@ function TradeQueryGeneratorClass:GetBaseImplicitText(baseName)
 	return baseData and baseData.implicit or nil
 end
 
-function TradeQueryGeneratorClass:GetBaseImplicitCompactText(baseName)
-	local implicitText = self:GetBaseImplicitText(baseName)
-	if not implicitText then
-		return nil
-	end
-
-	return implicitText
-		:gsub("%b()", "...")
-		:gsub("maximum Life", "Life")
-		:gsub("maximum Mana", "Mana")
-		:gsub("maximum Energy Shield", "ES")
-		:gsub("Strength", "Str")
-		:gsub("Dexterity", "Dex")
-		:gsub("Intelligence", "Int")
-		:gsub("Fire Resistance", "Fire Res")
-		:gsub("Cold Resistance", "Cold Res")
-		:gsub("Lightning Resistance", "Lightning Res")
-		:gsub("Chaos Resistance", "Chaos Res")
-		:gsub("increased Rarity of Items found", "Item Rarity")
-		:gsub("Global Critical Strike Multiplier", "Global Crit Multi")
-		:gsub("Physical Damage to Attacks", "Phys to Attacks")
-end
-
 function TradeQueryGeneratorClass:GetBaseSelectionDetailText(baseName)
-	return self:GetBaseDefenceListDetailText(baseName) or self:GetBaseImplicitCompactText(baseName)
+	return self:GetBaseDefenceListDetailText(baseName)
 end
 
 function TradeQueryGeneratorClass:GetBaseSelectionModeEntries(slot, existingItem)
@@ -2159,12 +2136,12 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 	end
 
 	if isJewelSlot then
-		controls.jewelType = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 100, 18}, { "Any", "Base", "Abyss" }, function(index, value) end)
+		controls.jewelType = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT",true}, {0, 5, 100, 18}, { "Any", "Base", "Abyss" }, function(index, value) end)
 		controls.jewelType.selIndex = self.lastJewelType or 1
 		controls.jewelTypeLabel = new("LabelControl", {"RIGHT",controls.jewelType,"LEFT"}, {-5, 0, 0, 16}, "Jewel Type:")
 		updateLastAnchor(controls.jewelType)
 	elseif slot and not isAbyssalJewelSlot then
-		controls.influence1 = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 100, 18}, influenceDropdownNames, function(index, value)
+		controls.influence1 = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT",true}, {0, 5, 100, 18}, influenceDropdownNames, function(index, value)
 			if controls.selectedBase and popupBaseSelectionMode == BASE_SELECTION_MODE_RECOMMENDED then
 				updateBaseSelectionDropdown()
 			end
@@ -2181,7 +2158,7 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		controls.influence2Label = new("LabelControl", {"RIGHT",controls.influence2,"LEFT"}, {-5, 0, 0, 16}, "Influence 2:")
 		updateLastAnchor(controls.influence2, 46)
 	elseif isAbyssalJewelSlot then
-		controls.jewelType = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 100, 18}, { "Abyss" }, nil)
+		controls.jewelType = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT",true}, {0, 5, 100, 18}, { "Abyss" }, nil)
 		controls.jewelType.selIndex = 1
 		controls.jewelTypeLabel = new("LabelControl", {"RIGHT",controls.jewelType,"LEFT"}, {-5, 0, 0, 16}, "Jewel Type:")
 		updateLastAnchor(controls.jewelType)
@@ -2216,7 +2193,7 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 	for _, currency in ipairs(currencyTable) do
 		t_insert(currencyDropdownNames, currency.name)
 	end
-	controls.maxPrice = new("EditControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 70, 18}, nil, nil, "%D")
+	controls.maxPrice = new("EditControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT",true}, {0, 5, 70, 18}, nil, nil, "%D")
 	controls.maxPrice.buf = self.lastMaxPrice and tostring(self.lastMaxPrice) or ""
 	controls.maxPriceType = new("DropDownControl", {"LEFT",controls.maxPrice,"RIGHT"}, {5, 0, 150, 18}, currencyDropdownNames, nil)
 	controls.maxPriceType.selIndex = self.lastMaxPriceTypeIndex or 1

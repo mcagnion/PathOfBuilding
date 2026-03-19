@@ -487,7 +487,7 @@ describe("TradeQueryGenerator", function()
             assert.are.equal("^xC79A2B120 ^x6FD3FF40", queryGen:GetBaseDefenceListDetailText("Hybrid Helm"))
         end)
 
-        it("uses a compact implicit as the selection detail for accessory bases", function()
+        it("does not use implicits as the selection detail for accessory bases", function()
             local queryGen = new("TradeQueryGenerator", {
                 itemsTab = {
                     build = {
@@ -503,7 +503,7 @@ describe("TradeQueryGenerator", function()
                 }
             })
 
-            assert.are.equal("+... to Life", queryGen:GetBaseSelectionDetailText("Leather Belt"))
+            assert.is_nil(queryGen:GetBaseSelectionDetailText("Leather Belt"))
         end)
 
         it("selects top auto-search bases and keeps the equipped base", function()
