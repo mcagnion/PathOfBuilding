@@ -101,19 +101,30 @@ local eldritchModSlots = {
 
 local MAX_FILTERS = 35
 local MAX_AUTO_BASE_SEARCHES = 4
-local AUTO_BASE_OPTION_LABEL = "Auto (Top Bases)"
+local DEFAULT_AUTO_BASE_SEARCHES = 2
+local AUTO_BASE_OPTION_LABEL = "Multiple (Top Bases)"
 local AUTO_BASE_OPTION_ANY_KEY = "any"
+local BASE_SELECTION_MODE_ANY = "any"
+local BASE_SELECTION_MODE_RECOMMENDED = "recommended"
+local BASE_SELECTION_MODE_AUTO = "auto"
+local BASE_SELECTION_MODE_EXACT = "exact"
 local autoBaseDefenceProfiles = {
-	{ key = AUTO_BASE_OPTION_ANY_KEY, label = "Auto: Any Defence" },
-	{ key = "armour", label = "Auto: STR (Armour)" },
-	{ key = "evasion", label = "Auto: DEX (Evasion)" },
-	{ key = "energy_shield", label = "Auto: INT (Energy Shield)" },
-	{ key = "armour/evasion", label = "Auto: STR/DEX (Armour/Evasion)" },
-	{ key = "armour/energy_shield", label = "Auto: STR/INT (Armour/ES)" },
-	{ key = "evasion/energy_shield", label = "Auto: DEX/INT (Evasion/ES)" },
+	{ key = AUTO_BASE_OPTION_ANY_KEY, label = "Multiple: Any Defence" },
+	{ key = "armour", label = "Multiple: STR (Armour)" },
+	{ key = "evasion", label = "Multiple: DEX (Evasion)" },
+	{ key = "energy_shield", label = "Multiple: INT (Energy Shield)" },
+	{ key = "armour/evasion", label = "Multiple: STR/DEX (Armour/Evasion)" },
+	{ key = "armour/energy_shield", label = "Multiple: STR/INT (Armour/ES)" },
+	{ key = "evasion/energy_shield", label = "Multiple: DEX/INT (Evasion/ES)" },
 }
 local cachedUniqueBaseNames = nil
 local cachedUniqueBaseNamesSource = nil
+
+local autoBaseCountEntries = {
+	{ key = 2, label = "Top 2" },
+	{ key = 3, label = "Top 3" },
+	{ key = 4, label = "Top 4" },
+}
 local BASE_DEFENCE_PERCENTILE_TRADE_MOD_ID = "pseudo.pseudo_base_defence_percentile"
 local baseDefencePercentileStats = {
 	{ percentileKey = "ArmourBasePercentile", minKey = "ArmourBaseMin", maxKey = "ArmourBaseMax" },
@@ -242,6 +253,92 @@ local function getSlotBaseType(slot, existingItem)
 		return "Shield", baseSubType
 	end
 	return baseType, baseSubType
+end
+
+local function getRankedCompatibleBaseNames(self, slot, existingItem, options)
+	local defenceProfile = options and options.autoBaseDefenceProfile
+	local selectableBaseNames = self:GetSelectableBaseNames(slot, existingItem, defenceProfile ~= AUTO_BASE_OPTION_ANY_KEY and defenceProfile or nil)
+	if not selectableBaseNames or #selectableBaseNames <= 0 then
+		return nil
+	end
+
+	local function getBaseDefenceFallbackScore(baseName)
+		local baseData = self.itemsTab and self.itemsTab.build and self.itemsTab.build.data and self.itemsTab.build.data.itemBases and self.itemsTab.build.data.itemBases[baseName]
+		local armour = baseData and baseData.armour
+		if not armour then
+			return 0
+		end
+
+		local armourValue = armour.ArmourBaseMax or armour.ArmourBaseMin or 0
+		local evasionValue = armour.EvasionBaseMax or armour.EvasionBaseMin or 0
+		local energyShieldValue = armour.EnergyShieldBaseMax or armour.EnergyShieldBaseMin or 0
+		local wardValue = armour.WardBaseMax or armour.WardBaseMin or 0
+		local totalDefence = armourValue + evasionValue + energyShieldValue + wardValue
+		local statWeights = options and options.statWeights or { }
+		local weightedDefence = 0
+		local usedDefenceWeight = false
+
+		for _, statTable in ipairs(statWeights) do
+			local weight = statTable.weightMult or 0
+			if statTable.stat == "Armour" then
+				weightedDefence = weightedDefence + armourValue * weight
+				usedDefenceWeight = true
+			elseif statTable.stat == "Evasion" then
+				weightedDefence = weightedDefence + evasionValue * weight
+				usedDefenceWeight = true
+			elseif statTable.stat == "EnergyShield" then
+				weightedDefence = weightedDefence + energyShieldValue * weight
+				usedDefenceWeight = true
+			elseif statTable.stat == "Ward" then
+				weightedDefence = weightedDefence + wardValue * weight
+				usedDefenceWeight = true
+			elseif statTable.stat == "TotalEHP" then
+				weightedDefence = weightedDefence + totalDefence * weight
+				usedDefenceWeight = true
+			end
+		end
+
+		return usedDefenceWeight and weightedDefence or totalDefence
+	end
+
+	local calcsTab = self.itemsTab and self.itemsTab.build and self.itemsTab.build.calcsTab
+	local getMiscCalculator = calcsTab and calcsTab.GetMiscCalculator
+	if not getMiscCalculator then
+		return selectableBaseNames
+	end
+
+	local calcFunc, baseOutput = getMiscCalculator(calcsTab)
+	if not calcFunc or not baseOutput then
+		return selectableBaseNames
+	end
+
+	local rankedBases = { }
+	for _, baseName in ipairs(selectableBaseNames) do
+		local testItem = new("Item", "Rarity: RARE\nStat Tester\n" .. baseName)
+		applyRequestedInfluences(testItem, options)
+		local output = slot and calcFunc({ repSlotName = slot.slotName, repItem = testItem }) or baseOutput
+		t_insert(rankedBases, {
+			baseName = baseName,
+			score = self:WeightedRatioOutputs(baseOutput, output, options and options.statWeights or { }) * 1000,
+			fallbackScore = getBaseDefenceFallbackScore(baseName),
+			isCurrent = existingItem and existingItem.baseName == baseName or false,
+		})
+	end
+
+	table.sort(rankedBases, function(a, b)
+		if a.score == b.score then
+			if a.fallbackScore ~= b.fallbackScore then
+				return a.fallbackScore > b.fallbackScore
+			end
+			if a.isCurrent ~= b.isCurrent then
+				return a.isCurrent
+			end
+			return a.baseName < b.baseName
+		end
+		return a.score > b.score
+	end)
+
+	return rankedBases
 end
 
 local function buildBaseDefencePercentileItem(baseName, options, fields, percentile)
@@ -417,12 +514,147 @@ function TradeQueryGeneratorClass:GetBaseDefenceListDetailText(baseName)
 	return #detailParts > 0 and t_concat(detailParts, " ") or nil
 end
 
+function TradeQueryGeneratorClass:GetBaseImplicitText(baseName)
+	local baseData = self.itemsTab.build.data.itemBases[baseName]
+	return baseData and baseData.implicit or nil
+end
+
+function TradeQueryGeneratorClass:GetBaseImplicitCompactText(baseName)
+	local implicitText = self:GetBaseImplicitText(baseName)
+	if not implicitText then
+		return nil
+	end
+
+	return implicitText
+		:gsub("%b()", "...")
+		:gsub("maximum Life", "Life")
+		:gsub("maximum Mana", "Mana")
+		:gsub("maximum Energy Shield", "ES")
+		:gsub("Strength", "Str")
+		:gsub("Dexterity", "Dex")
+		:gsub("Intelligence", "Int")
+		:gsub("Fire Resistance", "Fire Res")
+		:gsub("Cold Resistance", "Cold Res")
+		:gsub("Lightning Resistance", "Lightning Res")
+		:gsub("Chaos Resistance", "Chaos Res")
+		:gsub("increased Rarity of Items found", "Item Rarity")
+		:gsub("Global Critical Strike Multiplier", "Global Crit Multi")
+		:gsub("Physical Damage to Attacks", "Phys to Attacks")
+end
+
+function TradeQueryGeneratorClass:GetBaseSelectionDetailText(baseName)
+	return self:GetBaseDefenceListDetailText(baseName) or self:GetBaseImplicitCompactText(baseName)
+end
+
+function TradeQueryGeneratorClass:GetBaseSelectionModeEntries(slot, existingItem)
+	local entries = {
+		{ key = BASE_SELECTION_MODE_ANY, label = "Any Base" },
+	}
+	if self:GetSelectableBaseNames(slot, existingItem) then
+		t_insert(entries, { key = BASE_SELECTION_MODE_RECOMMENDED, label = "Recommended" })
+	end
+	if self:GetAutoBaseOptionEntries(slot, existingItem) then
+		t_insert(entries, { key = BASE_SELECTION_MODE_AUTO, label = "Multiple" })
+	end
+	if self:GetSelectableBaseNames(slot, existingItem) then
+		t_insert(entries, { key = BASE_SELECTION_MODE_EXACT, label = "Exact Base" })
+	end
+	return entries
+end
+
+function TradeQueryGeneratorClass:GetDefaultBaseSelectionMode(slot, existingItem)
+	local modeEntries = self:GetBaseSelectionModeEntries(slot, existingItem)
+	local availableModes = { }
+	for _, entry in ipairs(modeEntries) do
+		availableModes[entry.key] = true
+	end
+
+	if self.lastBaseSelectionMode and availableModes[self.lastBaseSelectionMode] then
+		return self.lastBaseSelectionMode
+	end
+	if self.lastSelectedBaseName and availableModes[BASE_SELECTION_MODE_EXACT] then
+		return BASE_SELECTION_MODE_EXACT
+	end
+	if availableModes[BASE_SELECTION_MODE_RECOMMENDED] then
+		return BASE_SELECTION_MODE_RECOMMENDED
+	end
+	if self.lastAutoBaseDefenceProfile and availableModes[BASE_SELECTION_MODE_AUTO] then
+		return BASE_SELECTION_MODE_AUTO
+	end
+	if availableModes[BASE_SELECTION_MODE_AUTO] then
+		return BASE_SELECTION_MODE_AUTO
+	end
+	return BASE_SELECTION_MODE_ANY
+end
+
+function TradeQueryGeneratorClass:GetBaseSelectionEntries(slot, existingItem, baseSelectionMode, statWeights, influence1, influence2)
+	if baseSelectionMode == BASE_SELECTION_MODE_ANY then
+		return {
+			{ label = "Any compatible base", anyBase = true },
+		}
+	end
+	if baseSelectionMode == BASE_SELECTION_MODE_RECOMMENDED then
+		local recommendedEntries = { }
+		for _, rankedBase in ipairs(getRankedCompatibleBaseNames(self, slot, existingItem, {
+			statWeights = statWeights,
+			influence1 = influence1,
+			influence2 = influence2,
+		}) or { }) do
+			t_insert(recommendedEntries, {
+				label = rankedBase.baseName,
+				baseName = rankedBase.baseName,
+				detail = self:GetBaseSelectionDetailText(rankedBase.baseName),
+			})
+		end
+		return #recommendedEntries > 0 and recommendedEntries or nil
+	end
+	if baseSelectionMode == BASE_SELECTION_MODE_AUTO then
+		local autoEntries = { }
+		for _, autoOption in ipairs(self:GetAutoBaseOptionEntries(slot, existingItem) or { }) do
+			t_insert(autoEntries, {
+				label = autoOption.label,
+				autoBaseDefenceProfile = autoOption.key,
+			})
+		end
+		return #autoEntries > 0 and autoEntries or nil
+	end
+	if baseSelectionMode == BASE_SELECTION_MODE_EXACT then
+		local exactEntries = { }
+		for _, baseName in ipairs(self:GetSelectableBaseNames(slot, existingItem) or { }) do
+			t_insert(exactEntries, {
+				label = baseName,
+				baseName = baseName,
+				detail = self:GetBaseSelectionDetailText(baseName),
+			})
+		end
+		return #exactEntries > 0 and exactEntries or nil
+	end
+	return nil
+end
+
+function TradeQueryGeneratorClass:GetRecommendedBaseNames(slot, existingItem, statWeights, influence1, influence2)
+	local rankedBases = getRankedCompatibleBaseNames(self, slot, existingItem, {
+		statWeights = statWeights,
+		influence1 = influence1,
+		influence2 = influence2,
+	})
+	if not rankedBases then
+		return nil
+	end
+
+	local baseNames = { }
+	for i, rankedBase in ipairs(rankedBases) do
+		baseNames[i] = rankedBase.baseName
+	end
+	return baseNames
+end
+
 function TradeQueryGeneratorClass:GetBaseDefenceProfileLabel(baseName)
 	local baseData = self.itemsTab.build.data.itemBases[baseName]
 	local defenceProfile = getBaseDefenceProfile(baseData)
 	for _, profile in ipairs(autoBaseDefenceProfiles) do
 		if profile.key == defenceProfile then
-			return profile.label:gsub("^Auto: ", "")
+			return profile.label:gsub("^Multiple: ", "")
 		end
 	end
 	return nil
@@ -650,8 +882,9 @@ function TradeQueryGeneratorClass:GetAutoBaseSearchNames(slot, existingItem, opt
 	return selectedBaseNames
 end
 
-function TradeQueryGeneratorClass:GetAutoBaseTooltipText(slot, existingItem, statWeights, influence1, influence2, autoBaseDefenceProfile)
+function TradeQueryGeneratorClass:GetAutoBaseTooltipText(slot, existingItem, statWeights, influence1, influence2, autoBaseDefenceProfile, autoBaseSearchCount)
 	local selectedProfile = autoBaseDefenceProfile or self.lastAutoBaseDefenceProfile or AUTO_BASE_OPTION_ANY_KEY
+	local selectedCount = math.max(2, math.min(autoBaseSearchCount or self.lastAutoBaseSearchCount or DEFAULT_AUTO_BASE_SEARCHES, MAX_AUTO_BASE_SEARCHES))
 	local autoBaseLabel = AUTO_BASE_OPTION_LABEL
 	if selectedProfile ~= AUTO_BASE_OPTION_ANY_KEY then
 		for _, profile in ipairs(autoBaseDefenceProfiles) do
@@ -664,18 +897,18 @@ function TradeQueryGeneratorClass:GetAutoBaseTooltipText(slot, existingItem, sta
 
 	local tooltipLines = {
 		autoBaseLabel .. ": compatible bases for this slot are ranked with PoB using the selected stat weights.",
-		"The preview uses a blank rare on each base with the current influence filters, then keeps the top " .. tostring(MAX_AUTO_BASE_SEARCHES) .. " bases.",
+		"The preview uses a blank rare on each base with the current influence filters, then keeps the top " .. tostring(selectedCount) .. " bases.",
 	}
 	local autoBaseNames = self:GetAutoBaseSearchNames(slot, existingItem, {
 		statWeights = statWeights,
 		influence1 = influence1 or 1,
 		influence2 = influence2 or 1,
 		autoBaseDefenceProfile = selectedProfile,
-	})
+	}, selectedCount)
 	if autoBaseNames and #autoBaseNames > 0 then
-		t_insert(tooltipLines, "If the equipped base falls outside the top " .. tostring(MAX_AUTO_BASE_SEARCHES) .. ", it is still kept as a fallback for comparison.")
+		t_insert(tooltipLines, "If the equipped base falls outside the top " .. tostring(selectedCount) .. ", it is still kept as a fallback for comparison.")
 		t_insert(tooltipLines, "")
-		t_insert(tooltipLines, "Current auto-selected bases:")
+		t_insert(tooltipLines, "Current selected bases:")
 		for _, baseName in ipairs(autoBaseNames) do
 			local detailParts = { }
 			local requirementParts = self:GetBaseRequirementCompactParts(baseName)
@@ -696,6 +929,10 @@ function TradeQueryGeneratorClass:GetExactBaseTooltipText(baseName)
 	local tooltipLines = {
 		"^xFFFFFF" .. baseName,
 	}
+	local implicitText = self:GetBaseImplicitText(baseName)
+	if implicitText then
+		t_insert(tooltipLines, "^x7F7F7FImplicit: ^xFFFFFF" .. implicitText)
+	end
 	local profileText = self:GetBaseDefenceProfileText(baseName)
 	if profileText then
 		t_insert(tooltipLines, "^x7F7F7FDefence Profile: ^xFFFFFF" .. profileText)
@@ -1743,8 +1980,8 @@ function TradeQueryGeneratorClass:FinishQuery()
 
 	local queryTable = buildQueryTable()
 	local queryPlan = nil
-	if not options.selectedBaseName then
-		local autoBaseNames = self:GetAutoBaseSearchNames(self.calcContext.slot, originalItem, options, MAX_AUTO_BASE_SEARCHES)
+	if options.autoBaseDefenceProfile and not options.selectedBaseName then
+		local autoBaseNames = self:GetAutoBaseSearchNames(self.calcContext.slot, originalItem, options, options.autoBaseSearchCount or self.lastAutoBaseSearchCount or DEFAULT_AUTO_BASE_SEARCHES)
 		if autoBaseNames and #autoBaseNames > 1 then
 			queryPlan = { }
 			for _, baseName in ipairs(autoBaseNames) do
@@ -1789,10 +2026,8 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 	local isAmuletSlot = slot and slot.slotName == "Amulet"
 	local isEldritchModSlot = slot and eldritchModSlots[slot.slotName] == true
 	local selectableBaseNames = slot and self:GetSelectableBaseNames(slot, existingItem)
-	local autoBaseOptions = slot and self:GetAutoBaseOptionEntries(slot, existingItem)
-	local selectedBaseIndex = 1
 
-	controls.includeCorrupted = new("CheckBoxControl", {"TOP",nil,"TOP"}, {-40, 30, 18}, "Corrupted Mods:", function(state) end)
+	controls.includeCorrupted = new("CheckBoxControl", {"TOP",nil,"TOP"}, {-88, 30, 18}, "Corrupted Mods:", function(state) end)
 	controls.includeCorrupted.state = not context.slotTbl.alreadyCorrupted and (self.lastIncludeCorrupted == nil or self.lastIncludeCorrupted == true)
 	controls.includeCorrupted.enabled = not context.slotTbl.alreadyCorrupted
 
@@ -1835,32 +2070,92 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 	end
 
 	if selectableBaseNames then
-		local baseOptions = { }
-		if autoBaseOptions then
-			for _, autoOption in ipairs(autoBaseOptions) do
-				t_insert(baseOptions, {
-					label = autoOption.label,
-					autoBaseDefenceProfile = autoOption.key,
-				})
-				if not self.lastSelectedBaseName and (self.lastAutoBaseDefenceProfile or AUTO_BASE_OPTION_ANY_KEY) == autoOption.key then
-					selectedBaseIndex = #baseOptions
+		local modeEntries = self:GetBaseSelectionModeEntries(slot, existingItem)
+		local popupBaseSelectionMode = self:GetDefaultBaseSelectionMode(slot, existingItem)
+		local popupSelectedBaseName = self.lastSelectedBaseName
+		local popupAutoBaseDefenceProfile = self.lastAutoBaseDefenceProfile or AUTO_BASE_OPTION_ANY_KEY
+		local popupAutoBaseSearchCount = math.max(2, math.min(self.lastAutoBaseSearchCount or DEFAULT_AUTO_BASE_SEARCHES, MAX_AUTO_BASE_SEARCHES))
+
+		local function getSelectedIndexForBaseEntries(baseEntries, baseSelectionMode)
+			if not baseEntries then
+				return 1
+			end
+			if baseSelectionMode == BASE_SELECTION_MODE_AUTO then
+				for index, entry in ipairs(baseEntries) do
+					if entry.autoBaseDefenceProfile == popupAutoBaseDefenceProfile then
+						return index
+					end
 				end
+				return 1
+			end
+			if baseSelectionMode == BASE_SELECTION_MODE_EXACT then
+				for index, entry in ipairs(baseEntries) do
+					if entry.baseName == popupSelectedBaseName then
+						return index
+					end
+				end
+				for index, entry in ipairs(baseEntries) do
+					if existingItem and entry.baseName == existingItem.baseName then
+						return index
+					end
+				end
+				return 1
+			end
+			return 1
+		end
+
+		local function updateBaseSelectionDropdown()
+			local influence1 = controls.influence1 and controls.influence1.selIndex or self.lastInfluence1 or 1
+			local influence2 = controls.influence2 and controls.influence2.selIndex or self.lastInfluence2 or 1
+			local baseEntries = self:GetBaseSelectionEntries(slot, existingItem, popupBaseSelectionMode, statWeights, influence1, influence2) or { }
+			controls.selectedBase:SetList(baseEntries)
+			controls.selectedBase.selIndex = getSelectedIndexForBaseEntries(baseEntries, popupBaseSelectionMode)
+		end
+
+		controls.selectedBaseMode = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 110, 18}, modeEntries, function(index, value)
+			popupBaseSelectionMode = value.key
+			updateBaseSelectionDropdown()
+		end)
+		controls.selectedBaseModeLabel = new("LabelControl", {"RIGHT",controls.selectedBaseMode,"LEFT"}, {-5, 0, 0, 16}, "Base:")
+		for index, entry in ipairs(modeEntries) do
+			if entry.key == popupBaseSelectionMode then
+				controls.selectedBaseMode.selIndex = index
+				break
 			end
 		end
-		for _, baseName in ipairs(selectableBaseNames) do
-			t_insert(baseOptions, {
-				label = baseName,
-				baseName = baseName,
-				detail = self:GetBaseDefenceListDetailText(baseName),
-			})
-			if self.lastSelectedBaseName == baseName or (not self.lastSelectedBaseName and not autoBaseOptions and existingItem and existingItem.baseName == baseName) then
-				selectedBaseIndex = #baseOptions
+
+		controls.selectedBase = new("DropDownControl", {"LEFT",controls.selectedBaseMode,"RIGHT"}, {8, 0, 205, 18}, { }, function(index, value)
+			if popupBaseSelectionMode == BASE_SELECTION_MODE_AUTO then
+				popupAutoBaseDefenceProfile = value.autoBaseDefenceProfile or AUTO_BASE_OPTION_ANY_KEY
+			elseif popupBaseSelectionMode == BASE_SELECTION_MODE_EXACT then
+				popupSelectedBaseName = value.baseName or value
+			end
+		end)
+		controls.selectedBase.enableDroppedWidth = true
+		controls.selectedBase.maxDroppedWidth = 520
+		controls.selectedBase.shown = function()
+			return popupBaseSelectionMode ~= BASE_SELECTION_MODE_ANY
+		end
+		updateBaseSelectionDropdown()
+		updateLastAnchor(controls.selectedBaseMode)
+
+		controls.selectedBaseCount = new("DropDownControl", {"TOPLEFT",controls.selectedBaseMode,"BOTTOMLEFT"}, {0, 5, 80, 18}, autoBaseCountEntries, function(index, value)
+			popupAutoBaseSearchCount = value.key or DEFAULT_AUTO_BASE_SEARCHES
+		end)
+		controls.selectedBaseCountLabel = new("LabelControl", {"RIGHT",controls.selectedBaseCount,"LEFT"}, {-5, 0, 0, 16}, "Top:")
+		for index, entry in ipairs(autoBaseCountEntries) do
+			if entry.key == popupAutoBaseSearchCount then
+				controls.selectedBaseCount.selIndex = index
+				break
 			end
 		end
-		controls.selectedBase = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 160, 18}, baseOptions, function(index, value) end)
-		controls.selectedBase.selIndex = selectedBaseIndex
-		controls.selectedBaseLabel = new("LabelControl", {"RIGHT",controls.selectedBase,"LEFT"}, {-5, 0, 0, 16}, "Base:")
-		updateLastAnchor(controls.selectedBase)
+		controls.selectedBaseCount.shown = function()
+			return popupBaseSelectionMode == BASE_SELECTION_MODE_AUTO
+		end
+		controls.selectedBaseCountLabel.shown = function()
+			return popupBaseSelectionMode == BASE_SELECTION_MODE_AUTO
+		end
+		updateLastAnchor(controls.selectedBaseCount)
 	end
 
 	if isJewelSlot then
@@ -1869,11 +2164,19 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		controls.jewelTypeLabel = new("LabelControl", {"RIGHT",controls.jewelType,"LEFT"}, {-5, 0, 0, 16}, "Jewel Type:")
 		updateLastAnchor(controls.jewelType)
 	elseif slot and not isAbyssalJewelSlot then
-		controls.influence1 = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 100, 18}, influenceDropdownNames, function(index, value) end)
+		controls.influence1 = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 100, 18}, influenceDropdownNames, function(index, value)
+			if controls.selectedBase and popupBaseSelectionMode == BASE_SELECTION_MODE_RECOMMENDED then
+				updateBaseSelectionDropdown()
+			end
+		end)
 		controls.influence1.selIndex = self.lastInfluence1 or 1
 		controls.influence1Label = new("LabelControl", {"RIGHT",controls.influence1,"LEFT"}, {-5, 0, 0, 16}, "Influence 1:")
 
-		controls.influence2 = new("DropDownControl", {"TOPLEFT",controls.influence1,"BOTTOMLEFT"}, {0, 5, 100, 18}, influenceDropdownNames, function(index, value) end)
+		controls.influence2 = new("DropDownControl", {"TOPLEFT",controls.influence1,"BOTTOMLEFT"}, {0, 5, 100, 18}, influenceDropdownNames, function(index, value)
+			if controls.selectedBase and popupBaseSelectionMode == BASE_SELECTION_MODE_RECOMMENDED then
+				updateBaseSelectionDropdown()
+			end
+		end)
 		controls.influence2.selIndex = self.lastInfluence2 or 1
 		controls.influence2Label = new("LabelControl", {"RIGHT",controls.influence2,"LEFT"}, {-5, 0, 0, 16}, "Influence 2:")
 		updateLastAnchor(controls.influence2, 46)
@@ -1891,9 +2194,12 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 			local influence2 = controls.influence2 and controls.influence2.selIndex or self.lastInfluence2 or 1
 			local selectedBaseValue = controls.selectedBase.list[controls.selectedBase:GetHoverIndex()]
 			local autoBaseDefenceProfile = type(selectedBaseValue) == "table" and selectedBaseValue.autoBaseDefenceProfile or nil
+			local anyBase = type(selectedBaseValue) == "table" and selectedBaseValue.anyBase or nil
 			local exactBaseName = type(selectedBaseValue) == "table" and selectedBaseValue.baseName or selectedBaseValue
 			local tooltipText = autoBaseDefenceProfile
-				and self:GetAutoBaseTooltipText(slot, existingItem, statWeights, influence1, influence2, autoBaseDefenceProfile)
+				and self:GetAutoBaseTooltipText(slot, existingItem, statWeights, influence1, influence2, autoBaseDefenceProfile, popupAutoBaseSearchCount)
+				or anyBase
+				and "Any Base: search all compatible bases for this slot without adding a base filter."
 				or self:GetExactBaseTooltipText(exactBaseName)
 			for line in tooltipText:gmatch("([^\n]*)\n?") do
 				if line ~= "" then
@@ -1981,21 +2287,33 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 			self.lastIncludeTalisman, options.includeTalisman = controls.includeTalisman.state, controls.includeTalisman.state
 		end
 		if controls.selectedBase then
+			local selectedBaseModeValue = controls.selectedBaseMode and controls.selectedBaseMode.list[controls.selectedBaseMode.selIndex] or nil
+			local selectedBaseMode = type(selectedBaseModeValue) == "table" and selectedBaseModeValue.key or BASE_SELECTION_MODE_ANY
 			local selectedBaseValue = controls.selectedBase.list[controls.selectedBase.selIndex]
 			local autoBaseDefenceProfile = type(selectedBaseValue) == "table" and selectedBaseValue.autoBaseDefenceProfile or nil
 			options.selectedBaseName = type(selectedBaseValue) == "table" and selectedBaseValue.baseName or selectedBaseValue
-			if autoBaseDefenceProfile then
+			self.lastBaseSelectionMode = selectedBaseMode
+			if selectedBaseMode == BASE_SELECTION_MODE_ANY then
+				options.selectedBaseName = nil
+				self.lastSelectedBaseName = nil
+				options.autoBaseDefenceProfile = nil
+				self.lastAutoBaseDefenceProfile = nil
+			elseif autoBaseDefenceProfile then
 				options.selectedBaseName = nil
 				self.lastSelectedBaseName = nil
 				options.autoBaseDefenceProfile = autoBaseDefenceProfile
 				self.lastAutoBaseDefenceProfile = autoBaseDefenceProfile
+				options.autoBaseSearchCount = popupAutoBaseSearchCount
+				self.lastAutoBaseSearchCount = popupAutoBaseSearchCount
 			else
 				self.lastSelectedBaseName = options.selectedBaseName
 				options.autoBaseDefenceProfile = nil
+				options.autoBaseSearchCount = nil
 			end
 		else
 			options.selectedBaseName = nil
 			options.autoBaseDefenceProfile = nil
+			options.autoBaseSearchCount = nil
 		end
 		if controls.influence1 then
 			self.lastInfluence1, options.influence1 = controls.influence1.selIndex, controls.influence1.selIndex
@@ -2035,5 +2353,5 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 	controls.cancel = new("ButtonControl", { "BOTTOM", nil, "BOTTOM" }, {45, -10, 80, 20}, "Cancel", function()
 		main:ClosePopup()
 	end)
-	main:OpenPopup(400, popupHeight, "Query Options", controls)
+	main:OpenPopup(475, popupHeight, "Query Options", controls)
 end
