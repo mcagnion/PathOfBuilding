@@ -21,6 +21,7 @@ local t_sort = table.sort
 local t_concat = table.concat
 local s_format = string.format
 local m_huge = math.huge
+local m_abs = math.abs
 
 local function formatSignedValue(value)
 	local sign = value >= 0 and "+" or ""
@@ -89,7 +90,112 @@ local RadiusJewelResultsListClass = newClass("RadiusJewelResultsListControl", "L
 		findThread = 4,
 	}
 	self.resultTooltip = new("Tooltip")
+	self.itemTooltip = new("Tooltip")
 end)
+
+local RadiusJewelDetailListClass = newClass("RadiusJewelDetailListControl", "TextListControl", function(self, anchor, rect, columns, list, build, socketViewer)
+	self.TextListControl(anchor, rect, columns, list)
+	self.build = build
+	self.socketViewer = socketViewer
+	self.nodeTooltip = new("Tooltip")
+end)
+
+function RadiusJewelDetailListClass:GetHoverLine()
+	if not self:IsShown() or not self:IsMouseInBounds() then
+		return nil
+	end
+	local cursorX, cursorY = GetCursorPos()
+	local x, y = self:GetPos()
+	local width, height = self:GetSize()
+	if cursorX < x + 2 or cursorX > x + width - 20 or cursorY < y + 2 or cursorY > y + height - 2 then
+		return nil
+	end
+	local lineY = y + 2 - self.controls.scrollBar.offset
+	for _, lineInfo in ipairs(self.list or { }) do
+		if cursorY >= lineY and cursorY < lineY + lineInfo.height then
+			return lineInfo
+		end
+		lineY = lineY + lineInfo.height
+	end
+	return nil
+end
+
+function RadiusJewelDetailListClass:Draw(viewPort)
+	self.TextListControl.Draw(self, viewPort)
+	local hoverLine = self:GetHoverLine()
+	if not hoverLine or not hoverLine.nodeId or main.popups[2] then
+		return
+	end
+	local node = self.build.spec.nodes[hoverLine.nodeId] or self.build.spec.tree.nodes[hoverLine.nodeId]
+	if not node then
+		return
+	end
+
+	local function clampRectPosition(x, y, width, height)
+		x = math.max(viewPort.x, math.min(x, viewPort.x + viewPort.width - width))
+		y = math.max(viewPort.y, math.min(y, viewPort.y + viewPort.height - height))
+		return x, y
+	end
+	local function rectsOverlap(aX, aY, aW, aH, bX, bY, bW, bH)
+		return aX < bX + bW and aX + aW > bX and aY < bY + bH and aY + aH > bY
+	end
+	local function placeTooltip(ttW, ttH, cursorX, cursorY, blockedRects)
+		local candidates = {
+			{ x = cursorX + 20, y = cursorY + 20 },
+			{ x = cursorX - ttW - 20, y = cursorY + 20 },
+			{ x = cursorX + 20, y = cursorY - ttH - 20 },
+			{ x = cursorX - ttW - 20, y = cursorY - ttH - 20 },
+		}
+		for _, candidate in ipairs(candidates) do
+			local ttX, ttY = clampRectPosition(candidate.x, candidate.y, ttW, ttH)
+			local overlaps = false
+			for _, blockedRect in ipairs(blockedRects or { }) do
+				if rectsOverlap(ttX, ttY, ttW, ttH, blockedRect.x, blockedRect.y, blockedRect.width, blockedRect.height) then
+					overlaps = true
+					break
+				end
+			end
+			if not overlaps then
+				return ttX, ttY
+			end
+		end
+		return clampRectPosition(cursorX + 20, cursorY + 20, ttW, ttH)
+	end
+
+	local cursorX, cursorY = GetCursorPos()
+	local viewerRect
+	SetDrawLayer(nil, 15)
+	local viewerX = cursorX + 20
+	local viewerY = cursorY - 150
+	if viewerX + 304 > viewPort.x + viewPort.width then viewerX = cursorX - 324 end
+	if viewerY < viewPort.y then viewerY = viewPort.y elseif viewerY + 304 > viewPort.y + viewPort.height then viewerY = viewPort.y + viewPort.height - 304 end
+	viewerRect = { x = viewerX, y = viewerY, width = 304, height = 304 }
+
+	SetDrawColor(1, 1, 1)
+	DrawImage(nil, viewerX, viewerY, 304, 304)
+	self.socketViewer.zoom = 5
+	local scale = self.build.spec.tree.size / 1500
+	self.socketViewer.zoomX = -node.x / scale
+	self.socketViewer.zoomY = -node.y / scale
+	SetViewport(viewerX + 2, viewerY + 2, 300, 300)
+	self.socketViewer:Draw(self.build, { x = 0, y = 0, width = 300, height = 300 }, { })
+	SetDrawLayer(nil, 30)
+	SetDrawColor(1, 1, 1, 0.2)
+	DrawImage(nil, 149, 0, 2, 300)
+	DrawImage(nil, 0, 149, 300, 2)
+	SetViewport()
+
+	SetDrawLayer(nil, 100)
+	self.nodeTooltip:Clear(true)
+	local prevShowStatDifferences = self.socketViewer.showStatDifferences
+	self.socketViewer.showStatDifferences = true
+	self.socketViewer:AddNodeTooltip(self.nodeTooltip, node, self.build)
+	self.socketViewer.showStatDifferences = prevShowStatDifferences
+	local ttW, ttH = self.nodeTooltip:GetSize()
+	local ttX, ttY = placeTooltip(ttW, ttH, cursorX, cursorY, { viewerRect })
+	self.nodeTooltip:Draw(ttX, ttY, nil, nil, viewPort)
+	SetDrawLayer(nil, 0)
+end
 
 function RadiusJewelResultsListClass:SetMode(mode, list, defaultText)
 	self.mode = mode or "message"
@@ -99,6 +205,15 @@ function RadiusJewelResultsListClass:SetMode(mode, list, defaultText)
 	local defaultSort = self.defaultSortByMode[self.mode]
 	if defaultSort and #self.list > 0 then
 		self:ReSort(defaultSort)
+	end
+	if self.mode ~= "message" and #self.list > 0 then
+		self:SelectIndex(1)
+	else
+		self.selIndex = nil
+		self.selValue = nil
+		if self.OnSelect then
+			self:OnSelect(nil, nil)
+		end
 	end
 end
 
@@ -199,22 +314,30 @@ function RadiusJewelResultsListClass:Draw(viewPort, noTooltip)
 	local function rectsOverlap(aX, aY, aW, aH, bX, bY, bW, bH)
 		return aX < bX + bW and aX + aW > bX and aY < bY + bH and aY + aH > bY
 	end
-	local function placeResultTooltip(ttW, ttH, cursorX, cursorY, viewerRect)
+	local function placeResultTooltip(ttW, ttH, cursorX, cursorY, blockedRects)
 		local candidates = {
 			{ x = cursorX + 20, y = cursorY + 20 },
 			{ x = cursorX - ttW - 20, y = cursorY + 20 },
 			{ x = cursorX + 20, y = cursorY - ttH - 20 },
 			{ x = cursorX - ttW - 20, y = cursorY - ttH - 20 },
 		}
-		if viewerRect then
-			t_insert(candidates, 1, { x = viewerRect.x - ttW - 12, y = cursorY + 20 })
-			t_insert(candidates, 2, { x = viewerRect.x + viewerRect.width + 12, y = cursorY + 20 })
-			t_insert(candidates, 3, { x = viewerRect.x, y = viewerRect.y - ttH - 12 })
-			t_insert(candidates, 4, { x = viewerRect.x, y = viewerRect.y + viewerRect.height + 12 })
+		local primaryBlockedRect = blockedRects and blockedRects[1] or nil
+		if primaryBlockedRect then
+			t_insert(candidates, 1, { x = primaryBlockedRect.x - ttW - 12, y = cursorY + 20 })
+			t_insert(candidates, 2, { x = primaryBlockedRect.x + primaryBlockedRect.width + 12, y = cursorY + 20 })
+			t_insert(candidates, 3, { x = primaryBlockedRect.x, y = primaryBlockedRect.y - ttH - 12 })
+			t_insert(candidates, 4, { x = primaryBlockedRect.x, y = primaryBlockedRect.y + primaryBlockedRect.height + 12 })
 		end
 		for _, candidate in ipairs(candidates) do
 			local ttX, ttY = clampRectPosition(candidate.x, candidate.y, ttW, ttH)
-			if not viewerRect or not rectsOverlap(ttX, ttY, ttW, ttH, viewerRect.x, viewerRect.y, viewerRect.width, viewerRect.height) then
+			local overlapsBlockedRect = false
+			for _, blockedRect in ipairs(blockedRects or { }) do
+				if rectsOverlap(ttX, ttY, ttW, ttH, blockedRect.x, blockedRect.y, blockedRect.width, blockedRect.height) then
+					overlapsBlockedRect = true
+					break
+				end
+			end
+			if not overlapsBlockedRect then
 				return ttX, ttY
 			end
 		end
@@ -222,9 +345,54 @@ function RadiusJewelResultsListClass:Draw(viewPort, noTooltip)
 	end
 
 	local cursorX, cursorY = GetCursorPos()
+	local x, y = self:GetPos()
+	local relX = cursorX - (x + 2)
+	local hoverColumn
+	if hoverData then
+		for columnIndex, column in ipairs(self.colList) do
+			local colOffset = column._offset or 0
+			local colWidth = column._width or 0
+			if relX >= colOffset and relX < colOffset + colWidth then
+				hoverColumn = columnIndex
+				break
+			end
+		end
+	end
+	local detailColumnByMode = {
+		computeSocket = 6,
+		find = 5,
+		findThread = 6,
+	}
+	local socketColumnByMode = {
+		computeVariant = nil,
+		computeSocket = 1,
+		find = 1,
+		findThread = 1,
+	}
+	local statColumnsByMode = {
+		computeVariant = { [2] = true, [3] = true },
+		computeSocket = { [3] = true, [4] = true, [5] = true },
+	}
+	local itemColumnsByMode = {
+		computeVariant = { [1] = true },
+		computeSocket = { [6] = true },
+		find = { [5] = true },
+		findThread = { [6] = true },
+	}
+	local detailColumn = hoverColumn and detailColumnByMode[self.mode] == hoverColumn
+	local socketColumn = hoverColumn and socketColumnByMode[self.mode] == hoverColumn
+	local showViewer = socketColumn or (detailColumn and hoverData and hoverData.detailNodeId)
+	local showStatTooltip = hoverData and hoverData.baseOutput and hoverData.compareOutput
+		and hoverColumn and statColumnsByMode[self.mode] and statColumnsByMode[self.mode][hoverColumn]
+	local showItemTooltip = hoverData and hoverData.itemTooltipLines
+		and hoverColumn and itemColumnsByMode[self.mode] and itemColumnsByMode[self.mode][hoverColumn]
+	local hoverNodeId = hoverData and hoverData.socketId or nil
+	if hoverData and hoverData.detailNodeId and hoverColumn and detailColumnByMode[self.mode] == hoverColumn then
+		hoverNodeId = hoverData.detailNodeId
+	end
 	local viewerRect
-	if hoverData.socketId then
-		local node = self.build.spec.nodes[hoverData.socketId]
+	if showViewer and hoverNodeId then
+		local node = self.build.spec.nodes[hoverNodeId] or self.build.spec.tree.nodes[hoverNodeId]
 		if node then
 			SetDrawLayer(nil, 15)
 			local viewerX = cursorX + 20
@@ -250,7 +418,11 @@ function RadiusJewelResultsListClass:Draw(viewPort, noTooltip)
 		end
 	end
 
-	if hoverData.baseOutput and hoverData.compareOutput then
+	local blockedRects = { }
+	if viewerRect then
+		t_insert(blockedRects, viewerRect)
+	end
+	if showStatTooltip then
 		SetDrawLayer(nil, 100)
 		self.resultTooltip:Clear()
 		local count = self.build:AddStatComparesToTooltip(self.resultTooltip, hoverData.baseOutput, hoverData.compareOutput,
@@ -259,8 +431,20 @@ function RadiusJewelResultsListClass:Draw(viewPort, noTooltip)
 			self.resultTooltip:AddLine(14, "^7No stat changes for this proposal.")
 		end
 		local ttW, ttH = self.resultTooltip:GetSize()
-		local ttX, ttY = placeResultTooltip(ttW, ttH, cursorX, cursorY, viewerRect)
+		local ttX, ttY = placeResultTooltip(ttW, ttH, cursorX, cursorY, blockedRects)
 		self.resultTooltip:Draw(ttX, ttY, nil, nil, viewPort)
+		t_insert(blockedRects, { x = ttX, y = ttY, width = ttW, height = ttH })
+		SetDrawLayer(nil, 0)
+	end
+	if showItemTooltip then
+		SetDrawLayer(nil, 100)
+		self.itemTooltip:Clear(true)
+		for _, line in ipairs(hoverData.itemTooltipLines) do
+			self.itemTooltip:AddLine(line.height or 16, line[1], line.font)
+		end
+		local itemTtW, itemTtH = self.itemTooltip:GetSize()
+		local itemTtX, itemTtY = placeResultTooltip(itemTtW, itemTtH, cursorX, cursorY, blockedRects)
+		self.itemTooltip:Draw(itemTtX, itemTtY, nil, nil, viewPort)
 		SetDrawLayer(nil, 0)
 	end
 end
@@ -269,6 +453,48 @@ local RadiusJewelFinderClass = newClass("RadiusJewelFinder", function(self, tree
 	self.treeTab = treeTab
 	self.build = treeTab.build
 end)
+
+local function normalizeImpactStat(impactStat)
+	if type(impactStat) == "string" then
+		return {
+			field = impactStat,
+			label = impactStat,
+			selection = { stat = impactStat, label = impactStat },
+		}
+	elseif impactStat and impactStat.stat and not impactStat.selection then
+		return {
+			field = impactStat.stat,
+			label = impactStat.label,
+			selection = impactStat,
+		}
+	end
+	return impactStat
+end
+
+function RadiusJewelFinderClass:getImpactValue(impactStat, output)
+	impactStat = normalizeImpactStat(impactStat)
+	local selection = impactStat.selection or impactStat
+	local scopedOutput = output
+	if scopedOutput and scopedOutput.Minion and selection.stat ~= "FullDPS" then
+		scopedOutput = scopedOutput.Minion
+	end
+	local value = scopedOutput and (scopedOutput[selection.stat] or 0) or 0
+	if selection.transform then
+		value = selection.transform(value)
+	end
+	return value
+end
+
+function RadiusJewelFinderClass:calculateImpactDelta(impactStat, baselineOutput, compareOutput)
+	impactStat = normalizeImpactStat(impactStat)
+	local selection = impactStat.selection or impactStat
+	return self.build.calcsTab:CalculatePowerStat(selection, compareOutput, baselineOutput)
+end
+
+local function calculateImpactPercent(delta, baseline)
+	local denom = m_abs(baseline)
+	return denom > 0 and (delta / denom * 100) or 0
+end
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Light of Meaning variants
@@ -290,45 +516,92 @@ local LIGHT_OF_MEANING_VARIANTS = {
 	{ name = "Chaos Resistance", mod = "+4% to Chaos Resistance",             bonus = "+4% Chaos Res" },
 }
 
--- LOM raw item text (verbatim copy from jewel.lua, used for impact calculation)
-local LOM_RAW_TEXT = [[The Light of Meaning
-Prismatic Jewel
-Variant: Life
-Variant: Energy Shield
-Variant: Mana
-Variant: Armour
-Variant: Evasion Rating
-Variant: Attributes
-Variant: Global Crit Chance
-Variant: Physical Damage
-Variant: Lightning Damage
-Variant: Cold Damage
-Variant: Fire Damage
-Variant: Chaos Damage
-Variant: Chaos Resistance
-Selected Variant: 1
-Source: King of The Mists
-Limited to: 1
-Radius: Large
-{variant:1}Passive Skills in Radius also grant +5 to Maximum Life
-{variant:2}Passive Skills in Radius also grant 3% increased Energy Shield
-{variant:3}Passive Skills in Radius also grant +5 to Maximum Mana
-{variant:4}Passive Skills in Radius also grant 7% increased Armour
-{variant:5}Passive Skills in Radius also grant 7% increased Evasion Rating
-{variant:6}Passive Skills in Radius also grant +2 to all Attributes
-{variant:7}Passive Skills in Radius also grant 5% Increased Global Critical Strike Chance
-{variant:8}Passive Skills in Radius also grant 6% increased Physical Damage
-{variant:9}Passive Skills in Radius also grant 6% increased Lightning Damage
-{variant:10}Passive Skills in Radius also grant 6% increased Cold Damage
-{variant:11}Passive Skills in Radius also grant 6% increased Fire Damage
-{variant:12}Passive Skills in Radius also grant 6% increased Chaos Damage
-{variant:13}Passive Skills in Radius also grant +4% to Chaos Resistance]]
+local uniqueRawTextByName
+local uniqueRawTextByNameAndBase
+local uniqueVariantRawTextCache = { }
 
-local MIGHT_OF_MEEK_RAW_TEXT = [[Might of the Meek
-Crimson Jewel
-Radius: Large
-50% increased Effect of non-Keystone Passive Skills in Radius
-Notable Passive Skills in Radius grant nothing]]
+local function buildUniqueRawTextIndex()
+	local rawByName = { }
+	local rawByNameAndBase = { }
+	for _, uniqueList in pairs(data.uniques or { }) do
+		if type(uniqueList) == "table" then
+			for _, rawText in ipairs(uniqueList) do
+				if type(rawText) == "string" then
+					local name, baseName = rawText:match("^([^\n]+)\n([^\n]+)")
+					if name and not rawByName[name] then
+						rawByName[name] = rawText
+					end
+					if name and baseName then
+						rawByNameAndBase[name] = rawByNameAndBase[name] or { }
+						if not rawByNameAndBase[name][baseName] then
+							rawByNameAndBase[name][baseName] = rawText
+						end
+					end
+				end
+			end
+		end
+	end
+	return rawByName, rawByNameAndBase
+end
+
+local function getUniqueRawText(name, fallbackRawText, baseName)
+	if not uniqueRawTextByName then
+		uniqueRawTextByName, uniqueRawTextByNameAndBase = buildUniqueRawTextIndex()
+	end
+	if baseName and uniqueRawTextByNameAndBase[name] and uniqueRawTextByNameAndBase[name][baseName] then
+		return uniqueRawTextByNameAndBase[name][baseName]
+	end
+	return uniqueRawTextByName[name] or fallbackRawText
+end
+
+local function getUniqueVariantRawText(name, variantSelector, fallbackRawText, baseName)
+	if not variantSelector then
+		return getUniqueRawText(name, fallbackRawText, baseName)
+	end
+	local cacheKey = s_format("%s|%s|%s", name, baseName or "", tostring(variantSelector))
+	if uniqueVariantRawTextCache[cacheKey] then
+		return uniqueVariantRawTextCache[cacheKey]
+	end
+	local rawText = getUniqueRawText(name, fallbackRawText, baseName)
+	if not rawText then
+		return nil
+	end
+	local item = new("Item", "Rarity: Unique\n" .. rawText)
+	local selectedVariant
+	if type(variantSelector) == "number" then
+		selectedVariant = variantSelector
+	elseif item.variantList then
+		for idx, variantName in ipairs(item.variantList) do
+			if variantName == variantSelector then
+				selectedVariant = idx
+				break
+			end
+		end
+	end
+	if not selectedVariant then
+		return fallbackRawText or rawText
+	end
+	item.variant = selectedVariant
+	local builtRaw = item:BuildRaw():gsub("^Rarity: Unique\n", "")
+	uniqueVariantRawTextCache[cacheKey] = builtRaw
+	return builtRaw
+end
+
+local function mustGetUniqueRawText(name, baseName)
+	local rawText = getUniqueRawText(name, nil, baseName)
+	assert(rawText, "Missing unique raw text: " .. name .. (baseName and (" [" .. baseName .. "]") or ""))
+	return rawText
+end
+
+local function mustGetUniqueVariantRawText(name, variantSelector, baseName)
+	local rawText = getUniqueVariantRawText(name, variantSelector, nil, baseName)
+	assert(rawText, "Missing unique variant raw text: " .. name .. " [" .. tostring(variantSelector) .. "]" .. (baseName and (" [" .. baseName .. "]") or ""))
+	return rawText
+end
+
+local function mustGetCurrentUniqueRawText(name, baseName)
+	return mustGetUniqueVariantRawText(name, "Current", baseName)
+end
 
 local MIGHT_OF_MEEK_FOULBORN_V1_RAW_TEXT = [[Might of the Meek
 Crimson Jewel
@@ -342,24 +615,12 @@ Radius: Small
 100% increased Effect of non-Keystone Passive Skills in Radius
 Notable Passive Skills in Radius grant nothing]]
 
-local UNNATURAL_INSTINCT_RAW_TEXT = [[Unnatural Instinct
-Viridian Jewel
-Limited to: 1
-Radius: Small
-Allocated Small Passive Skills in Radius grant nothing
-Grants all bonuses of Unallocated Small Passive Skills in Radius]]
-
 local UNNATURAL_INSTINCT_FOULBORN_RAW_TEXT = [[Unnatural Instinct
 Viridian Jewel
 Limited to: 1
 Radius: Small
 Allocated Notable Passive Skills in Radius grant nothing
 Grants all bonuses of Unallocated Notable Passive Skills in Radius]]
-
-local INSPIRED_LEARNING_RAW_TEXT = [[Inspired Learning
-Crimson Jewel
-Radius: Small
-With 4 Notables Allocated in Radius, When you Kill a Rare monster, you gain 1 of its Modifiers for 20 seconds]]
 
 local INSPIRED_LEARNING_FOULBORN_LARGE_RAW_TEXT = [[Inspired Learning
 Crimson Jewel
@@ -371,188 +632,15 @@ Crimson Jewel
 Radius: Small
 With (8-12) Small Passives Allocated in Radius, When you Kill a Rare monster, you gain 1 of its Modifiers for 20 seconds]]
 
-local ANATOMICAL_KNOWLEDGE_RAW_TEXT = [[Anatomical Knowledge
-Cobalt Jewel
-Source: No longer obtainable
-Radius: Large
-8% increased maximum Life
-Adds 1 to Maximum Life per 3 Intelligence Allocated in Radius]]
-
-local LIONEYES_FALL_RAW_TEXT = [[Lioneye's Fall
-Viridian Jewel
-Radius: Medium
-Melee and Melee Weapon Type modifiers in Radius are Transformed to Bow Modifiers]]
-
 local LIONEYES_FALL_FOULBORN_RAW_TEXT = [[Lioneye's Fall
 Viridian Jewel
 Radius: Medium
 Increases and Reductions to Evasion Rating in Radius are Transformed to apply to Armour]]
 
-local INTUITIVE_LEAP_RAW_TEXT = [[Intuitive Leap
-Viridian Jewel
-Radius: Small
-Passives in Radius can be Allocated without being connected to your tree]]
-
 local INTUITIVE_LEAP_FOULBORN_RAW_TEXT = [[Intuitive Leap
 Viridian Jewel
 Radius: Massive
 Keystone Passive Skills in Radius can be Allocated without being connected to your tree]]
-
-local THREAD_OF_HOPE_RAW_TEXT = [[Thread of Hope
-Crimson Jewel
-Source: Drops from unique{Sirus, Awakener of Worlds}
-Variant: Small Ring
-Variant: Medium Ring
-Variant: Large Ring
-Variant: Very Large Ring
-Variant: Massive Ring (Uber)
-Radius: Variable
-Implicits: 0
-{variant:1}Only affects Passives in Small Ring
-{variant:2}Only affects Passives in Medium Ring
-{variant:3}Only affects Passives in Large Ring
-{variant:4}Only affects Passives in Very Large Ring
-{variant:5}Only affects Passives in Massive Ring
-Passive Skills in Radius can be Allocated without being connected to your tree
--(20-10)% to all Elemental Resistances]]
-
-local TEMPERED_FLESH_RAW_TEXT = [[Tempered Flesh
-Crimson Jewel
-League: Incursion
-Source: Drops from unique{The Vaal Omnitect}
-Upgrade: Upgrades to unique{Transcendent Flesh} via currency{Vial of Transcendence}
-Radius: Medium
--1 Strength per 1 Strength on Allocated Passives in Radius
-2% increased Life Recovery Rate per 10 Strength on Allocated Passives in Radius]]
-
-local TRANSCENDENT_FLESH_RAW_TEXT = [[Transcendent Flesh
-Crimson Jewel
-League: Incursion
-Source: Upgraded from unique{Tempered Flesh} via currency{Vial of Transcendence}
-Radius: Medium
--1 Strength per 1 Strength on Allocated Passives in Radius
-3% increased Life Recovery Rate per 10 Strength on Allocated Passives in Radius
-2% reduced Life Recovery Rate per 10 Strength on Unallocated Passives in Radius
-+7% to Critical Strike Multiplier per 10 Strength on Unallocated Passives in Radius]]
-
-local TEMPERED_MIND_RAW_TEXT = [[Tempered Mind
-Cobalt Jewel
-League: Incursion
-Source: Drops from unique{The Vaal Omnitect}
-Upgrade: Upgrades to unique{Transcendent Mind} via currency{Vial of Transcendence}
-Radius: Medium
--1 Intelligence per 1 Intelligence on Allocated Passives in Radius
-2% increased Mana Recovery Rate per 10 Intelligence on Allocated Passives in Radius]]
-
-local TRANSCENDENT_MIND_RAW_TEXT = [[Transcendent Mind
-Cobalt Jewel
-League: Incursion
-Source: Upgraded from unique{Tempered Mind} via currency{Vial of Transcendence}
-Radius: Medium
--1 Intelligence per 1 Intelligence on Allocated Passives in Radius
-+3% to Damage over Time Multiplier per 10 Intelligence on Unallocated Passives in Radius
-3% increased Mana Recovery Rate per 10 Intelligence on Allocated Passives in Radius
-2% reduced Mana Recovery Rate per 10 Intelligence on Unallocated Passives in Radius]]
-
-local TEMPERED_SPIRIT_RAW_TEXT = [[Tempered Spirit
-Viridian Jewel
-League: Incursion
-Source: Drops from unique{The Vaal Omnitect}
-Upgrade: Upgrades to unique{Transcendent Spirit} via currency{Vial of Transcendence}
-Radius: Medium
--1 Dexterity per 1 Dexterity on Allocated Passives in Radius
-2% increased Movement Speed per 10 Dexterity on Allocated Passives in Radius]]
-
-local TRANSCENDENT_SPIRIT_RAW_TEXT = [[Transcendent Spirit
-Viridian Jewel
-League: Incursion
-Source: Upgraded from unique{Tempered Spirit} via currency{Vial of Transcendence}
-Radius: Medium
--1 Dexterity per 1 Dexterity on Allocated Passives in Radius
-3% increased Movement Speed per 10 Dexterity on Allocated Passives in Radius
-2% reduced Movement Speed per 10 Dexterity on Unallocated Passives in Radius
-+125 to Accuracy Rating per 10 Dexterity on Unallocated Passives in Radius]]
-
-local ENERGY_FROM_WITHIN_RAW_TEXT = [[Energy From Within
-Cobalt Jewel
-Radius: Large
-3% increased maximum Energy Shield
-Increases and Reductions to Life in Radius are Transformed to apply to Energy Shield]]
-
-local HEALTHY_MIND_RAW_TEXT = [[Healthy Mind
-Cobalt Jewel
-Radius: Large
-15% increased maximum Mana
-Increases and Reductions to Life in Radius are Transformed to apply to Mana at 200% of their value]]
-
-local ENERGISED_ARMOUR_RAW_TEXT = [[Energised Armour
-Crimson Jewel
-Radius: Large
-15% increased Armour
-Increases and Reductions to Energy Shield in Radius are Transformed to apply to Armour at 200% of their value]]
-
-local BRUTE_FORCE_SOLUTION_RAW_TEXT = [[Brute Force Solution
-Cobalt Jewel
-Radius: Large
-+16 to Intelligence
-Strength from Passives in Radius is Transformed to Intelligence]]
-
-local CAREFUL_PLANNING_RAW_TEXT = [[Careful Planning
-Viridian Jewel
-Radius: Large
-+16 to Dexterity
-Intelligence from Passives in Radius is Transformed to Dexterity]]
-
-local EFFICIENT_TRAINING_RAW_TEXT = [[Efficient Training
-Crimson Jewel
-Radius: Large
-+16 to Strength
-Intelligence from Passives in Radius is Transformed to Strength]]
-
-local FERTILE_MIND_RAW_TEXT = [[Fertile Mind
-Cobalt Jewel
-Radius: Large
-+16 to Intelligence
-Dexterity from Passives in Radius is Transformed to Intelligence]]
-
-local FLUID_MOTION_RAW_TEXT = [[Fluid Motion
-Viridian Jewel
-Radius: Large
-+16 to Dexterity
-Strength from Passives in Radius is Transformed to Dexterity]]
-
-local INERTIA_RAW_TEXT = [[Inertia
-Crimson Jewel
-Radius: Large
-+16 to Strength
-Dexterity from Passives in Radius is Transformed to Strength]]
-
-local COMBAT_FOCUS_CRIMSON_RAW_TEXT = [[Combat Focus
-Crimson Jewel
-Radius: Medium
-10% increased Elemental Damage
-With 40 total Strength and Intelligence in Radius, Prismatic Skills cannot choose Cold
-With 40 total Strength and Intelligence in Radius, Prismatic Skills deal 50% less Cold Damage]]
-
-local COMBAT_FOCUS_COBALT_RAW_TEXT = [[Combat Focus
-Cobalt Jewel
-Radius: Medium
-10% increased Elemental Damage
-With 40 total Intelligence and Dexterity in Radius, Prismatic Skills cannot choose Fire
-With 40 total Intelligence and Dexterity in Radius, Prismatic Skills deal 50% less Fire Damage]]
-
-local COMBAT_FOCUS_VIRIDIAN_RAW_TEXT = [[Combat Focus
-Viridian Jewel
-Radius: Medium
-10% increased Elemental Damage
-With 40 total Dexterity and Strength in Radius, Prismatic Skills cannot choose Lightning
-With 40 total Dexterity and Strength in Radius, Prismatic Skills deal 50% less Lightning Damage]]
-
-local THE_RED_DREAM_RAW_TEXT = [[The Red Dream
-Crimson Jewel
-Radius: Large
-Gain (6-10)% of Fire Damage as Extra Chaos Damage
-Passives granting Fire Resistance or all Elemental Resistances in Radius also grant an equal chance to gain an Endurance Charge on Kill]]
 
 local THE_RED_DREAM_FOULBORN_RAW_TEXT = [[The Red Dream
 Crimson Jewel
@@ -560,23 +648,11 @@ Radius: Large
 Gain (6-10)% of Fire Damage as Extra Chaos Damage
 Passives granting Fire Resistance or all Elemental Resistances in Radius also grant increased Maximum Life at 50% of its value]]
 
-local THE_RED_NIGHTMARE_RAW_TEXT = [[The Red Nightmare
-Crimson Jewel
-Radius: Large
-Gain (6-10)% of Fire Damage as Extra Chaos Damage
-Passives granting Fire Resistance or all Elemental Resistances in Radius also grant Chance to Block Attack Damage at 50% of its value]]
-
 local THE_RED_NIGHTMARE_FOULBORN_RAW_TEXT = [[The Red Nightmare
 Crimson Jewel
 Radius: Large
 Gain (6-10)% of Fire Damage as Extra Chaos Damage
 Passives granting Fire Resistance or all Elemental Resistances in Radius also grant Fire Damage Converted to Chaos Damage at 100% of its value]]
-
-local THE_GREEN_DREAM_RAW_TEXT = [[The Green Dream
-Viridian Jewel
-Radius: Large
-Gain (6-10)% of Cold Damage as Extra Chaos Damage
-Passives granting Cold Resistance or all Elemental Resistances in Radius also grant an equal chance to gain a Frenzy Charge on Kill]]
 
 local THE_GREEN_DREAM_FOULBORN_RAW_TEXT = [[The Green Dream
 Viridian Jewel
@@ -584,35 +660,17 @@ Radius: Large
 Gain (6-10)% of Cold Damage as Extra Chaos Damage
 Passives granting Cold Resistance or all Elemental Resistances in Radius also grant increased Maximum Mana at 75% of its value]]
 
-local THE_GREEN_NIGHTMARE_RAW_TEXT = [[The Green Nightmare
-Viridian Jewel
-Radius: Large
-Gain (6-10)% of Cold Damage as Extra Chaos Damage
-Passives granting Cold Resistance or all Elemental Resistances in Radius also grant Chance to Suppress Spell Damage at 70% of its value]]
-
 local THE_GREEN_NIGHTMARE_FOULBORN_RAW_TEXT = [[The Green Nightmare
 Viridian Jewel
 Radius: Large
 Gain (6-10)% of Cold Damage as Extra Chaos Damage
 Passives granting Cold Resistance or all Elemental Resistances in Radius also grant Cold Damage Converted to Chaos Damage at 100% of its value]]
 
-local THE_BLUE_DREAM_RAW_TEXT = [[The Blue Dream
-Cobalt Jewel
-Radius: Large
-Gain (6-10)% of Lightning Damage as Extra Chaos Damage
-Passives granting Lightning Resistance or all Elemental Resistances in Radius also grant an equal chance to gain a Power Charge on Kill]]
-
 local THE_BLUE_DREAM_FOULBORN_RAW_TEXT = [[The Blue Dream
 Cobalt Jewel
 Radius: Large
 Gain (6-10)% of Lightning Damage as Extra Chaos Damage
 Passives granting Lightning Resistance or all Elemental Resistances in Radius also grant increased Maximum Energy Shield at 75% of its value]]
-
-local THE_BLUE_NIGHTMARE_RAW_TEXT = [[The Blue Nightmare
-Cobalt Jewel
-Radius: Large
-Gain (6-10)% of Lightning Damage as Extra Chaos Damage
-Passives granting Lightning Resistance or all Elemental Resistances in Radius also grant Chance to Block Spell Damage at 50% of its value]]
 
 local THE_BLUE_NIGHTMARE_FOULBORN_RAW_TEXT = [[The Blue Nightmare
 Cobalt Jewel
@@ -637,29 +695,14 @@ end
 local function scoreGainLoss(nodes, allocNodes, gainType, lossType)
 	local gained, lost = 0, 0
 	for nodeId, node in pairs(nodes) do
-		if gainType and node.type == gainType and not allocNodes[nodeId] then
+		if not node.ascendancyName and gainType and node.type == gainType and not allocNodes[nodeId] then
 			gained = gained + 1
 		end
-		if lossType and node.type == lossType and allocNodes[nodeId] then
+		if not node.ascendancyName and lossType and node.type == lossType and allocNodes[nodeId] then
 			lost = lost + 1
 		end
 	end
 	return gained - lost
-end
-
-local function buildSplitPersonalityRawText(modLine)
-	return buildJewelRawText("Split Personality", "Crimson Jewel", "Variable", {
-		"This Jewel's Socket has 25% increased effect per Allocated Passive Skill between it and your Class' starting location",
-		modLine,
-		"Corrupted",
-	}, { "Limited to: 2", "Source: Drops from the Simulacrum Encounter" })
-end
-
-local function buildImpossibleEscapeRawText(keystoneName)
-	return buildJewelRawText("Impossible Escape", "Viridian Jewel", "Small", {
-		"Passive Skills in radius of " .. keystoneName .. " can be allocated without being connected to your tree",
-		"Corrupted",
-	}, { "Limited to: 1", "Source: Drops from The Maven (Uber)" })
 end
 
 local function buildImpossibleEscapeVariants()
@@ -673,7 +716,7 @@ local function buildImpossibleEscapeVariants()
 						name = name,
 						dropdownLabel = name,
 						keystoneName = name,
-						rawText = buildImpossibleEscapeRawText(name),
+						rawText = mustGetUniqueVariantRawText("Impossible Escape", name),
 						scoreLabel = "unalloc notable/keystone near keystone",
 					})
 				end
@@ -688,7 +731,7 @@ local function getRadiusPassiveAttributeTotals(nodes, allocNodes, attribute)
 	local allocated = 0
 	local unallocated = 0
 	for nodeId, node in pairs(nodes) do
-		if node.type ~= "Socket" and node.type ~= "ClassStart" and node.type ~= "AscendClassStart" then
+		if not node.ascendancyName and node.type ~= "Socket" and node.type ~= "ClassStart" and node.type ~= "AscendClassStart" then
 			local amount = node.modList and node.modList:Sum("BASE", nil, attribute) or 0
 			if amount ~= 0 then
 				if allocNodes[nodeId] then
@@ -741,28 +784,46 @@ local function makeTemperedVariant(name, rawText, attribute, includeAllocated, i
 	}
 end
 
-local TEMPERED_TRANSCENDENT_VARIANTS = {
-	makeTemperedVariant("Tempered Flesh", TEMPERED_FLESH_RAW_TEXT, "Str", true, false),
-	makeTemperedVariant("Transcendent Flesh", TRANSCENDENT_FLESH_RAW_TEXT, "Str", true, true),
-	makeTemperedVariant("Tempered Mind", TEMPERED_MIND_RAW_TEXT, "Int", true, false),
-	makeTemperedVariant("Transcendent Mind", TRANSCENDENT_MIND_RAW_TEXT, "Int", true, true),
-	makeTemperedVariant("Tempered Spirit", TEMPERED_SPIRIT_RAW_TEXT, "Dex", true, false),
-	makeTemperedVariant("Transcendent Spirit", TRANSCENDENT_SPIRIT_RAW_TEXT, "Dex", true, true),
-}
+local TEMPERED_TRANSCENDENT_VARIANTS
+local function getTemperedTranscendentVariants()
+	if not TEMPERED_TRANSCENDENT_VARIANTS then
+		TEMPERED_TRANSCENDENT_VARIANTS = {
+			makeTemperedVariant("Tempered Flesh", mustGetCurrentUniqueRawText("Tempered Flesh"), "Str", true, false),
+			makeTemperedVariant("Transcendent Flesh", mustGetCurrentUniqueRawText("Transcendent Flesh"), "Str", true, true),
+			makeTemperedVariant("Tempered Mind", mustGetCurrentUniqueRawText("Tempered Mind"), "Int", true, false),
+			makeTemperedVariant("Transcendent Mind", mustGetCurrentUniqueRawText("Transcendent Mind"), "Int", true, true),
+			makeTemperedVariant("Tempered Spirit", mustGetCurrentUniqueRawText("Tempered Spirit"), "Dex", true, false),
+			makeTemperedVariant("Transcendent Spirit", mustGetCurrentUniqueRawText("Transcendent Spirit"), "Dex", true, true),
+		}
+	end
+	return TEMPERED_TRANSCENDENT_VARIANTS
+end
 
-local SPLIT_PERSONALITY_VARIANTS = {
-	{ name = "Strength", rawText = buildSplitPersonalityRawText("+5 to Strength") },
-	{ name = "Dexterity", rawText = buildSplitPersonalityRawText("+5 to Dexterity") },
-	{ name = "Intelligence", rawText = buildSplitPersonalityRawText("+5 to Intelligence") },
-	{ name = "Life", rawText = buildSplitPersonalityRawText("+5 to maximum Life") },
-	{ name = "Mana", rawText = buildSplitPersonalityRawText("+5 to maximum Mana") },
-	{ name = "Energy Shield", rawText = buildSplitPersonalityRawText("+5 to maximum Energy Shield") },
-	{ name = "Armour", rawText = buildSplitPersonalityRawText("+40 to Armour") },
-	{ name = "Evasion Rating", rawText = buildSplitPersonalityRawText("+40 to Evasion Rating") },
-	{ name = "Accuracy Rating", rawText = buildSplitPersonalityRawText("+40 to Accuracy Rating") },
-}
+local SPLIT_PERSONALITY_VARIANTS
+local function getSplitPersonalityVariants()
+	if not SPLIT_PERSONALITY_VARIANTS then
+		SPLIT_PERSONALITY_VARIANTS = {
+			{ name = "Strength", rawText = mustGetUniqueVariantRawText("Split Personality", "Strength") },
+			{ name = "Dexterity", rawText = mustGetUniqueVariantRawText("Split Personality", "Dexterity") },
+			{ name = "Intelligence", rawText = mustGetUniqueVariantRawText("Split Personality", "Intelligence") },
+			{ name = "Life", rawText = mustGetUniqueVariantRawText("Split Personality", "Life") },
+			{ name = "Mana", rawText = mustGetUniqueVariantRawText("Split Personality", "Mana") },
+			{ name = "Energy Shield", rawText = mustGetUniqueVariantRawText("Split Personality", "Energy Shield") },
+			{ name = "Armour", rawText = mustGetUniqueVariantRawText("Split Personality", "Armour") },
+			{ name = "Evasion Rating", rawText = mustGetUniqueVariantRawText("Split Personality", "Evasion Rating") },
+			{ name = "Accuracy Rating", rawText = mustGetUniqueVariantRawText("Split Personality", "Accuracy Rating") },
+		}
+	end
+	return SPLIT_PERSONALITY_VARIANTS
+end
 
-local IMPOSSIBLE_ESCAPE_VARIANTS = buildImpossibleEscapeVariants()
+local IMPOSSIBLE_ESCAPE_VARIANTS
+local function getImpossibleEscapeVariants()
+	if not IMPOSSIBLE_ESCAPE_VARIANTS then
+		IMPOSSIBLE_ESCAPE_VARIANTS = buildImpossibleEscapeVariants()
+	end
+	return IMPOSSIBLE_ESCAPE_VARIANTS
+end
 
 local UNNATURAL_INSTINCT_FOULBORN_VARIANTS = {
 	{
@@ -912,24 +973,31 @@ local function makeVariantDropdownEntry(variant)
 	}
 end
 
--- Stats available for LOM impact calculation
-local IMPACT_STATS = {
-	{ field = "FullDPS",      label = "Full DPS" },
-	{ field = "CombinedDPS",  label = "Combined DPS" },
-	{ field = "Life",         label = "Life" },
-	{ field = "EnergyShield", label = "Energy Shield" },
-	{ field = "Armour",       label = "Armour" },
-	{ field = "Evasion",      label = "Evasion" },
-	{ field = "BlockChance",            label = "Attack Block" },
-	{ field = "SpellBlockChance",       label = "Spell Block" },
-	{ field = "SpellSuppressionChance", label = "Spell Suppress" },
-	{ field = "TotalEHP",     label = "Total EHP" },
-	{ field = "Mana",         label = "Mana" },
-}
+local function buildImpactStats()
+	local stats = { }
+	for _, stat in ipairs(data.powerStatList or { }) do
+		if stat.stat and not stat.combinedOffDef and not stat.itemField and stat.label ~= "Name" then
+			t_insert(stats, {
+				field = stat.stat,
+				label = stat.label,
+				selection = stat,
+			})
+		end
+	end
+	return stats
+end
+
+local IMPACT_STATS = buildImpactStats()
 
 local CONNECTIONLESS_COMPUTE_METHODS = {
 	{ id = "fast", label = "Fast" },
 	{ id = "simulated_greedy", label = "Simulated" },
+}
+
+local OCCUPIED_SOCKET_OPTIONS = {
+	{ id = "free", label = "Free only" },
+	{ id = "safe", label = "Safe occupied" },
+	{ id = "all", label = "All occupied" },
 }
 
 local function findConnectionlessComputeMethod(methodId)
@@ -969,25 +1037,44 @@ local function previewHeader(name, itemType, radius, extra, isFoulborn)
 end
 
 local function previewFromRawText(rawText, isFoulborn, displayName, extraPreviewMeta)
-	local rawLines = { }
-	for line in rawText:gmatch("[^\n]+") do
-		t_insert(rawLines, line)
-	end
-	local itemName = displayName or rawLines[1] or "Unknown Jewel"
-	local itemType = rawLines[2] or "Jewel"
-	local radius = "?"
+	local item = new("Item", "Rarity: Unique\n" .. rawText)
+	item:BuildModList()
+
+	local itemName = displayName or item.title or "Unknown Jewel"
+	local itemType = item.baseName or "Jewel"
+	local radius = item.jewelRadiusLabel or "?"
 	local extra = { }
 	local mods = { }
-	for i = 3, #rawLines do
-		local line = rawLines[i]
-		if line:match("^Radius:%s+") then
-			radius = line:gsub("^Radius:%s+", "")
-		elseif line:match("^Limited to:") or line:match("^Source:") or line:match("^League:") or line:match("^Upgrade:") then
-			t_insert(extra, line)
-		else
-			t_insert(mods, line)
+
+	if item.limit then
+		t_insert(extra, "Limited to: " .. item.limit)
+	end
+	if item.source then
+		t_insert(extra, "Source: " .. item.source)
+	end
+	if item.league then
+		t_insert(extra, "League: " .. item.league)
+	end
+	for _, upgradePath in ipairs(item.upgradePaths or { }) do
+		t_insert(extra, "Upgrade: " .. upgradePath)
+	end
+	if rawText:match("(^|\n)Corrupted(\n|$)") then
+		t_insert(extra, "Corrupted")
+	end
+
+	local function addActiveModLines(modLineList)
+		for _, modLine in ipairs(modLineList or { }) do
+			if not modLine.extra and item:CheckModLineVariant(modLine) then
+				for line in modLine.line:gmatch("[^\n]+") do
+					t_insert(mods, line)
+				end
+			end
 		end
 	end
+
+	addActiveModLines(item.implicitModLines)
+	addActiveModLines(item.explicitModLines)
+
 	local lines = previewHeader(itemName, itemType, radius, extra, isFoulborn)
 	if extraPreviewMeta then
 		for _, meta in ipairs(extraPreviewMeta) do
@@ -1411,6 +1498,55 @@ function RadiusJewelFinderClass:buildJewelSockets(largeRadiusIndex)
 	return sockets
 end
 
+function RadiusJewelFinderClass:getSocketOccupancyInfo(socketId)
+	local slot = self.build.itemsTab.sockets[socketId]
+	if not slot or slot.selItemId == 0 then
+		return {
+			slot = slot,
+			isOccupied = false,
+			isSafeReplace = true,
+		}
+	end
+	local item = self.build.itemsTab.items[slot.selItemId]
+	local itemLabel = item and (item.title or item.name or item.baseName) or "Unknown item"
+	local isPositionSensitive = false
+	if item then
+		isPositionSensitive = item.clusterJewel
+			or item.jewelRadiusIndex ~= nil
+			or (item.jewelData and item.jewelData.impossibleEscapeKeystones ~= nil)
+			or (item.title and item.title:match("^Split Personality") ~= nil)
+	end
+	return {
+		slot = slot,
+		item = item,
+		itemLabel = itemLabel,
+		isOccupied = true,
+		isSafeReplace = not isPositionSensitive,
+	}
+end
+
+function RadiusJewelFinderClass:socketMatchesOccupiedMode(socketId, occupiedMode)
+	local occupancy = self:getSocketOccupancyInfo(socketId)
+	if not occupancy.isOccupied then
+		return true, occupancy
+	end
+	if not occupiedMode or occupiedMode.id == "free" then
+		return false, occupancy
+	elseif occupiedMode.id == "safe" then
+		return occupancy.isSafeReplace, occupancy
+	end
+	return true, occupancy
+end
+
+function RadiusJewelFinderClass:getSocketAccessCost(socket, occupancy)
+	local socketId = type(socket) == "table" and socket.id or socket
+	occupancy = occupancy or self:getSocketOccupancyInfo(socketId)
+	if occupancy and occupancy.isOccupied then
+		return 0
+	end
+	return type(socket) == "table" and (socket.pathDist or 0) or 0
+end
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- LOM variant impact: equip each variant, rebuild, measure stat delta
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -1436,7 +1572,7 @@ local function buildDisplayedConnectionlessPlans(result, socketBasePoints, basel
 	local bestPctPerPoint = -math.huge
 	for _, step in ipairs(result.planSteps) do
 		local totalPoints = socketBasePoints + (step.addedNodeCount or 0)
-		local pct = baseline ~= 0 and (step.delta / baseline * 100) or 0
+		local pct = calculateImpactPercent(step.delta, baseline)
 		local pctPerPoint = totalPoints > 0 and (pct / totalPoints) or pct
 		if pctPerPoint > bestPctPerPoint + 1e-9 then
 			t_insert(displayedPlans, step)
@@ -1451,96 +1587,72 @@ local function buildDisplayedConnectionlessPlans(result, socketBasePoints, basel
 	return displayedPlans
 end
 
-function RadiusJewelFinderClass:computeVariantImpact(socketId, statField, progress)
-	local itemsTab = self.build.itemsTab
-	local calcsTab = self.build.calcsTab
+function RadiusJewelFinderClass:computeVariantImpact(socketId, impactStat, progress, occupiedMode)
+	impactStat = normalizeImpactStat(impactStat)
+	local slot = self.build.itemsTab.sockets[socketId]
+	if not slot then
+		return { }, 0
+	end
+	local socketNode = self.build.spec.nodes[socketId]
+	if not socketNode then
+		return { }, 0
+	end
 
-	-- CalcSetup reads jewels from slot.selItemId, not spec.jewels
-	local slot = itemsTab.sockets[socketId]
-	if not slot then return { }, 0 end
-
-	-- Save current state
-	local prevSelItemId = slot.selItemId
-
-	-- Baseline: no jewel at this socket
-	slot.selItemId = 0
-	self.build.spec.jewels[socketId] = 0
-	self.build.spec:BuildAllDependsAndPaths()
-	calcsTab:BuildOutput()
-	local baseline = calcsTab.mainOutput[statField] or 0
-	local baselineOutput = copyTableSafe(calcsTab.mainOutput, false, true)
-
+	local calcFunc, baseOutput = self.build.calcsTab:GetMiscCalculator()
+	local slotName = "Jewel " .. tostring(socketId)
+	local realBaseline = self:getImpactValue(impactStat, baseOutput)
+	local socketAllowed = self:socketMatchesOccupiedMode(socketId, occupiedMode)
+	if not socketAllowed then
+		return { }, realBaseline
+	end
+	local replacementContext = self:buildSocketReplacementContext(calcFunc, socketId)
+	local baselineOutput = replacementContext.baselineOutput
+	local baseline = self:getImpactValue(impactStat, baselineOutput)
 	local variantResults = { }
 
 	for i, variant in ipairs(LIGHT_OF_MEANING_VARIANTS) do
 		progressTick(progress, i, #LIGHT_OF_MEANING_VARIANTS, variant.name)
-		local text = LOM_RAW_TEXT
+		local text = mustGetUniqueRawText("The Light of Meaning")
 		local item = new("Item", "Rarity: Unique\n" .. text)
 		item.variant = i
 		item:BuildModList()
-		itemsTab:AddItem(item, true)
-		slot.selItemId = item.id
-		self.build.spec.jewels[socketId] = item.id
-
-			local value = 0
-			local compareOutput
-			local ok, err = pcall(function()
-				self.build.spec:BuildAllDependsAndPaths()
-				calcsTab:BuildOutput()
-				value = calcsTab.mainOutput[statField] or 0
-				compareOutput = copyTableSafe(calcsTab.mainOutput, false, true)
-			end)
-
-		-- Cleanup: unequip then remove from items tab
-		slot.selItemId = prevSelItemId
-		self.build.spec.jewels[socketId] = prevSelItemId
-		itemsTab.items[item.id] = nil
-		for idx, id in ipairs(itemsTab.itemOrderList) do
-			if id == item.id then
-				table.remove(itemsTab.itemOrderList, idx)
-				break
-			end
-		end
-
-		if not ok then
-			error(err)
-		end
-
-			t_insert(variantResults, {
-				variant    = variant,
-				variantIdx = i,
-				value      = value,
-				delta      = value - baseline,
-				baseOutput = baselineOutput,
-				compareOutput = compareOutput,
-			})
-		end
+		local output = calcFunc({
+			addNodes = { [socketNode] = true },
+			repSlotName = slotName,
+			repItem = item,
+		})
+		local value = self:getImpactValue(impactStat, output)
+		t_insert(variantResults, {
+			variant = variant,
+			variantIdx = i,
+			value = value,
+			delta = self:calculateImpactDelta(impactStat, baselineOutput, output),
+			replacedItemLabel = replacementContext.replacedItemLabel,
+			baseOutput = copyTableSafe(baselineOutput, false, true),
+			compareOutput = copyTableSafe(output, false, true),
+		})
+	end
 
 	t_sort(variantResults, function(a, b) return a.delta > b.delta end)
-	return variantResults, baseline
+	return variantResults, realBaseline
 end
 
 -- Compute jewel impact across all empty sockets (for non-variant jewels)
-function RadiusJewelFinderClass:computeSocketImpact(sockets, rawText, statField, isFoulborn, progress, maxTotalPoints)
+function RadiusJewelFinderClass:computeSocketImpact(sockets, rawText, impactStat, isFoulborn, progress, maxTotalPoints, occupiedMode)
+	impactStat = normalizeImpactStat(impactStat)
 	local calcFunc, baseOutput = self.build.calcsTab:GetMiscCalculator()
-	local realBaseline = baseOutput[statField] or 0
+	local realBaseline = self:getImpactValue(impactStat, baseOutput)
 
 	local results = { }
 	for socketIndex, socket in ipairs(sockets) do
 		progressTick(progress, socketIndex - 1, #sockets, socket.label)
-		local slot = self.build.itemsTab.sockets[socket.id]
-		if slot and slot.selItemId == 0 and (not maxTotalPoints or (socket.pathDist or 0) <= maxTotalPoints) then
-			local socketNode = self.build.spec.nodes[socket.id]
-			local slotName = "Jewel " .. tostring(socket.id)
-
-			local emptyJewel = new("Item", "Rarity: Normal\nCobalt Jewel")
-			emptyJewel:BuildModList()
-			local baselineOutput = calcFunc({ 
-				addNodes = { [socketNode] = true },
-				repSlotName = slotName, 
-				repItem = emptyJewel 
-			})
-			local baseline = baselineOutput[statField] or 0
+		local socketAllowed, occupancy = self:socketMatchesOccupiedMode(socket.id, occupiedMode)
+		local accessCost = self:getSocketAccessCost(socket, occupancy)
+		if socketAllowed and (not maxTotalPoints or accessCost <= maxTotalPoints) then
+			local replacementContext = self:buildSocketReplacementContext(calcFunc, socket.id)
+			local socketNode = replacementContext.socketNode
+			local slotName = replacementContext.slotName
+			local baselineOutput = replacementContext.baselineOutput
 
 			local text = rawText
 			local item = new("Item", "Rarity: Unique\n" .. text)
@@ -1551,12 +1663,13 @@ function RadiusJewelFinderClass:computeSocketImpact(sockets, rawText, statField,
 				repSlotName = slotName, 
 				repItem = item 
 			})
-			local value = output[statField] or 0
+			local value = self:getImpactValue(impactStat, output)
 
 			t_insert(results, {
 				socket = socket,
 				value = value,
-				delta = value - baseline,
+				delta = self:calculateImpactDelta(impactStat, baselineOutput, output),
+				replacedItemLabel = occupancy and occupancy.isOccupied and occupancy.itemLabel or nil,
 				baseOutput = copyTableSafe(baselineOutput, false, true),
 				compareOutput = copyTableSafe(output, false, true),
 			})
@@ -1568,27 +1681,22 @@ function RadiusJewelFinderClass:computeSocketImpact(sockets, rawText, statField,
 	return results, realBaseline
 end
 
-function RadiusJewelFinderClass:computeBestVariantSocketImpact(sockets, variants, statField, progress, maxTotalPoints)
+function RadiusJewelFinderClass:computeBestVariantSocketImpact(sockets, variants, impactStat, progress, maxTotalPoints, occupiedMode)
+	impactStat = normalizeImpactStat(impactStat)
 	local calcFunc, baseOutput = self.build.calcsTab:GetMiscCalculator()
-	local realBaseline = baseOutput[statField] or 0
+	local realBaseline = self:getImpactValue(impactStat, baseOutput)
 
 	local results = { }
 	for socketIndex, socket in ipairs(sockets) do
 		progressTick(progress, socketIndex - 1, #sockets, socket.label)
 		local socketProgress = progressChild(progress, (socketIndex - 1) / #sockets, 1 / #sockets)
-		local slot = self.build.itemsTab.sockets[socket.id]
-		if slot and slot.selItemId == 0 and (not maxTotalPoints or (socket.pathDist or 0) <= maxTotalPoints) then
-			local socketNode = self.build.spec.nodes[socket.id]
-			local slotName = "Jewel " .. tostring(socket.id)
-
-			local emptyJewel = new("Item", "Rarity: Normal\nCobalt Jewel")
-			emptyJewel:BuildModList()
-			local baselineOutput = calcFunc({
-				addNodes = { [socketNode] = true },
-				repSlotName = slotName,
-				repItem = emptyJewel
-			})
-			local baseline = baselineOutput[statField] or 0
+		local socketAllowed, occupancy = self:socketMatchesOccupiedMode(socket.id, occupiedMode)
+		local accessCost = self:getSocketAccessCost(socket, occupancy)
+		if socketAllowed and (not maxTotalPoints or accessCost <= maxTotalPoints) then
+			local replacementContext = self:buildSocketReplacementContext(calcFunc, socket.id)
+			local socketNode = replacementContext.socketNode
+			local slotName = replacementContext.slotName
+			local baselineOutput = replacementContext.baselineOutput
 
 			local bestResult
 			for variantIdx, variant in ipairs(variants) do
@@ -1601,8 +1709,8 @@ function RadiusJewelFinderClass:computeBestVariantSocketImpact(sockets, variants
 					repSlotName = slotName,
 					repItem = item
 				})
-				local value = output[statField] or 0
-				local delta = value - baseline
+				local value = self:getImpactValue(impactStat, output)
+				local delta = self:calculateImpactDelta(impactStat, baselineOutput, output)
 
 				if not bestResult or delta > bestResult.delta then
 					bestResult = {
@@ -1611,6 +1719,7 @@ function RadiusJewelFinderClass:computeBestVariantSocketImpact(sockets, variants
 						variantIdx = variantIdx,
 						value = value,
 						delta = delta,
+						replacedItemLabel = occupancy and occupancy.isOccupied and occupancy.itemLabel or nil,
 						baseOutput = copyTableSafe(baselineOutput, false, true),
 						compareOutput = copyTableSafe(output, false, true),
 					}
@@ -1635,6 +1744,9 @@ end
 
 local function isConnectionlessCandidateNode(node, keystoneOnly)
 	if not node then
+		return false
+	end
+	if node.ascendancyName then
 		return false
 	end
 	if node.type == "Socket" or node.type == "ClassStart" or node.type == "AscendClassStart" or node.type == "Mastery" then
@@ -1681,14 +1793,84 @@ local function copyNodeList(nodes)
 	return out
 end
 
-local function buildConnectionlessPlanStep(baseOutput, statField, value, compareOutput, chosenNodes, variantLabel)
+local function buildNodeLabelList(nodes)
+	local labels = { }
+	for _, node in ipairs(nodes or { }) do
+		if type(node) == "table" then
+			if node.label then
+				t_insert(labels, node.label)
+			else
+				t_insert(labels, getPassiveNodeLabel(node))
+			end
+		else
+			t_insert(labels, tostring(node))
+		end
+	end
+	return labels
+end
+
+local function buildNodeEntries(nodes)
+	local entries = { }
+	for _, node in ipairs(nodes or { }) do
+		if type(node) == "table" then
+			t_insert(entries, {
+				label = getPassiveNodeLabel(node),
+				nodeId = node.id,
+			})
+		else
+			t_insert(entries, {
+				label = tostring(node),
+			})
+		end
+	end
+	t_sort(entries, function(a, b)
+		return (a.label or "") < (b.label or "")
+	end)
+	return entries
+end
+
+local function buildReplacementItem(slot)
+	local item = new("Item", "Rarity: Normal\nCobalt Jewel")
+	item:BuildModList()
+	if slot and slot.selItemId == 0 then
+		item.jewelSocketSource = "empty"
+	end
+	return item
+end
+
+function RadiusJewelFinderClass:buildSocketReplacementContext(calcFunc, socketId)
+	local socketNode = self.build.spec.nodes[socketId] or self.build.spec.tree.nodes[socketId]
+	if not socketNode then
+		return nil
+	end
+	local occupancy = self:getSocketOccupancyInfo(socketId)
+	local slotName = "Jewel " .. tostring(socketId)
+	local baselineItem = occupancy.item or buildReplacementItem(occupancy.slot)
+	local baselineOutput = calcFunc({
+		addNodes = { [socketNode] = true },
+		repSlotName = slotName,
+		repItem = baselineItem,
+	})
+	return {
+		socketNode = socketNode,
+		slotName = slotName,
+		occupancy = occupancy,
+		baselineItem = baselineItem,
+		baselineOutput = baselineOutput,
+		replacedItemLabel = occupancy.isOccupied and occupancy.itemLabel or nil,
+	}
+end
+
+local function buildConnectionlessPlanStep(baseOutput, baseValue, value, compareOutput, chosenNodes, variantLabel)
 	local snapshotNodes = copyNodeList(chosenNodes)
 	return {
 		value = value,
-		delta = value - (baseOutput[statField] or 0),
+		delta = value - baseValue,
 		baseOutput = copyTableSafe(baseOutput, false, true),
 		compareOutput = copyTableSafe(compareOutput, false, true),
 		chosenNodes = snapshotNodes,
+		resultNodes = buildNodeEntries(snapshotNodes),
+		resultNodeLabels = buildNodeLabelList(snapshotNodes),
 		addedNodeCount = #snapshotNodes,
 		detailText = buildChosenNodesSummary(snapshotNodes, variantLabel),
 	}
@@ -1770,7 +1952,8 @@ function RadiusJewelFinderClass:collectConnectionlessCandidates(socketNode, opti
 	return candidates
 end
 
-function RadiusJewelFinderClass:computeConnectionlessSimulatedPlan(calcFunc, baseOutput, socketNode, slotName, item, statField, candidates, variantLabel, progressLabel, progress, maxAdditionalNodes)
+function RadiusJewelFinderClass:computeConnectionlessSimulatedPlan(calcFunc, baseOutput, baseValue, socketNode, slotName, item, impactStat, candidates, variantLabel, progressLabel, progress, maxAdditionalNodes)
+	impactStat = normalizeImpactStat(impactStat)
 	local addNodes = { [socketNode] = true }
 	local function calculate(extraNode)
 		local nextNodes = copyTable(addNodes, true)
@@ -1782,14 +1965,14 @@ function RadiusJewelFinderClass:computeConnectionlessSimulatedPlan(calcFunc, bas
 			repSlotName = slotName,
 			repItem = item,
 		})
-		return output, output[statField] or 0
+		return output, self:getImpactValue(impactStat, output)
 	end
 
 	local currentOutput, currentValue = calculate()
 	local chosenNodes = { }
 	local chosenNodeIds = { }
 	if maxAdditionalNodes and maxAdditionalNodes <= 0 then
-		return buildConnectionlessPlanStep(baseOutput, statField, currentValue, currentOutput, chosenNodes, variantLabel)
+		return buildConnectionlessPlanStep(baseOutput, baseValue, currentValue, currentOutput, chosenNodes, variantLabel)
 	end
 	local planSteps = { }
 
@@ -1823,25 +2006,25 @@ function RadiusJewelFinderClass:computeConnectionlessSimulatedPlan(calcFunc, bas
 		t_insert(chosenNodes, bestCandidate.node)
 		currentOutput = bestCandidate.output
 		currentValue = bestCandidate.value
-		t_insert(planSteps, buildConnectionlessPlanStep(baseOutput, statField, currentValue, currentOutput, chosenNodes, variantLabel))
+		t_insert(planSteps, buildConnectionlessPlanStep(baseOutput, baseValue, currentValue, currentOutput, chosenNodes, variantLabel))
 	end
 
-	local result = buildConnectionlessPlanStep(baseOutput, statField, currentValue, currentOutput, chosenNodes, variantLabel)
+	local result = buildConnectionlessPlanStep(baseOutput, baseValue, currentValue, currentOutput, chosenNodes, variantLabel)
 	result.planSteps = planSteps
 	return result
 end
 
-function RadiusJewelFinderClass:computeConnectionlessFastPlan(calcFunc, baseOutput, socketNode, slotName, item, statField, candidates, variantLabel, deltaCache, progressLabel, progress, maxAdditionalNodes)
-	local baseValue = baseOutput[statField] or 0
+function RadiusJewelFinderClass:computeConnectionlessFastPlan(calcFunc, baseOutput, baseValue, socketNode, slotName, item, impactStat, candidates, variantLabel, deltaCache, progressLabel, progress, maxAdditionalNodes)
+	impactStat = normalizeImpactStat(impactStat)
 	local jewelOnlyOutput = calcFunc({
 		addNodes = { [socketNode] = true },
 		repSlotName = slotName,
 		repItem = item,
 	})
-	local jewelOnlyValue = jewelOnlyOutput[statField] or 0
+	local jewelOnlyValue = self:getImpactValue(impactStat, jewelOnlyOutput)
 	if maxAdditionalNodes and maxAdditionalNodes <= 0 then
 		local chosenNodes = { }
-		return buildConnectionlessPlanStep(baseOutput, statField, jewelOnlyValue, jewelOnlyOutput, chosenNodes, variantLabel)
+		return buildConnectionlessPlanStep(baseOutput, baseValue, jewelOnlyValue, jewelOnlyOutput, chosenNodes, variantLabel)
 	end
 	local scoredCandidates = { }
 	for candidateIndex, node in ipairs(candidates) do
@@ -1853,7 +2036,7 @@ function RadiusJewelFinderClass:computeConnectionlessFastPlan(calcFunc, baseOutp
 				repSlotName = slotName,
 				repItem = item,
 			})
-			delta = (output[statField] or 0) - jewelOnlyValue
+			delta = self:getImpactValue(impactStat, output) - jewelOnlyValue
 			deltaCache[node.id] = delta
 		end
 		if delta > 0 then
@@ -1889,24 +2072,26 @@ function RadiusJewelFinderClass:computeConnectionlessFastPlan(calcFunc, baseOutp
 			repSlotName = slotName,
 			repItem = item,
 		})
-		local prefixValue = prefixOutput[statField] or 0
-		t_insert(planSteps, buildConnectionlessPlanStep(baseOutput, statField, prefixValue, prefixOutput, prefixNodes, variantLabel))
+		local prefixValue = self:getImpactValue(impactStat, prefixOutput)
+		t_insert(planSteps, buildConnectionlessPlanStep(baseOutput, baseValue, prefixValue, prefixOutput, prefixNodes, variantLabel))
 	end
 	local finalOutput = calcFunc({
 		addNodes = addNodes,
 		repSlotName = slotName,
 		repItem = item,
 	})
-	local finalValue = finalOutput[statField] or 0
+	local finalValue = self:getImpactValue(impactStat, finalOutput)
 
-	local result = buildConnectionlessPlanStep(baseOutput, statField, finalValue, finalOutput, chosenNodes, variantLabel)
+	local result = buildConnectionlessPlanStep(baseOutput, baseValue, finalValue, finalOutput, chosenNodes, variantLabel)
 	result.planSteps = planSteps
 	return result
 end
 
-function RadiusJewelFinderClass:computeIntuitiveLeapSocketImpact(sockets, statField, isFoulborn, methodId, planCache, progress, maxTotalPoints)
+function RadiusJewelFinderClass:computeIntuitiveLeapSocketImpact(sockets, impactStat, isFoulborn, methodId, planCache, progress, maxTotalPoints, occupiedMode)
+	impactStat = normalizeImpactStat(impactStat)
 	local calcFunc, baseOutput = self.build.calcsTab:GetMiscCalculator()
-	local realBaseline = baseOutput[statField] or 0
+	local realBaseline = self:getImpactValue(impactStat, baseOutput)
+	local statField = impactStat.field
 	local radiusLookup = { }
 	for i, radius in ipairs(data.jewelRadius) do
 		if radius.inner == 0 and not radiusLookup[radius.label] then
@@ -1941,23 +2126,27 @@ function RadiusJewelFinderClass:computeIntuitiveLeapSocketImpact(sockets, statFi
 	for socketIndex, socket in ipairs(sockets) do
 		progressTick(progress, socketIndex - 1, #sockets, socket.label)
 		local socketProgress = progressChild(progress, (socketIndex - 1) / #sockets, 1 / #sockets)
-		local slot = self.build.itemsTab.sockets[socket.id]
-		if slot and slot.selItemId == 0 and (not maxTotalPoints or (socket.pathDist or 0) <= maxTotalPoints) then
-			local socketNode = self.build.spec.tree.nodes[socket.id]
-			local slotName = "Jewel " .. tostring(socket.id)
-			local item = new("Item", "Rarity: Unique\n" .. (isFoulborn and INTUITIVE_LEAP_FOULBORN_RAW_TEXT or INTUITIVE_LEAP_RAW_TEXT))
+		local socketAllowed, occupancy = self:socketMatchesOccupiedMode(socket.id, occupiedMode)
+		local accessCost = self:getSocketAccessCost(socket, occupancy)
+		if socketAllowed and (not maxTotalPoints or accessCost <= maxTotalPoints) then
+			local replacementContext = self:buildSocketReplacementContext(calcFunc, socket.id)
+			local socketNode = replacementContext.socketNode
+			local slotName = replacementContext.slotName
+			local item = new("Item", "Rarity: Unique\n" .. (isFoulborn and INTUITIVE_LEAP_FOULBORN_RAW_TEXT or mustGetUniqueRawText("Intuitive Leap")))
 			item:BuildModList()
 			local candidates = self:collectConnectionlessCandidates(socketNode, candidateOptions)
-			local maxAdditionalNodes = maxTotalPoints and math.max(maxTotalPoints - (socket.pathDist or 0), 0) or nil
+			local maxAdditionalNodes = maxTotalPoints and math.max(maxTotalPoints - accessCost, 0) or nil
+			local socketBaseline = self:getImpactValue(impactStat, replacementContext.baselineOutput)
 			local result
 			if methodId == "fast" then
 				local cacheKey = s_format("IL|%s|%s|%d", statField, isFoulborn and "1" or "0", socket.id)
 				planCache[cacheKey] = planCache[cacheKey] or { }
-				result = self:computeConnectionlessFastPlan(calcFunc, baseOutput, socketNode, slotName, item, statField, candidates, nil, planCache[cacheKey], socket.label, socketProgress, maxAdditionalNodes)
+				result = self:computeConnectionlessFastPlan(calcFunc, replacementContext.baselineOutput, socketBaseline, socketNode, slotName, item, impactStat, candidates, nil, planCache[cacheKey], socket.label, socketProgress, maxAdditionalNodes)
 			else
-				result = self:computeConnectionlessSimulatedPlan(calcFunc, baseOutput, socketNode, slotName, item, statField, candidates, nil, socket.label, socketProgress, maxAdditionalNodes)
+				result = self:computeConnectionlessSimulatedPlan(calcFunc, replacementContext.baselineOutput, socketBaseline, socketNode, slotName, item, impactStat, candidates, nil, socket.label, socketProgress, maxAdditionalNodes)
 			end
 			result.socket = socket
+			result.replacedItemLabel = occupancy and occupancy.isOccupied and occupancy.itemLabel or nil
 			t_insert(results, result)
 			progressTick(socketProgress, 1, 1, socket.label)
 		end
@@ -1967,35 +2156,40 @@ function RadiusJewelFinderClass:computeIntuitiveLeapSocketImpact(sockets, statFi
 	return results, realBaseline
 end
 
-function RadiusJewelFinderClass:computeThreadOfHopeSocketImpact(sockets, statField, threadVariants, methodId, planCache, progress, maxTotalPoints)
+function RadiusJewelFinderClass:computeThreadOfHopeSocketImpact(sockets, impactStat, threadVariants, methodId, planCache, progress, maxTotalPoints, occupiedMode)
+	impactStat = normalizeImpactStat(impactStat)
 	local calcFunc, baseOutput = self.build.calcsTab:GetMiscCalculator()
-	local realBaseline = baseOutput[statField] or 0
+	local realBaseline = self:getImpactValue(impactStat, baseOutput)
+	local statField = impactStat.field
 	local results = { }
 
 	for socketIndex, socket in ipairs(sockets) do
 		progressTick(progress, socketIndex - 1, #sockets, socket.label)
 		local socketProgress = progressChild(progress, (socketIndex - 1) / #sockets, 1 / #sockets)
-		local slot = self.build.itemsTab.sockets[socket.id]
-		if slot and slot.selItemId == 0 and (not maxTotalPoints or (socket.pathDist or 0) <= maxTotalPoints) then
-			local socketNode = self.build.spec.tree.nodes[socket.id]
-			local slotName = "Jewel " .. tostring(socket.id)
+		local socketAllowed, occupancy = self:socketMatchesOccupiedMode(socket.id, occupiedMode)
+		local accessCost = self:getSocketAccessCost(socket, occupancy)
+		if socketAllowed and (not maxTotalPoints or accessCost <= maxTotalPoints) then
+			local replacementContext = self:buildSocketReplacementContext(calcFunc, socket.id)
+			local socketNode = replacementContext.socketNode
+			local slotName = replacementContext.slotName
+			local socketBaseline = self:getImpactValue(impactStat, replacementContext.baselineOutput)
 			local bestResult
 			for variantIndex, threadVariant in ipairs(threadVariants) do
 				local variantProgress = progressChild(socketProgress, (variantIndex - 1) / #threadVariants, 1 / #threadVariants)
-				local item = new("Item", "Rarity: Unique\n" .. THREAD_OF_HOPE_RAW_TEXT)
+				local item = new("Item", "Rarity: Unique\n" .. mustGetUniqueRawText("Thread of Hope"))
 				item.variant = variantIndex
 				item:BuildModList()
 				local candidates = self:collectConnectionlessCandidates(socketNode, {
 					radiusIndex = threadVariant.radiusIndex,
 				})
-				local maxAdditionalNodes = maxTotalPoints and math.max(maxTotalPoints - (socket.pathDist or 0), 0) or nil
+				local maxAdditionalNodes = maxTotalPoints and math.max(maxTotalPoints - accessCost, 0) or nil
 				local result
 				if methodId == "fast" then
 					local cacheKey = s_format("TOH|%s|%d|%d", statField, socket.id, variantIndex)
 					planCache[cacheKey] = planCache[cacheKey] or { }
-					result = self:computeConnectionlessFastPlan(calcFunc, baseOutput, socketNode, slotName, item, statField, candidates, threadVariant.name .. " Ring", planCache[cacheKey], socket.label .. " | " .. threadVariant.name .. " Ring", variantProgress, maxAdditionalNodes)
+					result = self:computeConnectionlessFastPlan(calcFunc, replacementContext.baselineOutput, socketBaseline, socketNode, slotName, item, impactStat, candidates, threadVariant.name .. " Ring", planCache[cacheKey], socket.label .. " | " .. threadVariant.name .. " Ring", variantProgress, maxAdditionalNodes)
 				else
-					result = self:computeConnectionlessSimulatedPlan(calcFunc, baseOutput, socketNode, slotName, item, statField, candidates, threadVariant.name .. " Ring", socket.label .. " | " .. threadVariant.name .. " Ring", variantProgress, maxAdditionalNodes)
+					result = self:computeConnectionlessSimulatedPlan(calcFunc, replacementContext.baselineOutput, socketBaseline, socketNode, slotName, item, impactStat, candidates, threadVariant.name .. " Ring", socket.label .. " | " .. threadVariant.name .. " Ring", variantProgress, maxAdditionalNodes)
 				end
 				result.variant = threadVariant
 				if not bestResult
@@ -2007,6 +2201,7 @@ function RadiusJewelFinderClass:computeThreadOfHopeSocketImpact(sockets, statFie
 			end
 			if bestResult then
 				bestResult.socket = socket
+				bestResult.replacedItemLabel = occupancy and occupancy.isOccupied and occupancy.itemLabel or nil
 				t_insert(results, bestResult)
 			end
 			progressTick(socketProgress, 1, 1, socket.label)
@@ -2022,30 +2217,30 @@ function RadiusJewelFinderClass:computeThreadOfHopeSocketImpact(sockets, statFie
 	return results, realBaseline
 end
 
-function RadiusJewelFinderClass:computeSplitPersonalitySocketImpact(sockets, statField, variants, progress, maxTotalPoints)
+function RadiusJewelFinderClass:computeSplitPersonalitySocketImpact(sockets, impactStat, variants, progress, maxTotalPoints, occupiedMode)
+	impactStat = normalizeImpactStat(impactStat)
 	local calcFunc, baseOutput = self.build.calcsTab:GetMiscCalculator()
-	local realBaseline = baseOutput[statField] or 0
+	local realBaseline = self:getImpactValue(impactStat, baseOutput)
 	local results = { }
 
 	for socketIndex, socket in ipairs(sockets) do
 		progressTick(progress, socketIndex - 1, #sockets, socket.label)
 		local socketProgress = progressChild(progress, (socketIndex - 1) / #sockets, 1 / #sockets)
-		local slot = self.build.itemsTab.sockets[socket.id]
-		if slot and slot.selItemId == 0 and (not maxTotalPoints or (socket.pathDist or 0) <= maxTotalPoints) then
-			local socketNode = self.build.spec.nodes[socket.id]
-			local slotName = "Jewel " .. tostring(socket.id)
+		local socketAllowed, occupancy = self:socketMatchesOccupiedMode(socket.id, occupiedMode)
+		local accessCost = self:getSocketAccessCost(socket, occupancy)
+		if socketAllowed and (not maxTotalPoints or accessCost <= maxTotalPoints) then
+			local replacementContext = self:buildSocketReplacementContext(calcFunc, socket.id)
+			local socketNode = replacementContext.socketNode
+			local slotName = replacementContext.slotName
 			local splitDistance = socket.classStartDist or self:getSocketDistanceToClassStart(socket.id)
 			local previousDistance = socketNode.distanceToClassStart
 
-			local emptyJewel = new("Item", "Rarity: Normal\nCobalt Jewel")
-			emptyJewel:BuildModList()
 			socketNode.distanceToClassStart = splitDistance
 			local baselineOutput = calcFunc({
 				addNodes = { [socketNode] = true },
 				repSlotName = slotName,
-				repItem = emptyJewel,
+				repItem = replacementContext.baselineItem,
 			})
-			local baseline = baselineOutput[statField] or 0
 
 			local bestResult
 			for variantIdx, variant in ipairs(variants) do
@@ -2057,8 +2252,8 @@ function RadiusJewelFinderClass:computeSplitPersonalitySocketImpact(sockets, sta
 					repSlotName = slotName,
 					repItem = item,
 				})
-				local value = output[statField] or 0
-				local delta = value - baseline
+				local value = self:getImpactValue(impactStat, output)
+				local delta = self:calculateImpactDelta(impactStat, baselineOutput, output)
 				if not bestResult or delta > bestResult.delta then
 					bestResult = {
 						socket = socket,
@@ -2066,6 +2261,7 @@ function RadiusJewelFinderClass:computeSplitPersonalitySocketImpact(sockets, sta
 						variantIdx = variantIdx,
 						value = value,
 						delta = delta,
+						replacedItemLabel = occupancy and occupancy.isOccupied and occupancy.itemLabel or nil,
 						baseOutput = copyTableSafe(baselineOutput, false, true),
 						compareOutput = copyTableSafe(output, false, true),
 						detailText = s_format("Dist %d | %s", splitDistance, variant.name),
@@ -2091,9 +2287,11 @@ function RadiusJewelFinderClass:computeSplitPersonalitySocketImpact(sockets, sta
 	return results, realBaseline
 end
 
-function RadiusJewelFinderClass:computeImpossibleEscapeSocketImpact(sockets, statField, variants, methodId, planCache, progress, maxTotalPoints)
+function RadiusJewelFinderClass:computeImpossibleEscapeSocketImpact(sockets, impactStat, variants, methodId, planCache, progress, maxTotalPoints, occupiedMode)
+	impactStat = normalizeImpactStat(impactStat)
 	local calcFunc, baseOutput = self.build.calcsTab:GetMiscCalculator()
-	local realBaseline = baseOutput[statField] or 0
+	local realBaseline = self:getImpactValue(impactStat, baseOutput)
+	local statField = impactStat.field
 	local results = { }
 	local smallRadiusIndex
 	for i, radius in ipairs(data.jewelRadius) do
@@ -2103,55 +2301,109 @@ function RadiusJewelFinderClass:computeImpossibleEscapeSocketImpact(sockets, sta
 		end
 	end
 
-	local eligibleSockets = { }
-	local groupedSockets = { }
-	local groupedBudgets = { }
-	for _, socket in ipairs(sockets) do
-		local slot = self.build.itemsTab.sockets[socket.id]
-		if slot and slot.selItemId == 0 and (not maxTotalPoints or (socket.pathDist or 0) <= maxTotalPoints) then
-			t_insert(eligibleSockets, socket)
-			local remainingBudget = maxTotalPoints and math.max(maxTotalPoints - (socket.pathDist or 0), 0) or -1
-			if not groupedSockets[remainingBudget] then
-				groupedSockets[remainingBudget] = { }
-				t_insert(groupedBudgets, remainingBudget)
-			end
-			t_insert(groupedSockets[remainingBudget], socket)
+	local variantContexts = { }
+	for _, variant in ipairs(variants) do
+		local keystoneNode = self.build.spec.tree.keystoneMap[variant.keystoneName]
+		if keystoneNode and keystoneNode.nodesInRadius and keystoneNode.nodesInRadius[smallRadiusIndex] then
+			local item = new("Item", "Rarity: Unique\n" .. variant.rawText)
+			item:BuildModList()
+			variantContexts[variant.name] = {
+				variant = variant,
+				item = item,
+				keystoneNode = keystoneNode,
+				candidates = self:collectConnectionlessCandidates(nil, {
+					collectNodes = function()
+						return keystoneNode.nodesInRadius[smallRadiusIndex]
+					end,
+				}),
+			}
 		end
 	end
-	if #eligibleSockets == 0 then
+
+	local groupedEntries = { }
+	local groupedOrder = { }
+	for _, socket in ipairs(sockets) do
+		local socketAllowed, occupancy = self:socketMatchesOccupiedMode(socket.id, occupiedMode)
+		local accessCost = self:getSocketAccessCost(socket, occupancy)
+		if socketAllowed and (not maxTotalPoints or accessCost <= maxTotalPoints) then
+			local remainingBudget = maxTotalPoints and math.max(maxTotalPoints - accessCost, 0) or -1
+			local groupKey = occupancy and occupancy.isOccupied and ("occupied:" .. socket.id) or ("free:" .. tostring(remainingBudget))
+			if not groupedEntries[groupKey] then
+				groupedEntries[groupKey] = {
+					groupKey = groupKey,
+					remainingBudget = remainingBudget,
+					sockets = { },
+					representativeSocket = socket,
+					occupancy = occupancy,
+				}
+				t_insert(groupedOrder, groupedEntries[groupKey])
+			end
+			t_insert(groupedEntries[groupKey].sockets, socket)
+		end
+	end
+	if #groupedOrder == 0 then
 		return results, realBaseline
 	end
 
-	t_sort(groupedBudgets, function(a, b) return a > b end)
-	local representativeSocket = eligibleSockets[1]
-	local representativeSocketNode = self.build.spec.tree.nodes[representativeSocket.id]
-	local representativeSlotName = "Jewel " .. tostring(representativeSocket.id)
-	local bestResultByBudget = { }
-	local totalPlanCount = #groupedBudgets * #variants
+	t_sort(groupedOrder, function(a, b)
+		if a.remainingBudget ~= b.remainingBudget then
+			return a.remainingBudget > b.remainingBudget
+		end
+		return a.representativeSocket.id < b.representativeSocket.id
+	end)
+	local bestResultByGroupKey = { }
+	local totalPlanCount = #groupedOrder * #variants
 	local currentPlanIndex = 0
 
-	for _, remainingBudget in ipairs(groupedBudgets) do
+	for _, groupEntry in ipairs(groupedOrder) do
+		local representativeSocket = groupEntry.representativeSocket
+		local replacementContext = self:buildSocketReplacementContext(calcFunc, representativeSocket.id)
+		local representativeSocketNode = replacementContext.socketNode
+		local representativeSlotName = replacementContext.slotName
+		local socketBaseline = self:getImpactValue(impactStat, replacementContext.baselineOutput)
 		local bestResult
 		for _, variant in ipairs(variants) do
 			currentPlanIndex = currentPlanIndex + 1
 			local planProgress = progressChild(progress, (currentPlanIndex - 1) / totalPlanCount, 1 / totalPlanCount)
-			local keystoneNode = self.build.spec.tree.keystoneMap[variant.keystoneName]
-			if keystoneNode and keystoneNode.nodesInRadius and keystoneNode.nodesInRadius[smallRadiusIndex] then
-				local item = new("Item", "Rarity: Unique\n" .. variant.rawText)
-				item:BuildModList()
-				local candidates = self:collectConnectionlessCandidates(representativeSocketNode, {
-					collectNodes = function()
-						return keystoneNode.nodesInRadius[smallRadiusIndex]
-					end,
-				})
-				local maxAdditionalNodes = remainingBudget >= 0 and remainingBudget or nil
+			local variantContext = variantContexts[variant.name]
+			if variantContext then
+				local maxAdditionalNodes = groupEntry.remainingBudget >= 0 and groupEntry.remainingBudget or nil
 				local result
 				if methodId == "fast" then
-					local cacheKey = s_format("IE|%s|%s", statField, variant.name)
+					local cacheKey = groupEntry.occupancy and groupEntry.occupancy.isOccupied
+						and s_format("IE|%s|%s|%d", statField, variant.name, representativeSocket.id)
+						or s_format("IE|%s|%s|free", statField, variant.name)
 					planCache[cacheKey] = planCache[cacheKey] or { }
-					result = self:computeConnectionlessFastPlan(calcFunc, baseOutput, representativeSocketNode, representativeSlotName, item, statField, candidates, variant.name, planCache[cacheKey], variant.name, planProgress, maxAdditionalNodes)
+					result = self:computeConnectionlessFastPlan(
+						calcFunc,
+						replacementContext.baselineOutput,
+						socketBaseline,
+						representativeSocketNode,
+						representativeSlotName,
+						variantContext.item,
+						impactStat,
+						variantContext.candidates,
+						variant.name,
+						planCache[cacheKey],
+						variant.name,
+						planProgress,
+						maxAdditionalNodes
+					)
 				else
-					result = self:computeConnectionlessSimulatedPlan(calcFunc, baseOutput, representativeSocketNode, representativeSlotName, item, statField, candidates, variant.name, variant.name, planProgress, maxAdditionalNodes)
+					result = self:computeConnectionlessSimulatedPlan(
+						calcFunc,
+						replacementContext.baselineOutput,
+						socketBaseline,
+						representativeSocketNode,
+						representativeSlotName,
+						variantContext.item,
+						impactStat,
+						variantContext.candidates,
+						variant.name,
+						variant.name,
+						planProgress,
+						maxAdditionalNodes
+					)
 				end
 				result.variant = variant
 				if not bestResult
@@ -2161,16 +2413,18 @@ function RadiusJewelFinderClass:computeImpossibleEscapeSocketImpact(sockets, sta
 					bestResult = result
 				end
 			end
+			progressTick(planProgress, 1, 1, variant.name)
 		end
-		bestResultByBudget[remainingBudget] = bestResult
+		bestResultByGroupKey[groupEntry.groupKey] = bestResult
 	end
 
-	for _, remainingBudget in ipairs(groupedBudgets) do
-		local bestResult = bestResultByBudget[remainingBudget]
+	for _, groupEntry in ipairs(groupedOrder) do
+		local bestResult = bestResultByGroupKey[groupEntry.groupKey]
 		if bestResult then
-			for _, socket in ipairs(groupedSockets[remainingBudget]) do
+			for _, socket in ipairs(groupEntry.sockets) do
 				local projectedResult = copyTableSafe(bestResult, false, true)
 				projectedResult.socket = socket
+				projectedResult.replacedItemLabel = groupEntry.occupancy and groupEntry.occupancy.isOccupied and groupEntry.occupancy.itemLabel or nil
 				t_insert(results, projectedResult)
 			end
 		end
@@ -2193,7 +2447,7 @@ end
 scoreAllocPassives = function(nodes, allocNodes)
 	local s = 0
 	for nodeId, node in pairs(nodes) do
-		if allocNodes[nodeId] and node.type ~= "Socket" and node.type ~= "ClassStart"
+		if not node.ascendancyName and allocNodes[nodeId] and node.type ~= "Socket" and node.type ~= "ClassStart"
 				and node.type ~= "AscendClassStart" and node.type ~= "Mastery" then
 			s = s + 1
 		end
@@ -2204,7 +2458,7 @@ end
 local function scoreUnallocPassives(nodes, allocNodes)
 	local s = 0
 	for nodeId, node in pairs(nodes) do
-		if not allocNodes[nodeId] and node.type ~= "Socket" and node.type ~= "ClassStart"
+		if not node.ascendancyName and not allocNodes[nodeId] and node.type ~= "Socket" and node.type ~= "ClassStart"
 				and node.type ~= "AscendClassStart" and node.type ~= "Mastery" then
 			s = s + 1
 		end
@@ -2293,7 +2547,7 @@ local function buildJewelTypes(radiusIndexByLabel, isFoulborn)
 			radiusIndex = radiusIndexByLabel["Large"],
 			scoreLabel = "alloc small passives",
 			hasCompute = true,
-			rawText = MIGHT_OF_MEEK_RAW_TEXT,
+			rawText = mustGetUniqueRawText("Might of the Meek"),
 			score = function(nodes, allocNodes)
 				local s = 0
 				for nodeId, node in pairs(nodes) do
@@ -2310,7 +2564,7 @@ local function buildJewelTypes(radiusIndexByLabel, isFoulborn)
 			hasCompute = true,
 			radiusIndex = radiusIndexByLabel["Small"],
 			scoreLabel = "alloc notables",
-			rawText = INSPIRED_LEARNING_RAW_TEXT,
+			rawText = mustGetUniqueRawText("Inspired Learning"),
 			score = function(nodes, allocNodes)
 				local s = 0
 				for nodeId, node in pairs(nodes) do
@@ -2338,7 +2592,7 @@ local function buildJewelTypes(radiusIndexByLabel, isFoulborn)
 		radiusIndex = radiusIndexByLabel["Small"],
 		scoreLabel = isFoulborn and "unalloc notable - alloc notable" or "unalloc small - alloc small",
 		hasCompute = true,
-		rawText = isFoulborn and UNNATURAL_INSTINCT_FOULBORN_RAW_TEXT or UNNATURAL_INSTINCT_RAW_TEXT,
+		rawText = isFoulborn and UNNATURAL_INSTINCT_FOULBORN_RAW_TEXT or mustGetUniqueRawText("Unnatural Instinct"),
 		variants = isFoulborn and UNNATURAL_INSTINCT_FOULBORN_VARIANTS or nil,
 		score = function(nodes, allocNodes)
 			local gained, lost = 0, 0
@@ -2359,7 +2613,7 @@ local function buildJewelTypes(radiusIndexByLabel, isFoulborn)
 		scoreLabel = "alloc passives",
 		hasCompute = true,
 		isLegacy = true,
-		rawText = ANATOMICAL_KNOWLEDGE_RAW_TEXT,
+		rawText = mustGetUniqueRawText("Anatomical Knowledge"),
 		score = scoreAllocPassives,
 	})
 	t_insert(jewelTypes, {
@@ -2368,9 +2622,9 @@ local function buildJewelTypes(radiusIndexByLabel, isFoulborn)
 		scoreLabel = "attr in radius",
 		hasCompute = true,
 		score = function(nodes, allocNodes)
-			return TEMPERED_TRANSCENDENT_VARIANTS[1].score(nodes, allocNodes)
+			return getTemperedTranscendentVariants()[1].score(nodes, allocNodes)
 		end,
-		variants = TEMPERED_TRANSCENDENT_VARIANTS,
+		variants = getTemperedTranscendentVariants(),
 	})
 	t_insert(jewelTypes, {
 		name = "Lioneye's Fall",
@@ -2378,7 +2632,7 @@ local function buildJewelTypes(radiusIndexByLabel, isFoulborn)
 		radiusIndex = radiusIndexByLabel["Medium"],
 		scoreLabel = "alloc passives",
 		hasCompute = true,
-		rawText = isFoulborn and LIONEYES_FALL_FOULBORN_RAW_TEXT or LIONEYES_FALL_RAW_TEXT,
+		rawText = isFoulborn and LIONEYES_FALL_FOULBORN_RAW_TEXT or mustGetUniqueRawText("Lioneye's Fall"),
 		score = scoreAllocPassives,
 	})
 	t_insert(jewelTypes, {
@@ -2388,7 +2642,7 @@ local function buildJewelTypes(radiusIndexByLabel, isFoulborn)
 		scoreLabel = isFoulborn and "unalloc keystones" or "unalloc passives",
 		hasCompute = true,
 		computeMethods = CONNECTIONLESS_COMPUTE_METHODS,
-		rawText = isFoulborn and INTUITIVE_LEAP_FOULBORN_RAW_TEXT or INTUITIVE_LEAP_RAW_TEXT,
+		rawText = isFoulborn and INTUITIVE_LEAP_FOULBORN_RAW_TEXT or mustGetUniqueRawText("Intuitive Leap"),
 		score = function(nodes, allocNodes)
 			if isFoulborn then
 				local s = 0
@@ -2417,7 +2671,7 @@ local function buildJewelTypes(radiusIndexByLabel, isFoulborn)
 			end
 			return s
 		end,
-		variants = IMPOSSIBLE_ESCAPE_VARIANTS,
+		variants = getImpossibleEscapeVariants(),
 	})
 	t_insert(jewelTypes, {
 		name = "Split Personality",
@@ -2427,7 +2681,7 @@ local function buildJewelTypes(radiusIndexByLabel, isFoulborn)
 		score = function()
 			return 0
 		end,
-		variants = SPLIT_PERSONALITY_VARIANTS,
+		variants = getSplitPersonalityVariants(),
 	})
 	t_insert(jewelTypes, {
 		name = "Stat Conversion",
@@ -2436,9 +2690,9 @@ local function buildJewelTypes(radiusIndexByLabel, isFoulborn)
 		hasCompute = true,
 		score = scoreAllocPassives,
 		variants = {
-			{ name = "Energy From Within", rawText = ENERGY_FROM_WITHIN_RAW_TEXT },
-			{ name = "Healthy Mind",       rawText = HEALTHY_MIND_RAW_TEXT },
-			{ name = "Energised Armour",   rawText = ENERGISED_ARMOUR_RAW_TEXT },
+			{ name = "Energy From Within", rawText = mustGetUniqueRawText("Energy From Within") },
+			{ name = "Healthy Mind",       rawText = mustGetUniqueRawText("Healthy Mind") },
+			{ name = "Energised Armour",   rawText = mustGetUniqueRawText("Energised Armour") },
 		},
 	})
 	t_insert(jewelTypes, {
@@ -2448,12 +2702,12 @@ local function buildJewelTypes(radiusIndexByLabel, isFoulborn)
 		hasCompute = true,
 		score = scoreAllocPassives,
 		variants = {
-			{ name = "Brute Force Solution", rawText = BRUTE_FORCE_SOLUTION_RAW_TEXT },
-			{ name = "Careful Planning",     rawText = CAREFUL_PLANNING_RAW_TEXT },
-			{ name = "Efficient Training",   rawText = EFFICIENT_TRAINING_RAW_TEXT },
-			{ name = "Fertile Mind",         rawText = FERTILE_MIND_RAW_TEXT },
-			{ name = "Fluid Motion",         rawText = FLUID_MOTION_RAW_TEXT },
-			{ name = "Inertia",              rawText = INERTIA_RAW_TEXT },
+			{ name = "Brute Force Solution", rawText = mustGetUniqueRawText("Brute Force Solution") },
+			{ name = "Careful Planning",     rawText = mustGetUniqueRawText("Careful Planning") },
+			{ name = "Efficient Training",   rawText = mustGetUniqueRawText("Efficient Training") },
+			{ name = "Fertile Mind",         rawText = mustGetUniqueRawText("Fertile Mind") },
+			{ name = "Fluid Motion",         rawText = mustGetUniqueRawText("Fluid Motion") },
+			{ name = "Inertia",              rawText = mustGetUniqueRawText("Inertia") },
 		},
 	})
 	t_insert(jewelTypes, {
@@ -2463,9 +2717,9 @@ local function buildJewelTypes(radiusIndexByLabel, isFoulborn)
 		hasCompute = true,
 		score = scoreAllocPassives,
 		variants = {
-			{ name = "Combat Focus (Crimson)",  rawText = COMBAT_FOCUS_CRIMSON_RAW_TEXT },
-			{ name = "Combat Focus (Cobalt)",   rawText = COMBAT_FOCUS_COBALT_RAW_TEXT },
-			{ name = "Combat Focus (Viridian)", rawText = COMBAT_FOCUS_VIRIDIAN_RAW_TEXT },
+			{ name = "Combat Focus (Crimson)",  rawText = mustGetUniqueRawText("Combat Focus", "Crimson Jewel") },
+			{ name = "Combat Focus (Cobalt)",   rawText = mustGetUniqueRawText("Combat Focus", "Cobalt Jewel") },
+			{ name = "Combat Focus (Viridian)", rawText = mustGetUniqueRawText("Combat Focus", "Viridian Jewel") },
 		},
 	})
 	t_insert(jewelTypes, {
@@ -2476,12 +2730,12 @@ local function buildJewelTypes(radiusIndexByLabel, isFoulborn)
 		hasCompute = true,
 		score = scoreAllocPassives,
 		variants = isFoulborn and DREAMS_NIGHTMARES_FOULBORN_VARIANTS or {
-			{ name = "The Red Dream",       rawText = THE_RED_DREAM_RAW_TEXT },
-			{ name = "The Red Nightmare",   rawText = THE_RED_NIGHTMARE_RAW_TEXT },
-			{ name = "The Green Dream",     rawText = THE_GREEN_DREAM_RAW_TEXT },
-			{ name = "The Green Nightmare", rawText = THE_GREEN_NIGHTMARE_RAW_TEXT },
-			{ name = "The Blue Dream",      rawText = THE_BLUE_DREAM_RAW_TEXT },
-			{ name = "The Blue Nightmare",  rawText = THE_BLUE_NIGHTMARE_RAW_TEXT },
+			{ name = "The Red Dream",       rawText = mustGetCurrentUniqueRawText("The Red Dream") },
+			{ name = "The Red Nightmare",   rawText = mustGetCurrentUniqueRawText("The Red Nightmare") },
+			{ name = "The Green Dream",     rawText = mustGetCurrentUniqueRawText("The Green Dream") },
+			{ name = "The Green Nightmare", rawText = mustGetCurrentUniqueRawText("The Green Nightmare") },
+			{ name = "The Blue Dream",      rawText = mustGetCurrentUniqueRawText("The Blue Dream") },
+			{ name = "The Blue Nightmare",  rawText = mustGetCurrentUniqueRawText("The Blue Nightmare") },
 		},
 	})
 	t_insert(jewelTypes, {
@@ -2564,6 +2818,7 @@ function RadiusJewelFinderClass:Open()
 	local selectedJewelVariant   = nil  -- set when jewel type has built-in variants
 	local selectedComputeMethod  = CONNECTIONLESS_COMPUTE_METHODS[2]
 	local selectedMaxPoints      = nil
+	local selectedOccupiedMode   = OCCUPIED_SOCKET_OPTIONS[1]
 	local dreamFamilyOptions     = {
 		{ name = "All", value = "ALL" },
 		{ name = "Red Dream", value = "The Red Dream" },
@@ -2593,6 +2848,8 @@ function RadiusJewelFinderClass:Open()
 
 	local impactStatLabels = { }
 	for _, s in ipairs(IMPACT_STATS) do t_insert(impactStatLabels, s.label) end
+	local occupiedModeLabels = { }
+	for _, option in ipairs(OCCUPIED_SOCKET_OPTIONS) do t_insert(occupiedModeLabels, option.label) end
 	local selectedImpactStat = IMPACT_STATS[1]
 	local finderState = self.build.radiusJewelFinderState or { }
 	self.build.radiusJewelFinderState = finderState
@@ -2619,6 +2876,7 @@ function RadiusJewelFinderClass:Open()
 		finderState.impactStatLabel = selectedImpactStat and selectedImpactStat.label or nil
 		finderState.computeMethodId = selectedComputeMethod and selectedComputeMethod.id or nil
 		finderState.maxPoints = selectedMaxPoints
+		finderState.occupiedModeId = selectedOccupiedMode and selectedOccupiedMode.id or nil
 		finderState.socketId = selectedSocket and selectedSocket.id or nil
 	end
 
@@ -2636,6 +2894,7 @@ function RadiusJewelFinderClass:Open()
 			selectedImpactStat and selectedImpactStat.field or "",
 			computeMethodKey,
 			selectedMaxPoints and tostring(selectedMaxPoints) or "",
+			selectedOccupiedMode and selectedOccupiedMode.id or "",
 			selectedSocket and tostring(selectedSocket.id) or "",
 		}, "|")
 	end
@@ -2681,6 +2940,9 @@ function RadiusJewelFinderClass:Open()
 	local function formatVariantStatus(label, statLabel, baseline)
 		return s_format("^7%s | %s %.1f", label, statLabel, baseline)
 	end
+	local function formatReplacementLabel(replacedItemLabel)
+		return replacedItemLabel and ("Replace " .. replacedItemLabel) or "Free socket"
+	end
 	local function setComputeProgress(message)
 		controls.statusLabel.label = message
 		controls.resultsList:SetMode("message", {
@@ -2723,7 +2985,7 @@ function RadiusJewelFinderClass:Open()
 	return selectedJewelType.variants
 end
 
-local function buildPreviewLinesForJewelType(jewelType, previewIsFoulborn)
+local function buildPreviewLinesForJewelType(jewelType, previewIsFoulborn, previewVariantOverride)
 	if not jewelType then
 			return nil
 		end
@@ -2733,14 +2995,65 @@ local function buildPreviewLinesForJewelType(jewelType, previewIsFoulborn)
 	end
 	local selectedTypeMatches = selectedJewelType and selectedJewelType.name == jewelType.name
 	if jewelType.isLightOfMeaning then
-		return fn(selectedLOMVariant, previewIsFoulborn)
+		return fn(previewVariantOverride or selectedLOMVariant, previewIsFoulborn)
 	elseif jewelType.isThread then
-		return fn(selectedThreadVariant and selectedThreadVariant.name, previewIsFoulborn)
+		local threadVariant = previewVariantOverride or selectedThreadVariant
+		return fn(threadVariant and threadVariant.name, previewIsFoulborn)
 	elseif jewelType.variants then
-		local previewVariant = (selectedTypeMatches and selectedJewelVariant) or jewelType.variants[1]
+		local previewVariant = previewVariantOverride or ((selectedTypeMatches and selectedJewelVariant) or jewelType.variants[1])
 		return fn(previewVariant, previewIsFoulborn)
 	end
 	return fn(nil, previewIsFoulborn)
+end
+
+local function addPreviewLinesToTooltip(tooltip, lines)
+	if type(lines) ~= "table" then
+		return
+	end
+	tooltip:Clear(true)
+	for _, line in ipairs(lines) do
+		tooltip:AddLine(line.height or 16, line[1], line.font)
+	end
+end
+
+local function buildGenericTypeTooltipLinesForJewelType(jewelType, previewIsFoulborn)
+	if not jewelType then
+		return nil
+	end
+	if not (jewelType.isLightOfMeaning or jewelType.isThread or jewelType.variants) then
+		local lines = buildPreviewLinesForJewelType(jewelType, previewIsFoulborn)
+		if type(lines) ~= "table" then
+			return nil
+		end
+		return lines
+	end
+	local fn = jewelPreviewFn[jewelType.name]
+	local lines = fn and fn(nil, previewIsFoulborn) or nil
+	if type(lines) ~= "table" then
+		return nil
+	end
+
+	local genericLines = { }
+	local blankCount = 0
+	for _, line in ipairs(lines) do
+		t_insert(genericLines, line)
+		if line[1] == "" then
+			blankCount = blankCount + 1
+			if blankCount >= 2 then
+				break
+			end
+		end
+	end
+	local note
+	if jewelType.isLightOfMeaning then
+		note = "Multiple stat variants available"
+	elseif jewelType.isThread then
+		note = "Multiple ring sizes available"
+	else
+		note = "Multiple variants available"
+	end
+	t_insert(genericLines, { height = 16, [1] = COL_META .. note })
+	return genericLines
 end
 	local function isAnyFinderDropdownDropped()
 		return (controls.jewelTypeSelect and controls.jewelTypeSelect.dropped)
@@ -2749,6 +3062,7 @@ end
 			or (controls.threadVariantSelect and controls.threadVariantSelect.dropped)
 			or (controls.variantFamilySelect and controls.variantFamilySelect.dropped)
 			or (controls.impactStatSelect and controls.impactStatSelect.dropped)
+			or (controls.occupiedModeSelect and controls.occupiedModeSelect.dropped)
 			or (controls.socketSelect and controls.socketSelect.dropped)
 	end
 
@@ -2794,11 +3108,57 @@ end
 
 	-- ── Preview list (right panel) ────────────────────────────────────────────
 	local previewListData = { }
-	controls.previewList = new("TextListControl", TL, { 600, 70, 440, 360 },
+	local resultDetailListData = { }
+	local function updateResultDetails(row)
+		wipeTable(resultDetailListData)
+		if not row then
+			t_insert(resultDetailListData, { height = 16, [1] = COL_META .. "Select a result to inspect its recommended nodes." })
+			return
+		end
+		t_insert(resultDetailListData, { height = 16, [1] = "^7Socket: " .. (row.socketLabel or "(n/a)") })
+		if row.variantLabel and row.variantLabel ~= "" then
+			t_insert(resultDetailListData, { height = 16, [1] = "^7Variant: " .. row.variantLabel })
+		end
+		if row.replacedItemLabel then
+			t_insert(resultDetailListData, { height = 16, [1] = "^7Replaces: " .. row.replacedItemLabel })
+		else
+			t_insert(resultDetailListData, { height = 16, [1] = "^7Socket state: Free socket" })
+		end
+		if row.points ~= nil then
+			t_insert(resultDetailListData, { height = 16, [1] = "^7Total points: " .. tostring(row.points) })
+		end
+		if row.detailText and row.detailText ~= "" then
+			t_insert(resultDetailListData, { height = 16, [1] = "^7Summary: " .. row.detailText })
+		end
+		local nodeEntries = row.resultNodes or row.topNodes
+		if nodeEntries and #nodeEntries > 0 then
+			t_insert(resultDetailListData, { height = 16, [1] = "" })
+			t_insert(resultDetailListData, {
+				height = 16,
+				[1] = row.resultNodes and s_format("^7Recommended nodes (%d):", #nodeEntries)
+					or s_format("^7Nodes in range (%d):", #nodeEntries),
+			})
+			for _, nodeEntry in ipairs(nodeEntries) do
+				t_insert(resultDetailListData, {
+					height = 16,
+					[1] = "^xC8C8C8- " .. (nodeEntry.label or tostring(nodeEntry)),
+					nodeId = nodeEntry.nodeId,
+				})
+			end
+		else
+			t_insert(resultDetailListData, { height = 16, [1] = "" })
+			t_insert(resultDetailListData, { height = 16, [1] = COL_META .. "(no additional passive nodes)" })
+		end
+	end
+	controls.previewList = new("TextListControl", TL, { 600, 70, 440, 210 },
 		{ { x = 0, align = "LEFT" }, { x = 210, align = "LEFT" } }, previewListData)
 	controls.previewList.shown = function()
 		return not (controls.jewelTypeSelect and controls.jewelTypeSelect.dropped)
 	end
+	controls.resultDetailLabel = new("LabelControl", TL, { 600, 286, 0, 16 }, "^7Selection:")
+	controls.resultDetailList = new("RadiusJewelDetailListControl", TL, { 600, 304, 440, 126 },
+		{ { x = 0, align = "LEFT" } }, resultDetailListData, self.build, socketViewer)
+	updateResultDetails(nil)
 
 	local function updatePreview()
 		wipeTable(previewListData)
@@ -2822,6 +3182,9 @@ end
 		-- ── Results list (left panel) ─────────────────────────────────────────────
 		controls.resultsList = new("RadiusJewelResultsListControl", TL, { 10, 70, 580, 360 }, self.build, socketViewer)
 		controls.resultsList.suppressTooltipFunc = isAnyFinderDropdownDropped
+		controls.resultsList.OnSelect = function(_, _, row)
+			updateResultDetails(row)
+		end
 		controls.resultsList:SetMode("message", { }, COL_META .. "Click Find to search")
 
 	-- ── Helper: rebuild jewel type dropdown after filter change ──────────────
@@ -2835,14 +3198,13 @@ end
 			end
 		end
 		t_sort(activeJewelTypes, function(a, b)
-			local ao, bo = jewelTypeSortOrder(a), jewelTypeSortOrder(b)
-			if ao ~= bo then
-				return ao < bo
+			if a.name ~= b.name then
+				return a.name < b.name
 			end
 			if a.isLegacy ~= b.isLegacy then
 				return a.isLegacy == false
 			end
-			return a.name < b.name
+			return false
 		end)
 		for _, jt in ipairs(activeJewelTypes) do
 			t_insert(jtLabels, jt.name)
@@ -2915,6 +3277,16 @@ end
 	end)
 	controls.maxPointsLabel.shown = true
 	controls.maxPointsEdit.shown = true
+
+	controls.occupiedModeLabel = new("LabelControl", TL, { 250, 444, 0, 16 }, "^7Sockets:")
+	controls.occupiedModeSelect = new("DropDownControl", TL, { 308, 442, 170, 20 }, occupiedModeLabels, function(idx)
+		cancelComputeTask()
+		selectedOccupiedMode = OCCUPIED_SOCKET_OPTIONS[idx]
+		saveFinderState()
+		runFind(false)
+	end)
+	controls.occupiedModeLabel.shown = true
+	controls.occupiedModeSelect.shown = true
 
 	-- LOM variant selector (shown when LOM selected)
 	controls.lomVariantLabel = new("LabelControl", TL, { 278, 10, 0, 16 }, "^7Variant:")
@@ -3042,14 +3414,44 @@ end
 	end)
 	controls.jewelTypeSelect.tooltipFunc = function(tooltip, mode, index)
 		local jewelType = activeJewelTypes[index]
-		local lines = buildPreviewLinesForJewelType(jewelType, isFoulborn and jewelType and jewelType.supportsFoulborn == true)
-		if type(lines) ~= "table" then
+		addPreviewLinesToTooltip(tooltip, buildGenericTypeTooltipLinesForJewelType(
+			jewelType,
+			isFoulborn and jewelType and jewelType.supportsFoulborn == true
+		))
+	end
+	controls.jewelVariantSelect.tooltipFunc = function(tooltip, mode, index)
+		local variants = getDisplayedVariants()
+		local variant = variants and variants[index]
+		if not selectedJewelType or not variant then
 			return
 		end
-		tooltip:Clear(true)
-		for _, line in ipairs(lines) do
-			tooltip:AddLine(line.height or 16, line[1], line.font)
+		addPreviewLinesToTooltip(tooltip, buildPreviewLinesForJewelType(
+			selectedJewelType,
+			isSelectedFoulbornActive(),
+			variant
+		))
+	end
+	controls.lomVariantSelect.tooltipFunc = function(tooltip, mode, index)
+		local variant = LIGHT_OF_MEANING_VARIANTS[index]
+		if not selectedJewelType or not variant then
+			return
 		end
+		addPreviewLinesToTooltip(tooltip, buildPreviewLinesForJewelType(
+			selectedJewelType,
+			isSelectedFoulbornActive(),
+			variant
+		))
+	end
+	controls.threadVariantSelect.tooltipFunc = function(tooltip, mode, index)
+		local variant = threadVariants[index]
+		if not selectedJewelType or not variant then
+			return
+		end
+		addPreviewLinesToTooltip(tooltip, buildPreviewLinesForJewelType(
+			selectedJewelType,
+			isSelectedFoulbornActive(),
+			variant
+		))
 	end
 	syncSelectedJewelTypeControls()
 
@@ -3117,77 +3519,96 @@ end
 		computeContext = {
 			co = coroutine.create(function()
 				local ok, err = pcall(function()
-			local statField = selectedImpactStat.field
 			local statLabel = selectedImpactStat.label
 			local selectedFoulbornActive = isSelectedFoulbornActive()
 			local computeMethod = selectedComputeMethod or findConnectionlessComputeMethod(nil)
 			local computeMethodLabel = selectedJewelSupportsComputeMethods() and computeMethod.label or nil
 
-				if selectedJewelType.isLightOfMeaning then
-					if not selectedSocket then return end
-					if selectedMaxPoints and (selectedSocket.pathDist or 0) > selectedMaxPoints then
-						controls.resultsList:SetMode("computeVariant", { }, COL_META .. "(socket exceeds max points)")
-						controls.statusLabel.label = formatVariantStatus(selectedSocket.label, statLabel, 0)
-						saveResultCache("compute", "computeVariant", { }, COL_META .. "(socket exceeds max points)", controls.statusLabel.label, true)
-						return
-					end
-					local variantResults, baseline =
-						self:computeVariantImpact(selectedSocket.id, statField, progress)
-					local rows = { }
-					for rank, r in ipairs(variantResults) do
-						local pct  = baseline ~= 0 and (r.delta / baseline * 100) or 0
-						t_insert(rows, {
-							variantLabel = s_format("%02d. %s", rank, r.variant.name),
-							delta = r.delta,
-							pct = pct,
-							socketId = selectedSocket.id,
-							baseOutput = r.baseOutput,
-							compareOutput = r.compareOutput,
-							tooltipHeader = "^7Socketing this variant will give you:",
-						})
-					end
-					controls.resultsList:SetMode("computeVariant", rows, COL_META .. "(no variants)")
-					controls.statusLabel.label = formatVariantStatus(selectedSocket.label, statLabel, baseline)
-					saveResultCache("compute", "computeVariant", rows, COL_META .. "(no variants)", controls.statusLabel.label, true)
-				else
+					if selectedJewelType.isLightOfMeaning then
+						if not selectedSocket then return end
+						local selectedSocketAccessCost = self:getSocketAccessCost(selectedSocket)
+						if selectedMaxPoints and selectedSocketAccessCost > selectedMaxPoints then
+							controls.resultsList:SetMode("computeVariant", { }, COL_META .. "(socket exceeds max points)")
+							controls.statusLabel.label = formatVariantStatus(selectedSocket.label, statLabel, 0)
+							saveResultCache("compute", "computeVariant", { }, COL_META .. "(socket exceeds max points)", controls.statusLabel.label, true)
+							return
+						end
+						local variantResults, baseline =
+						self:computeVariantImpact(selectedSocket.id, selectedImpactStat, progress, selectedOccupiedMode)
+						local rows = { }
+						for rank, r in ipairs(variantResults) do
+							local pct  = calculateImpactPercent(r.delta, baseline)
+							t_insert(rows, {
+								variantLabel = s_format("%02d. %s", rank, r.variant.name),
+								delta = r.delta,
+								pct = pct,
+								socketLabel = selectedSocket.label,
+								socketId = selectedSocket.id,
+								detailText = formatReplacementLabel(r.replacedItemLabel),
+								replacedItemLabel = r.replacedItemLabel,
+								itemTooltipLines = buildPreviewLinesForJewelType(selectedJewelType, false, r.variant),
+								baseOutput = r.baseOutput,
+								compareOutput = r.compareOutput,
+								tooltipHeader = "^7Socketing this variant will give you:",
+							})
+						end
+						controls.resultsList:SetMode("computeVariant", rows, COL_META .. "(no compatible socket)")
+						controls.statusLabel.label = formatVariantStatus(selectedSocket.label, statLabel, baseline)
+						saveResultCache("compute", "computeVariant", rows, COL_META .. "(no compatible socket)", controls.statusLabel.label, true)
+					else
 					local displayedVariants = getDisplayedVariants()
 					local itemLabel = selectedJewelType.name
 					local socketResults, baseline
 					if selectedJewelType.name == "Intuitive Leap" then
 						socketResults, baseline =
-							self:computeIntuitiveLeapSocketImpact(jewelSockets, statField, selectedFoulbornActive, computeMethod.id, finderState.connectionlessPlanCache, progress, selectedMaxPoints)
+							self:computeIntuitiveLeapSocketImpact(jewelSockets, selectedImpactStat, selectedFoulbornActive, computeMethod.id, finderState.connectionlessPlanCache, progress, selectedMaxPoints, selectedOccupiedMode)
 					elseif selectedJewelType.isThread then
 						socketResults, baseline =
-							self:computeThreadOfHopeSocketImpact(jewelSockets, statField, threadVariants, computeMethod.id, finderState.connectionlessPlanCache, progress, selectedMaxPoints)
+							self:computeThreadOfHopeSocketImpact(jewelSockets, selectedImpactStat, threadVariants, computeMethod.id, finderState.connectionlessPlanCache, progress, selectedMaxPoints, selectedOccupiedMode)
 					elseif selectedJewelType.isImpossibleEscape then
 						socketResults, baseline =
-							self:computeImpossibleEscapeSocketImpact(jewelSockets, statField, displayedVariants or IMPOSSIBLE_ESCAPE_VARIANTS, computeMethod.id, finderState.connectionlessPlanCache, progress, selectedMaxPoints)
+							self:computeImpossibleEscapeSocketImpact(jewelSockets, selectedImpactStat, displayedVariants or getImpossibleEscapeVariants(), computeMethod.id, finderState.connectionlessPlanCache, progress, selectedMaxPoints, selectedOccupiedMode)
 					elseif selectedJewelType.isSplitPersonality then
 						socketResults, baseline =
-							self:computeSplitPersonalitySocketImpact(jewelSockets, statField, displayedVariants or SPLIT_PERSONALITY_VARIANTS, progress, selectedMaxPoints)
+							self:computeSplitPersonalitySocketImpact(jewelSockets, selectedImpactStat, displayedVariants or getSplitPersonalityVariants(), progress, selectedMaxPoints, selectedOccupiedMode)
 					elseif displayedVariants and #displayedVariants > 0 then
 						if selectedFoulbornActive and selectedJewelType.name == "Dreams & Nightmares"
 						and selectedDreamFamily and selectedDreamFamily.value ~= "ALL" then
 							itemLabel = selectedDreamFamily.name
 						end
 						socketResults, baseline =
-							self:computeBestVariantSocketImpact(displayedVariants and jewelSockets or jewelSockets, displayedVariants, statField, progress, selectedMaxPoints)
+							self:computeBestVariantSocketImpact(displayedVariants and jewelSockets or jewelSockets, displayedVariants, selectedImpactStat, progress, selectedMaxPoints, selectedOccupiedMode)
 					else
 						local rawText = selectedJewelType.rawText
 						socketResults, baseline =
-							self:computeSocketImpact(jewelSockets, rawText, statField, selectedFoulbornActive, progress, selectedMaxPoints)
+							self:computeSocketImpact(jewelSockets, rawText, selectedImpactStat, selectedFoulbornActive, progress, selectedMaxPoints, selectedOccupiedMode)
 					end
 					local rows = { }
 					for _, r in ipairs(socketResults) do
-						local points = r.socket.pathDist or 0
+						local points = self:getSocketAccessCost(r.socket, { isOccupied = r.replacedItemLabel ~= nil })
 						local variantLabel = r.variant and (r.variant.dropdownLabel or r.variant.name) or ""
+						local itemTooltipLines = r.variant and buildPreviewLinesForJewelType(selectedJewelType, selectedFoulbornActive, r.variant) or nil
 						local displayedPlans = (selectedJewelType.name == "Intuitive Leap" or selectedJewelType.isThread or selectedJewelType.isImpossibleEscape)
 							and buildDisplayedConnectionlessPlans(r, points, baseline)
 							or { r }
 						for _, plan in ipairs(displayedPlans) do
-							local pct = baseline ~= 0 and (plan.delta / baseline * 100) or 0
+							local pct = calculateImpactPercent(plan.delta, baseline)
 							local totalPoints = points + (plan.addedNodeCount or 0)
-							local detailText = plan.detailText or variantLabel
+							local summaryParts = { }
+							if variantLabel ~= "" then
+								t_insert(summaryParts, variantLabel)
+							end
+							if plan.resultNodeLabels and #plan.resultNodeLabels > 0 then
+								t_insert(summaryParts, s_format("%d node%s", #plan.resultNodeLabels, #plan.resultNodeLabels == 1 and "" or "s"))
+							elseif (not plan.detailText or plan.detailText == "") and variantLabel == "" then
+								t_insert(summaryParts, "jewel only")
+							end
+							local detailText = #summaryParts > 0 and t_concat(summaryParts, " | ") or (plan.detailText or "jewel only")
+							local detailNodeId = nil
+							if selectedJewelType.isImpossibleEscape and r.variant and r.variant.keystoneName then
+								local keystoneNode = treeData.keystoneMap[r.variant.keystoneName]
+								detailNodeId = keystoneNode and keystoneNode.id or nil
+							end
 							t_insert(rows, {
 								socketLabel = r.socket.label,
 								socketId = r.socket.id,
@@ -3197,6 +3618,11 @@ end
 								pctPerPoint = totalPoints > 0 and (pct / totalPoints) or pct,
 								sortPctPerPoint = totalPoints > 0 and (pct / totalPoints) or (pct >= 0 and math.huge or -math.huge),
 								detailText = detailText,
+								detailNodeId = detailNodeId,
+								resultNodes = plan.resultNodes,
+								resultNodeLabels = plan.resultNodeLabels,
+								replacedItemLabel = r.replacedItemLabel,
+								itemTooltipLines = itemTooltipLines,
 								baseOutput = plan.baseOutput,
 								compareOutput = plan.compareOutput,
 								tooltipHeader = selectedJewelType.isThread and "^7Socketing this jewel and allocating the best ring plan here will give you:"
@@ -3207,9 +3633,9 @@ end
 							})
 						end
 					end
-					controls.resultsList:SetMode("computeSocket", rows, COL_META .. "(no empty sockets)")
+					controls.resultsList:SetMode("computeSocket", rows, COL_META .. "(no compatible sockets)")
 					controls.statusLabel.label = formatComputeStatus(itemLabel, statLabel, baseline, computeMethodLabel)
-					saveResultCache("compute", "computeSocket", rows, COL_META .. "(no empty sockets)", controls.statusLabel.label, true)
+					saveResultCache("compute", "computeSocket", rows, COL_META .. "(no compatible sockets)", controls.statusLabel.label, true)
 				end
 				end)
 				if not ok then
@@ -3309,11 +3735,14 @@ end
 							local score = selectedJewelType.score(nodes, allocNodes) or 0
 							local topNodes = { }
 							for _, n in pairs(nodes) do
-								if n.type == "Notable" or n.type == "Keystone" then
-									t_insert(topNodes, n.dn or n.name or "Unknown")
+								if not n.ascendancyName and (n.type == "Notable" or n.type == "Keystone") then
+									t_insert(topNodes, {
+										label = n.dn or n.name or "Unknown",
+										nodeId = n.id,
+									})
 								end
 							end
-							t_sort(topNodes)
+							t_sort(topNodes, function(a, b) return a.label < b.label end)
 							local candidate = {
 								score = score,
 								topNodes = topNodes,
@@ -3329,8 +3758,9 @@ end
 					end
 				end
 				for _, socket in ipairs(jewelSockets) do
+					local socketAllowed, occupancy = self:socketMatchesOccupiedMode(socket.id, selectedOccupiedMode)
 					local socketNode = treeData.nodes[socket.id]
-					if socketNode and (socketNode.nodesInRadius or isSplitPersonalitySearch) then
+					if socketAllowed and socketNode and (socketNode.nodesInRadius or isSplitPersonalitySearch) then
 						if isThreadBestVariantSearch then
 							local bestThreadResult
 							for _, threadVariant in ipairs(threadVariants) do
@@ -3339,16 +3769,20 @@ end
 									local score = selectedJewelType.score(nodes, allocNodes) or 0
 									local topNodes = { }
 									for _, n in pairs(nodes) do
-										if n.type == "Notable" or n.type == "Keystone" then
-											t_insert(topNodes, n.dn or n.name or "Unknown")
+										if not n.ascendancyName and (n.type == "Notable" or n.type == "Keystone") then
+											t_insert(topNodes, {
+												label = n.dn or n.name or "Unknown",
+												nodeId = n.id,
+											})
 										end
 									end
-									t_sort(topNodes)
+									t_sort(topNodes, function(a, b) return a.label < b.label end)
 									local candidate = {
 										socket = socket,
 										score = score,
 										topNodes = topNodes,
 										variant = threadVariant,
+										replacedItemLabel = occupancy and occupancy.isOccupied and occupancy.itemLabel or nil,
 									}
 									if not bestThreadResult
 									or candidate.score > bestThreadResult.score
@@ -3367,6 +3801,7 @@ end
 								topNodes = impossibleEscapeBestResult.topNodes,
 								variant = impossibleEscapeBestResult.variant,
 								detailText = impossibleEscapeBestResult.detailText,
+								replacedItemLabel = occupancy and occupancy.isOccupied and occupancy.itemLabel or nil,
 							})
 						elseif isSplitPersonalitySearch then
 							local score = socket.classStartDist or self:getSocketDistanceToClassStart(socket.id)
@@ -3375,6 +3810,7 @@ end
 								score = score,
 								topNodes = { },
 								detailText = s_format("dist to start %d", score),
+								replacedItemLabel = occupancy and occupancy.isOccupied and occupancy.itemLabel or nil,
 							})
 						else
 							local nodes
@@ -3400,16 +3836,20 @@ end
 									or selectedJewelType.detailBuilder
 								local topNodes = { }
 								for _, n in pairs(nodes) do
-									if n.type == "Notable" or n.type == "Keystone" then
-										t_insert(topNodes, n.dn or n.name or "Unknown")
+									if not n.ascendancyName and (n.type == "Notable" or n.type == "Keystone") then
+										t_insert(topNodes, {
+											label = n.dn or n.name or "Unknown",
+											nodeId = n.id,
+										})
 									end
 								end
-								t_sort(topNodes)
+								t_sort(topNodes, function(a, b) return a.label < b.label end)
 								t_insert(results, {
 									socket = socket,
 									score = score or 0,
 									topNodes = topNodes,
 									detailText = detailBuilder and detailBuilder(nodes, allocNodes) or nil,
+									replacedItemLabel = occupancy and occupancy.isOccupied and occupancy.itemLabel or nil,
 								})
 							end
 						end
@@ -3420,21 +3860,27 @@ end
 
 					local rows = { }
 					for _, r in ipairs(results) do
-						local topStr = t_concat(r.topNodes, ", ")
+						local topLabels = buildNodeLabelList(r.topNodes)
+						local topStr = t_concat(topLabels, ", ")
 						if #topStr > 50 then
 							topStr = topStr:sub(1, 47) .. "..."
 						end
 
 						local scoreLabel = (selectedJewelType.variants and selectedJewelVariant and selectedJewelVariant.scoreLabel)
 							or selectedJewelType.scoreLabel
-						local points = r.socket.pathDist or 0
+						local points = self:getSocketAccessCost(r.socket, { isOccupied = r.replacedItemLabel ~= nil })
 						local scorePerPoint = points > 0 and (r.score / points) or r.score
 						local scorePerPointSort = points > 0 and scorePerPoint or (r.score >= 0 and math.huge or -math.huge)
 						local detailText = r.detailText
 						if not detailText or detailText == "" then
-							detailText = #topStr > 0 and (scoreLabel .. "  " .. topStr) or scoreLabel
+							detailText = #r.topNodes > 0 and s_format("%d match%s", #r.topNodes, #r.topNodes == 1 and "" or "es") or scoreLabel
 						elseif #topStr > 0 and (isThreadBestVariantSearch or isImpossibleEscapeBestVariantSearch) then
-							detailText = detailText .. " | " .. topStr
+							detailText = detailText .. s_format(" | %d match%s", #r.topNodes, #r.topNodes == 1 and "" or "es")
+						end
+						local detailNodeId = nil
+						if isImpossibleEscapeBestVariantSearch and r.variant and r.variant.keystoneName then
+							local keystoneNode = treeData.keystoneMap[r.variant.keystoneName]
+							detailNodeId = keystoneNode and keystoneNode.id or nil
 						end
 						t_insert(rows, {
 							socketLabel = r.socket.label,
@@ -3445,6 +3891,9 @@ end
 							scorePerPointSort = scorePerPointSort,
 							variantLabel = r.variant and (r.variant.name .. " Ring") or "",
 							detailText = detailText,
+							detailNodeId = detailNodeId,
+							topNodes = copyTableSafe(r.topNodes, false, true),
+							replacedItemLabel = r.replacedItemLabel,
 						})
 					end
 					controls.resultsList:SetMode(isThreadBestVariantSearch and "findThread" or "find", rows, COL_META .. "(no results)")
@@ -3525,6 +3974,15 @@ end
 		if finderState.maxPoints ~= nil then
 			selectedMaxPoints = finderState.maxPoints
 			controls.maxPointsEdit.buf = tostring(finderState.maxPoints)
+		end
+		if finderState.occupiedModeId then
+			for i, option in ipairs(OCCUPIED_SOCKET_OPTIONS) do
+				if option.id == finderState.occupiedModeId then
+					selectedOccupiedMode = option
+					controls.occupiedModeSelect.selIndex = i
+					break
+				end
+			end
 		end
 		if finderState.computeMethodId and selectedJewelType and selectedJewelType.computeMethods then
 			for i, method in ipairs(selectedJewelType.computeMethods) do
