@@ -286,11 +286,33 @@ function powerReportTattooEvaluator.buildOptions(context)
 		if not isRunegraftOption then
 			local selectedReplacement = { }
 			local selectedReplacementById = { }
+			-- Scores recorded at count=1 to rank candidates in subsequent passes
+			local candidateScores = { }
 			for count = 1, replacementMaxCount do
 				local bestCandidate
 				local bestAssumedEnemyConditions
 				local bestSingleStat
-				for _, candidate in ipairs(case.replacementCandidates) do
+				-- For count > 1, prune to top-3 candidates by their count=1 score.
+				-- Tattoo effects are largely independent, so the count=1 ranking is a
+				-- reliable proxy and avoids O(N * maxCount) calc calls when N is large.
+				local candidatesToTest = case.replacementCandidates
+				if count > 1 and #case.replacementCandidates > 3 then
+					local ranked = { }
+					for _, c in ipairs(case.replacementCandidates) do
+						if not selectedReplacementById[c.id] then
+							t_insert(ranked, c)
+						end
+					end
+					t_sort(ranked, function(a, b)
+						return (candidateScores[a.id] or 0) > (candidateScores[b.id] or 0)
+					end)
+					if #ranked > 3 then
+						candidatesToTest = { ranked[1], ranked[2], ranked[3] }
+					else
+						candidatesToTest = ranked
+					end
+				end
+				for _, candidate in ipairs(candidatesToTest) do
 					if not selectedReplacementById[candidate.id] then
 						local testNodes = { }
 						for i = 1, #selectedReplacement do
@@ -308,6 +330,9 @@ function powerReportTattooEvaluator.buildOptions(context)
 							"tattooReplace:" .. tattooId .. ":" .. count .. ":" .. t_concat(testNodeKey, ",")
 						)
 						local singleStat = calculatePowerScore(output)
+						if count == 1 then
+							candidateScores[candidate.id] = singleStat or 0
+						end
 						if bestSingleStat == nil or singleStat > bestSingleStat then
 							bestCandidate = candidate
 							bestAssumedEnemyConditions = assumedEnemyConditions
