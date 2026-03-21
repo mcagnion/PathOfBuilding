@@ -1308,7 +1308,10 @@ function TreeTabClass:BuildPowerReportList(currentStat)
 	-- search all cluster notables and add to the list
 	for nodeName, node in pairs(self.build.spec.tree.clusterNodeMap) do
 		local isAlloc = node.alloc
-		if not isAlloc then
+		local isClusterNodeIncluded = (node.type == "Notable" and includeNotables)
+			or (node.type == "Keystone" and includeKeystones)
+			or (node.type == "Normal" and includeNormals)
+		if not isAlloc and isClusterNodeIncluded then
 			local nodePower = (node.power and node.power.singleStat or 0) * statScale
 			local nodePowerStr = formatSinglePowerValue(nodePower)
 			local nodePowerPct, nodePowerPctStr = formatPercentPowerValue(nodePower)

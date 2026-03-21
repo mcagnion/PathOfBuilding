@@ -104,27 +104,25 @@ local function countKeys(tbl)
 	return count
 end
 
-local function getTattooCandidatesForNode(spec, node)
+local function getTattooCandidatesForNode(spec, node, candidateTattoos)
 	local candidates = { }
 	local baseNode = spec.tree.nodes[node.id] or node
 	local nodeName = baseNode.dn or ""
 	local nodeValue = (baseNode.sd and baseNode.sd[1]) or ""
 	local numLinkedNodes = baseNode.linkedId and #baseNode.linkedId or 0
-	for _, tattoo in pairs(spec.tree.tattoo.nodes) do
-		if tattoo and not tattoo.legacy then
-			local matchesTarget = (
-				(nodeName:match((tattoo.targetType or ""):gsub("^Small ", "")))
-				or ((tattoo.targetValue or "") ~= "" and nodeValue:match(tattoo.targetValue))
-				or (
-					tattoo.targetType == "Small Attribute"
-					and (nodeName == "Intelligence" or nodeName == "Strength" or nodeName == "Dexterity")
-				)
-				or (tattoo.targetType == "Keystone" and baseNode.type == "Keystone")
-				or (tattoo.targetType == "Mastery" and baseNode.type == "Mastery")
+	for _, tattoo in ipairs(candidateTattoos) do
+		local matchesTarget = (
+			(nodeName:match((tattoo.targetType or ""):gsub("^Small ", "")))
+			or ((tattoo.targetValue or "") ~= "" and nodeValue:match(tattoo.targetValue))
+			or (
+				tattoo.targetType == "Small Attribute"
+				and (nodeName == "Intelligence" or nodeName == "Strength" or nodeName == "Dexterity")
 			)
-			if matchesTarget and tattoo.MinimumConnected <= numLinkedNodes then
-				t_insert(candidates, tattoo)
-			end
+			or (tattoo.targetType == "Keystone" and baseNode.type == "Keystone")
+			or (tattoo.targetType == "Mastery" and baseNode.type == "Mastery")
+		)
+		if matchesTarget and tattoo.MinimumConnected <= numLinkedNodes then
+			t_insert(candidates, tattoo)
 		end
 	end
 	return candidates
@@ -203,6 +201,9 @@ local function makeTattooNearestPathOverride(baseNodes, tattooByBaseId)
 end
 
 function powerReportTattooEvaluator.buildOptions(context)
+	if not context.includeTattoos and not context.includeRunegrafts then
+		return { }
+	end
 	local spec = context.spec
 	local grantedPassives = context.grantedPassives or { }
 	local canUsePathPower = context.canUsePathPower
@@ -211,36 +212,50 @@ function powerReportTattooEvaluator.buildOptions(context)
 
 	local powerTattooOptions = { }
 	local tattooCases = { }
+	local candidateTattoos = { }
+	local noNearestCandidates = context.nodePowerMaxDepth and context.nodePowerMaxDepth <= 0
+	for _, tattoo in pairs(spec.tree.tattoo.nodes) do
+		if tattoo and not tattoo.legacy then
+			local isRunegraft = isRunegraftTattoo(tattoo)
+			local tattooCategory = getTattooCategory(tattoo)
+			local includeTattoo = (isRunegraft and context.includeRunegrafts)
+				or ((not isRunegraft) and context.includeTattoos)
+			if includeTattoo and tattooCategory ~= "Keystone" then
+				t_insert(candidateTattoos, tattoo)
+			end
+		end
+	end
+	if #candidateTattoos == 0 then
+		return powerTattooOptions
+	end
 	for _, node in pairs(spec.nodes) do
-		if isTattooEditableNode(node) and not grantedPassives[node.id] then
-			for _, tattoo in ipairs(getTattooCandidatesForNode(spec, node)) do
-				local tattooCategory = getTattooCategory(tattoo)
-				-- Keystone tattoos are intentionally ignored in power report calculations.
-				if tattooCategory ~= "Keystone" then
-					-- Skip no-op replacement (same underlying mod set)
-					if not (node.isTattoo and node.modKey == tattoo.modKey) then
-						local case = tattooCases[tattoo.id]
-						if not case then
-							case = {
-								tattoo = tattoo,
-								category = tattooCategory,
-								replacementByKey = { },
-								replacementCandidates = { },
-								nearestCandidates = { },
-							}
-							tattooCases[tattoo.id] = case
+		local canBeReplacement = node.alloc
+		local canBeNearest = not noNearestCandidates and not node.alloc
+		if isTattooEditableNode(node) and not grantedPassives[node.id] and (canBeReplacement or canBeNearest) then
+			for _, tattoo in ipairs(getTattooCandidatesForNode(spec, node, candidateTattoos)) do
+				-- Skip no-op replacement (same underlying mod set)
+				if not (node.isTattoo and node.modKey == tattoo.modKey) then
+					local case = tattooCases[tattoo.id]
+					if not case then
+						case = {
+							tattoo = tattoo,
+							category = getTattooCategory(tattoo),
+							replacementByKey = { },
+							replacementCandidates = { },
+							nearestCandidates = { },
+						}
+						tattooCases[tattoo.id] = case
+					end
+					if canBeReplacement then
+						local groupKey = makeTattooGroupKey(node)
+						if not case.replacementByKey[groupKey] then
+							case.replacementByKey[groupKey] = node
+							t_insert(case.replacementCandidates, node)
 						end
-						if node.alloc then
-							local groupKey = makeTattooGroupKey(node)
-							if not case.replacementByKey[groupKey] then
-								case.replacementByKey[groupKey] = node
-								t_insert(case.replacementCandidates, node)
-							end
-						else
-							local pathDist = getReachablePathDist(node)
-							if pathDist and canUsePathPower(node) then
-								t_insert(case.nearestCandidates, { node = node, pathDist = pathDist })
-							end
+					else
+						local pathDist = getReachablePathDist(node)
+						if pathDist and (not context.nodePowerMaxDepth or pathDist <= context.nodePowerMaxDepth) and canUsePathPower(node) then
+							t_insert(case.nearestCandidates, { node = node, pathDist = pathDist })
 						end
 					end
 				end
@@ -271,11 +286,33 @@ function powerReportTattooEvaluator.buildOptions(context)
 		if not isRunegraftOption then
 			local selectedReplacement = { }
 			local selectedReplacementById = { }
+			-- Scores recorded at count=1 to rank candidates in subsequent passes
+			local candidateScores = { }
 			for count = 1, replacementMaxCount do
 				local bestCandidate
 				local bestAssumedEnemyConditions
 				local bestSingleStat
-				for _, candidate in ipairs(case.replacementCandidates) do
+				-- For count > 1, prune to top-3 candidates by their count=1 score.
+				-- Tattoo effects are largely independent, so the count=1 ranking is a
+				-- reliable proxy and avoids O(N * maxCount) calc calls when N is large.
+				local candidatesToTest = case.replacementCandidates
+				if count > 1 and #case.replacementCandidates > 3 then
+					local ranked = { }
+					for _, c in ipairs(case.replacementCandidates) do
+						if not selectedReplacementById[c.id] then
+							t_insert(ranked, c)
+						end
+					end
+					t_sort(ranked, function(a, b)
+						return (candidateScores[a.id] or 0) > (candidateScores[b.id] or 0)
+					end)
+					if #ranked > 3 then
+						candidatesToTest = { ranked[1], ranked[2], ranked[3] }
+					else
+						candidatesToTest = ranked
+					end
+				end
+				for _, candidate in ipairs(candidatesToTest) do
 					if not selectedReplacementById[candidate.id] then
 						local testNodes = { }
 						for i = 1, #selectedReplacement do
@@ -293,6 +330,9 @@ function powerReportTattooEvaluator.buildOptions(context)
 							"tattooReplace:" .. tattooId .. ":" .. count .. ":" .. t_concat(testNodeKey, ",")
 						)
 						local singleStat = calculatePowerScore(output)
+						if count == 1 then
+							candidateScores[candidate.id] = singleStat or 0
+						end
 						if bestSingleStat == nil or singleStat > bestSingleStat then
 							bestCandidate = candidate
 							bestAssumedEnemyConditions = assumedEnemyConditions
