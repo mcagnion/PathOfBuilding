@@ -173,6 +173,61 @@ describe("TestPowerReport", function()
 		assert.is_true(build.calcsTab.powerBuilderInitialized)
 	end)
 
+	-- Test 5 : cohérence entre plusieurs builds successifs ------------------
+
+	it("powerMax is consistent after stat toggle: Life -> CombinedDPS -> Life", function()
+		local life = findStat("Life")
+		local dps  = findStat("CombinedDPS")
+
+		drainPowerBuild(life)
+		local powerMaxLife1 = build.calcsTab.powerMax.singleStat
+
+		drainPowerBuild(dps)
+
+		drainPowerBuild(life)
+		local powerMaxLife2 = build.calcsTab.powerMax.singleStat
+
+		assert.are.equal(powerMaxLife1, powerMaxLife2,
+			"powerMax.singleStat should be identical after toggling stat back to Life")
+	end)
+
+	it("powerMax is consistent after nodePowerMaxDepth toggle: 5 -> 0 -> 5", function()
+		build.calcsTab.nodePowerMaxDepth = 5
+		drainPowerBuild()
+		local powerMax5a = build.calcsTab.powerMax.singleStat
+
+		build.calcsTab.nodePowerMaxDepth = 0
+		drainPowerBuild()
+
+		build.calcsTab.nodePowerMaxDepth = 5
+		drainPowerBuild()
+		local powerMax5b = build.calcsTab.powerMax.singleStat
+
+		assert.are.equal(powerMax5a, powerMax5b,
+			"powerMax.singleStat should be identical after toggling nodePowerMaxDepth back to 5")
+	end)
+
+	it("powerTattooOptions repopulate correctly after toggle: ON -> OFF -> ON", function()
+		build.treeTab.includePowerReportTattoos    = true
+		build.treeTab.includePowerReportRunegrafts = true
+		drainPowerBuild()
+		local countON1 = #build.calcsTab.powerTattooOptions
+
+		build.treeTab.includePowerReportTattoos    = false
+		build.treeTab.includePowerReportRunegrafts = false
+		drainPowerBuild()
+		assert.are.equal(0, #build.calcsTab.powerTattooOptions,
+			"powerTattooOptions should be empty when both tattoos and runegrafts are disabled")
+
+		build.treeTab.includePowerReportTattoos    = true
+		build.treeTab.includePowerReportRunegrafts = true
+		drainPowerBuild()
+		local countON2 = #build.calcsTab.powerTattooOptions
+
+		assert.are.equal(countON1, countON2,
+			"powerTattooOptions count should be the same after re-enabling tattoos")
+	end)
+
 	-- Benchmarks (run with: busted --lua=luajit --no-coverage -r benchmark --filter=TestPowerReport)
 	-- Ces tests sont commités mais exclus de la suite par défaut.
 	-- Ils mesurent les performances et génèrent un rapport de profiling.
