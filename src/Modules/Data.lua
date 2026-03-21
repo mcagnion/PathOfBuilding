@@ -159,6 +159,7 @@ data.powerStatList = {
 	{ stat="BlockChance", label="Block Chance" },
 	{ stat="SpellBlockChance", label="Spell Block Chance" },
 	{ stat="SpellSuppressionChance", label="Spell Suppression Chance" },
+	{ stat="WeightedScore", label="Weighted Score", isWeightedScore=true },
 }
 
 data.misc = { -- magic numbers

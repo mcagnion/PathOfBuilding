@@ -13,6 +13,7 @@ local m_floor = math.floor
 local powerReportUtils = LoadModule("Modules/PowerReportUtils")
 local powerReportOptions = LoadModule("Modules/PowerReportOptions")
 local powerReportTattooEvaluator = LoadModule("Modules/PowerReportTattooEvaluator")
+local WeightedScore = LoadModule("Modules/WeightedScore")
 
 local buffModeDropList = {
 	{ label = "Unbuffed", buffMode = "UNBUFFED" },
@@ -888,6 +889,12 @@ function CalcsTabClass:PowerBuilder()
 	-- ConPrintf("Power Build time: %d ms", GetTime() - timer_start)
 end
 function CalcsTabClass:CalculatePowerStat(selection, original, modified)
+	if selection.isWeightedScore then
+		local weights = WeightedScore.getWeights(self.build)
+		local nodeScore = WeightedScore.computeRatioScore(modified, original, weights)
+		local baseScore = WeightedScore.computeRatioScore(modified, modified, weights)
+		return (nodeScore - baseScore) * 1000
+	end
 	if modified.Minion and selection.stat ~= "FullDPS" then
 		original = original.Minion
 		modified = modified.Minion
