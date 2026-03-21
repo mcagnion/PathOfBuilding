@@ -708,7 +708,7 @@ function CalcsTabClass:PowerBuilder()
 								if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
 									optionScore = self:CalculatePowerStat(self.powerStat, effectOutput, calcBase)
 									optionPathScore = optionScore
-									if canUsePathPower(node) and node.pathDist > 1 then
+									if canUsePathPower(node) and node.pathDist > 1 and (optionScore or 0) > 0 then
 										local effectPathNodes = { }
 										for _, pathNode in pairs(node.path) do
 											if pathNode == node then
@@ -727,7 +727,7 @@ function CalcsTabClass:PowerBuilder()
 								else
 									optionScore = self:CalculateCombinedOffDefStat(effectOutput, calcBase)
 									optionPathScore = optionScore
-									if canUsePathPower(node) and node.pathDist > 1 then
+									if canUsePathPower(node) and node.pathDist > 1 and (optionScore or 0) > 0 then
 										local effectPathNodes = { }
 										for _, pathNode in pairs(node.path) do
 											if pathNode == node then
@@ -788,7 +788,7 @@ function CalcsTabClass:PowerBuilder()
 							pathNodes[node] = nil
 							pathNodes[pathCalcNode] = true
 						end
-						if node.pathDist > 1 then
+						if node.pathDist > 1 and (node.power.singleStat or 0) > 0 then
 							local pathOutput
 							pathOutput, node.power.pathAssumedEnemyConditions = calcWithPowerReportAssumptions(
 								{ addNodes = pathNodes },
@@ -831,7 +831,7 @@ function CalcsTabClass:PowerBuilder()
 						for _, depNode in pairs(node.depends) do
 							pathNodes[depNode] = true
 						end
-						if #node.depends > 1 then
+						if #node.depends > 1 and (node.power.singleStat or 0) > 0 then
 							local pathOutput
 							pathOutput, node.power.pathAssumedEnemyConditions = calcWithPowerReportAssumptions(
 								{ removeNodes = pathNodes },
