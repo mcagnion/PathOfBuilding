@@ -650,8 +650,33 @@ function TradeQueryGeneratorClass:GenerateModWeights(modsToTest)
 						end
 					end
 				end
+				-- Tag elemental damage mods for groupDamage merging.
+				-- Uses specific subcategories; overlap is resolved at merge time.
+				local damageTag
+				if not resistTag then
+					local damageElem = modText:match("(%a+) Damage")
+					if damageElem == "Fire" or damageElem == "Cold" or damageElem == "Lightning" then
+						if modText:match("Adds") then
+							if modText:match("to Spells and Attacks") then
+								damageTag = { adds_attacks = true, adds_spells = true }
+							elseif modText:match("to Attacks") then
+								damageTag = { adds_attacks = true }
+							elseif modText:match("to Spells") then
+								damageTag = { adds_spells = true }
+							else
+								damageTag = { adds = true }
+							end
+						elseif modText:match("increased") then
+							if modText:match("with Attack Skills") then
+								damageTag = { increased_attacks = true }
+							else
+								damageTag = { increased = true }
+							end
+						end
+					end
+				end
 				local weight = meanStatDiff / modValue
-				t_insert(self.modWeights, { tradeModId = entry.tradeMod.id, weight = weight, normalizedWeight = weight / resistFactor, meanStatDiff = meanStatDiff, invert = entry.sign == "-" and true or false, resistTag = resistTag })
+				t_insert(self.modWeights, { tradeModId = entry.tradeMod.id, weight = weight, normalizedWeight = weight / resistFactor, meanStatDiff = meanStatDiff, invert = entry.sign == "-" and true or false, resistTag = resistTag, damageTag = damageTag })
 			end
 			self.alreadyWeightedMods[entry.tradeMod.id] = true
 
@@ -1031,6 +1056,56 @@ function TradeQueryGeneratorClass:FinishQuery()
 		self.modWeights = filtered
 	end
 
+	-- Merge elemental damage mods into pseudo stats if option enabled.
+	-- Uses the most specific pseudo stat when only one subcategory is present;
+	-- falls back to the generic pseudo stat when multiple subcategories overlap.
+	if self.calcContext.options.groupDamage then
+		local categoryMax = {}
+		local filtered = { }
+		for _, entry in ipairs(self.modWeights) do
+			if entry.damageTag then
+				local nw = entry.normalizedWeight or entry.weight
+				for cat, _ in pairs(entry.damageTag) do
+					if not categoryMax[cat] or nw > categoryMax[cat] then
+						categoryMax[cat] = nw
+					end
+				end
+			else
+				t_insert(filtered, entry)
+			end
+		end
+		-- Resolve overlap for the "adds" family:
+		-- pseudo_adds_elemental_damage ⊇ _to_attacks and _to_spells
+		local addsMax = categoryMax.adds or 0
+		local addsAtkMax = categoryMax.adds_attacks or 0
+		local addsSplMax = categoryMax.adds_spells or 0
+		local addsCount = (addsMax > 0 and 1 or 0) + (addsAtkMax > 0 and 1 or 0) + (addsSplMax > 0 and 1 or 0)
+		if addsCount > 1 then
+			local maxW = math.max(addsMax, addsAtkMax, addsSplMax)
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_adds_elemental_damage", weight = maxW, meanStatDiff = maxW, invert = false })
+		elseif addsMax > 0 then
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_adds_elemental_damage", weight = addsMax, meanStatDiff = addsMax, invert = false })
+		elseif addsAtkMax > 0 then
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_adds_elemental_damage_to_attacks", weight = addsAtkMax, meanStatDiff = addsAtkMax, invert = false })
+		elseif addsSplMax > 0 then
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_adds_elemental_damage_to_spells", weight = addsSplMax, meanStatDiff = addsSplMax, invert = false })
+		end
+		-- Resolve overlap for the "increased" family:
+		-- pseudo_increased_elemental_damage ⊇ _with_attack_skills
+		local incMax = categoryMax.increased or 0
+		local incAtkMax = categoryMax.increased_attacks or 0
+		local incCount = (incMax > 0 and 1 or 0) + (incAtkMax > 0 and 1 or 0)
+		if incCount > 1 then
+			local maxW = math.max(incMax, incAtkMax)
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_increased_elemental_damage", weight = maxW, meanStatDiff = maxW, invert = false })
+		elseif incMax > 0 then
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_increased_elemental_damage", weight = incMax, meanStatDiff = incMax, invert = false })
+		elseif incAtkMax > 0 then
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_increased_elemental_damage_with_attack_skills", weight = incAtkMax, meanStatDiff = incAtkMax, invert = false })
+		end
+		self.modWeights = filtered
+	end
+
 	-- Prioritize top mods by abs(weight)
 	table.sort(self.modWeights, function(a, b) return math.abs(a.weight) > math.abs(b.weight) end)
 
@@ -1140,9 +1215,10 @@ function TradeQueryGeneratorClass:FinishQuery()
 		errMsg = "Could not generate search, found no mods to search for"
 	end
 
-	-- Propagate groupResists to the slot table so result evaluation can use it
+	-- Propagate group options to the slot table so result evaluation can use them
 	if self.requesterContext and self.requesterContext.slotTbl then
 		self.requesterContext.slotTbl.groupResists = options.groupResists
+		self.requesterContext.slotTbl.groupDamage = options.groupDamage
 	end
 
 	local queryJson = dkjson.encode(queryTable)
@@ -1252,6 +1328,13 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 	updateLastAnchor(controls.groupResists)
 	popupHeight = popupHeight + 28
 
+	-- When enabled, elemental damage mods are merged into pseudo stats
+	controls.groupDamage = new("CheckBoxControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 18}, "Pseudo Damage:", function(state) end)
+	controls.groupDamage.state = (self.lastGroupDamage == true)
+	controls.groupDamage.tooltipText = "Merges Fire/Cold/Lightning damage mods into elemental damage pseudo stats\n(added to attacks, added to spells, increased, etc.).\nSaves filter slots and reflects the interchangeable nature of elemental damage prefixes."
+	updateLastAnchor(controls.groupDamage)
+	popupHeight = popupHeight + 28
+
 	-- basic filtering by slot for sockets and links, Megalomaniac does not have slot and Sockets use "Jewel nodeId"
 	if slot and not isJewelSlot and not isAbyssalJewelSlot and not slot.slotName:find("Flask") then
 		controls.sockets = new("EditControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 70, 18}, nil, nil, "%D")
@@ -1336,6 +1419,9 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		end
 		if controls.groupResists then
 			self.lastGroupResists, options.groupResists = controls.groupResists.state, controls.groupResists.state
+		end
+		if controls.groupDamage then
+			self.lastGroupDamage, options.groupDamage = controls.groupDamage.state, controls.groupDamage.state
 		end
 		if controls.sockets and controls.sockets.buf then
 			options.sockets = tonumber(controls.sockets.buf)

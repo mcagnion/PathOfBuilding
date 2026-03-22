@@ -433,6 +433,286 @@ describe("Resistance Swap — groupResists merging", function()
 	end)
 end)
 
+-- =====================
+-- damageTag tagging & groupDamage merging
+-- =====================
+
+-- Mirrors the damageTag tagging logic in TradeQueryGenerator:GenerateModWeights.
+-- Uses specific subcategories; overlap is resolved at merge time.
+local function getDamageTag(modText)
+	local damageElem = modText:match("(%a+) Damage")
+	if damageElem ~= "Fire" and damageElem ~= "Cold" and damageElem ~= "Lightning" then
+		return nil
+	end
+	if modText:match("Adds") then
+		if modText:match("to Spells and Attacks") then
+			return { adds_attacks = true, adds_spells = true }
+		elseif modText:match("to Attacks") then
+			return { adds_attacks = true }
+		elseif modText:match("to Spells") then
+			return { adds_spells = true }
+		else
+			return { adds = true }
+		end
+	elseif modText:match("increased") then
+		if modText:match("with Attack Skills") then
+			return { increased_attacks = true }
+		else
+			return { increased = true }
+		end
+	end
+	return nil
+end
+
+describe("Damage Swap — damageTag tagging", function()
+	it("tags flat added fire damage to attacks", function()
+		local tag = getDamageTag("Adds # to # Fire Damage to Attacks")
+		assert.is_not_nil(tag)
+		assert.is_true(tag.adds_attacks)
+		assert.is_nil(tag.adds_spells)
+	end)
+
+	it("tags flat added cold damage to spells", function()
+		local tag = getDamageTag("Adds # to # Cold Damage to Spells")
+		assert.is_not_nil(tag)
+		assert.is_true(tag.adds_spells)
+		assert.is_nil(tag.adds_attacks)
+	end)
+
+	it("tags flat added damage to spells and attacks as both", function()
+		local tag = getDamageTag("Adds # to # Lightning Damage to Spells and Attacks")
+		assert.is_not_nil(tag)
+		assert.is_true(tag.adds_attacks)
+		assert.is_true(tag.adds_spells)
+	end)
+
+	it("tags generic flat added damage (local/global)", function()
+		local tag = getDamageTag("Adds # to # Fire Damage")
+		assert.is_not_nil(tag)
+		assert.is_true(tag.adds)
+	end)
+
+	it("tags local weapon damage with (Local) suffix", function()
+		local tag = getDamageTag("Adds # to # Fire Damage (Local)")
+		assert.is_not_nil(tag)
+		assert.is_true(tag.adds)
+	end)
+
+	it("tags increased elemental damage", function()
+		local tag = getDamageTag("#% increased Fire Damage")
+		assert.is_not_nil(tag)
+		assert.is_true(tag.increased)
+	end)
+
+	it("tags increased damage with Attack Skills", function()
+		local tag = getDamageTag("#% increased Cold Damage with Attack Skills")
+		assert.is_not_nil(tag)
+		assert.is_true(tag.increased_attacks)
+		assert.is_nil(tag.increased)
+	end)
+
+	it("does not tag Physical damage", function()
+		assert.is_nil(getDamageTag("Adds # to # Physical Damage to Attacks"))
+	end)
+
+	it("does not tag Chaos damage", function()
+		assert.is_nil(getDamageTag("Adds # to # Chaos Damage to Spells"))
+	end)
+
+	it("does not tag damage leech mods", function()
+		assert.is_nil(getDamageTag("#% of Fire Damage Leeched as Life"))
+	end)
+
+	it("does not tag damage conversion mods", function()
+		assert.is_nil(getDamageTag("#% of Physical Damage Converted to Fire Damage"))
+	end)
+
+	it("tags conditional added damage mods", function()
+		local tag = getDamageTag("While a Unique Enemy is in your Presence, Adds # to # Fire Damage to Attacks")
+		assert.is_not_nil(tag)
+		assert.is_true(tag.adds_attacks)
+	end)
+end)
+
+describe("Damage Swap — groupDamage merging", function()
+	-- Mirrors the overlap-aware merging in TradeQueryGenerator:FinishQuery.
+	-- Uses specific pseudo stats when only one subcategory is present;
+	-- falls back to the generic pseudo stat when multiple subcategories overlap.
+	local function mergeDamage(modWeights)
+		local categoryMax = {}
+		local filtered = {}
+		for _, entry in ipairs(modWeights) do
+			if entry.damageTag then
+				local nw = entry.normalizedWeight or entry.weight
+				for cat, _ in pairs(entry.damageTag) do
+					if not categoryMax[cat] or nw > categoryMax[cat] then
+						categoryMax[cat] = nw
+					end
+				end
+			else
+				table.insert(filtered, entry)
+			end
+		end
+		-- Resolve overlap for the "adds" family
+		local addsMax = categoryMax.adds or 0
+		local addsAtkMax = categoryMax.adds_attacks or 0
+		local addsSplMax = categoryMax.adds_spells or 0
+		local addsCount = (addsMax > 0 and 1 or 0) + (addsAtkMax > 0 and 1 or 0) + (addsSplMax > 0 and 1 or 0)
+		if addsCount > 1 then
+			local maxW = math.max(addsMax, addsAtkMax, addsSplMax)
+			table.insert(filtered, { tradeModId = "pseudo.pseudo_adds_elemental_damage", weight = maxW })
+		elseif addsMax > 0 then
+			table.insert(filtered, { tradeModId = "pseudo.pseudo_adds_elemental_damage", weight = addsMax })
+		elseif addsAtkMax > 0 then
+			table.insert(filtered, { tradeModId = "pseudo.pseudo_adds_elemental_damage_to_attacks", weight = addsAtkMax })
+		elseif addsSplMax > 0 then
+			table.insert(filtered, { tradeModId = "pseudo.pseudo_adds_elemental_damage_to_spells", weight = addsSplMax })
+		end
+		-- Resolve overlap for the "increased" family
+		local incMax = categoryMax.increased or 0
+		local incAtkMax = categoryMax.increased_attacks or 0
+		local incCount = (incMax > 0 and 1 or 0) + (incAtkMax > 0 and 1 or 0)
+		if incCount > 1 then
+			local maxW = math.max(incMax, incAtkMax)
+			table.insert(filtered, { tradeModId = "pseudo.pseudo_increased_elemental_damage", weight = maxW })
+		elseif incMax > 0 then
+			table.insert(filtered, { tradeModId = "pseudo.pseudo_increased_elemental_damage", weight = incMax })
+		elseif incAtkMax > 0 then
+			table.insert(filtered, { tradeModId = "pseudo.pseudo_increased_elemental_damage_with_attack_skills", weight = incAtkMax })
+		end
+		return filtered
+	end
+
+	it("only attacks → uses specific pseudo stat", function()
+		local weights = {
+			{ tradeModId = "fire_dmg_atk", weight = 10, damageTag = { adds_attacks = true } },
+			{ tradeModId = "cold_dmg_atk", weight = 7,  damageTag = { adds_attacks = true } },
+			{ tradeModId = "life",         weight = 5 },
+		}
+		local result = mergeDamage(weights)
+		assert.are.equal(2, #result)
+		assert.are.equal("life", result[1].tradeModId)
+		assert.are.equal("pseudo.pseudo_adds_elemental_damage_to_attacks", result[2].tradeModId)
+		assert.are.equal(10, result[2].weight)
+	end)
+
+	it("only spells → uses specific pseudo stat", function()
+		local weights = {
+			{ tradeModId = "fire_dmg_spl", weight = 8, damageTag = { adds_spells = true } },
+		}
+		local result = mergeDamage(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("pseudo.pseudo_adds_elemental_damage_to_spells", result[1].tradeModId)
+	end)
+
+	it("only increased_attacks → uses specific pseudo stat", function()
+		local weights = {
+			{ tradeModId = "inc_fire_atk", weight = 6, damageTag = { increased_attacks = true } },
+		}
+		local result = mergeDamage(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("pseudo.pseudo_increased_elemental_damage_with_attack_skills", result[1].tradeModId)
+		assert.are.equal(6, result[1].weight)
+	end)
+
+	it("attacks + spells overlap → falls back to generic adds pseudo", function()
+		local weights = {
+			{ tradeModId = "fire_dmg_atk", weight = 10, damageTag = { adds_attacks = true } },
+			{ tradeModId = "cold_dmg_spl", weight = 8,  damageTag = { adds_spells = true } },
+		}
+		local result = mergeDamage(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("pseudo.pseudo_adds_elemental_damage", result[1].tradeModId)
+		assert.are.equal(10, result[1].weight) -- max of 10, 8
+	end)
+
+	it("hybrid 'to Spells and Attacks' triggers overlap → generic adds pseudo", function()
+		local weights = {
+			{ tradeModId = "fire_dmg_both", weight = 9, damageTag = { adds_attacks = true, adds_spells = true } },
+		}
+		local result = mergeDamage(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("pseudo.pseudo_adds_elemental_damage", result[1].tradeModId)
+		assert.are.equal(9, result[1].weight)
+	end)
+
+	it("generic adds + attacks overlap → generic pseudo", function()
+		local weights = {
+			{ tradeModId = "fire_dmg_gen", weight = 5, damageTag = { adds = true } },
+			{ tradeModId = "cold_dmg_atk", weight = 12, damageTag = { adds_attacks = true } },
+		}
+		local result = mergeDamage(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("pseudo.pseudo_adds_elemental_damage", result[1].tradeModId)
+		assert.are.equal(12, result[1].weight)
+	end)
+
+	it("increased + increased_attacks overlap → generic increased pseudo", function()
+		local weights = {
+			{ tradeModId = "inc_fire",     weight = 8, damageTag = { increased = true } },
+			{ tradeModId = "inc_cold_atk", weight = 6, damageTag = { increased_attacks = true } },
+		}
+		local result = mergeDamage(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("pseudo.pseudo_increased_elemental_damage", result[1].tradeModId)
+		assert.are.equal(8, result[1].weight)
+	end)
+
+	it("no overlap: adds_attacks and increased stay separate", function()
+		local weights = {
+			{ tradeModId = "fire_dmg_atk", weight = 10, damageTag = { adds_attacks = true } },
+			{ tradeModId = "inc_fire_dmg", weight = 6,  damageTag = { increased = true } },
+		}
+		local result = mergeDamage(weights)
+		assert.are.equal(2, #result)
+		local ids = {}
+		for _, e in ipairs(result) do ids[e.tradeModId] = e.weight end
+		assert.are.equal(10, ids["pseudo.pseudo_adds_elemental_damage_to_attacks"])
+		assert.are.equal(6,  ids["pseudo.pseudo_increased_elemental_damage"])
+	end)
+
+	it("max weight wins when multiple mods contribute to same category", function()
+		local weights = {
+			{ tradeModId = "fire_dmg_atk",  weight = 5,  damageTag = { adds_attacks = true } },
+			{ tradeModId = "cold_dmg_atk",  weight = 12, damageTag = { adds_attacks = true } },
+			{ tradeModId = "light_dmg_atk", weight = 8,  damageTag = { adds_attacks = true } },
+		}
+		local result = mergeDamage(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal(12, result[1].weight)
+	end)
+
+	it("non-damage mods pass through untouched", function()
+		local weights = {
+			{ tradeModId = "life",   weight = 10 },
+			{ tradeModId = "mana",   weight = 5 },
+			{ tradeModId = "fire_dmg_atk", weight = 8, damageTag = { adds_attacks = true } },
+		}
+		local result = mergeDamage(weights)
+		assert.are.equal(3, #result)
+		assert.are.equal("life", result[1].tradeModId)
+		assert.are.equal("mana", result[2].tradeModId)
+	end)
+
+	it("groupResists and groupDamage can coexist independently", function()
+		local weights = {
+			{ tradeModId = "fire_resist",  weight = 10, resistTag = { elem = true } },
+			{ tradeModId = "fire_dmg_atk", weight = 8,  damageTag = { adds_attacks = true } },
+			{ tradeModId = "life",         weight = 5 },
+		}
+		-- Apply resist merging first
+		local afterResist = mergeResists(weights)
+		-- Then apply damage merging
+		local result = mergeDamage(afterResist)
+		assert.are.equal(3, #result)
+		local ids = {}
+		for _, e in ipairs(result) do ids[e.tradeModId] = e.weight end
+		assert.are.equal(5,  ids["life"])
+		assert.are.equal(10, ids["pseudo.pseudo_total_elemental_resistance"])
+		assert.are.equal(8,  ids["pseudo.pseudo_adds_elemental_damage_to_attacks"])
+	end)
+end)
+
 describe("Resistance Swap — combo enumeration", function()
 	-- mirrors the mixed-radix counter in TradeQuery:GetResultEvaluation
 	local function allCombos(N)

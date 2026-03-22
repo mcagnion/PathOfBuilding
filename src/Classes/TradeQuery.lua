@@ -746,7 +746,7 @@ function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, ba
 			end
 			return item
 		end
-		if self.slotTables[row_idx].groupResists then
+		if self.slotTables[row_idx].groupResists or self.slotTables[row_idx].groupDamage then
 			local baseItem = buildItem(result.item_string)
 			-- Corrupted and mirrored items cannot be modified via Harvest
 			if baseItem.corrupted or baseItem.mirrored then
@@ -1115,7 +1115,7 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 		tooltip:AddSeparator(10)
 		tooltip:AddLine(16, string.format("^7Price: %s %s", result.amount, result.currency))
 		-- Show Harvest swap suggestions when groupResists is active
-		if slotTbl.groupResists and result.evaluation then
+		if (slotTbl.groupResists or slotTbl.groupDamage) and result.evaluation then
 			local eval = result.evaluation[1]
 			local hasResistSwaps = eval and eval.resistSwaps and #eval.resistSwaps > 0
 			local hasDamageSwaps = eval and eval.damageSwaps and #eval.damageSwaps > 0
