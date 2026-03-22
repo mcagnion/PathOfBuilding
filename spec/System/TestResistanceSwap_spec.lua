@@ -1,5 +1,5 @@
--- Tests for the resistance swap feature:
---   - ItemsTab: which explicit mods are detected as Harvest-swappable
+-- Tests for the element swap feature:
+--   - ItemsTab: which explicit mods are detected as Harvest-swappable (resistance + damage)
 --   - TradeQueryGenerator: resistTag tagging and groupResists merging
 --   - TradeQuery: 3^N combo enumeration and mod line gsub logic
 
@@ -133,6 +133,7 @@ describe("Resistance Swap — resistTag tagging", function()
 		end
 		local hybridElem = modText:match("to (%a+) and Chaos Resistances$")
 		if hybridElem == "Fire" or hybridElem == "Cold" or hybridElem == "Lightning" then
+			-- Hybrid: each pseudo stat on the trade site only sees its own component, no split needed.
 			return { elem = true, chaos = true }, 1
 		end
 		if modText:match("^%+#%% to all Elemental Resistances$") then
@@ -211,6 +212,8 @@ end)
 
 describe("Resistance Swap — groupResists merging", function()
 	-- mirrors the logic in TradeQueryGenerator:FinishQuery
+	-- Elemental and chaos pseudo stats are separate; hybrid elem+chaos mods
+	-- contribute only to the elemental pseudo (no double-counting).
 	local function mergeResists(modWeights)
 		local elemMax, chaosMax = 0, 0
 		local filtered = {}
@@ -268,7 +271,7 @@ describe("Resistance Swap — groupResists merging", function()
 		assert.are.equal(6, result[1].weight)
 	end)
 
-	it("adds both pseudo-stats for element+chaos hybrid mods", function()
+	it("element+chaos hybrid mod contributes to both pseudo stats with full weight", function()
 		local weights = {
 			{ tradeModId = "fire_chaos", weight = 9, resistTag = { elem = true, chaos = true } },
 		}
@@ -350,6 +353,70 @@ describe("Resistance Swap — groupResists merging", function()
 		assert.are.equal(1, #result)
 		assert.are.equal("pseudo.pseudo_total_elemental_resistance", result[1].tradeModId)
 		assert.are.equal(10, result[1].weight)
+	end)
+
+	it("implicit elemental resist mod is merged like explicit", function()
+		local weights = {
+			{ tradeModId = "implicit.stat_fire_resist", weight = 5, resistTag = { elem = true } },
+			{ tradeModId = "life", weight = 8 },
+		}
+		local result = mergeResists(weights)
+		assert.are.equal(2, #result)
+		assert.are.equal("life", result[1].tradeModId)
+		assert.are.equal("pseudo.pseudo_total_elemental_resistance", result[2].tradeModId)
+		assert.are.equal(5, result[2].weight)
+	end)
+
+	it("implicit dual-elem resist mod is merged like explicit", function()
+		local weights = {
+			{ tradeModId = "implicit.stat_fire_cold", weight = 20, normalizedWeight = 10, resistTag = { elem = true } },
+		}
+		local result = mergeResists(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("pseudo.pseudo_total_elemental_resistance", result[1].tradeModId)
+		assert.are.equal(10, result[1].weight)
+	end)
+
+	it("implicit all-elem resist mod is merged like explicit", function()
+		local weights = {
+			{ tradeModId = "implicit.stat_all_elem", weight = 30, normalizedWeight = 10, resistTag = { elem = true } },
+		}
+		local result = mergeResists(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("pseudo.pseudo_total_elemental_resistance", result[1].tradeModId)
+		assert.are.equal(10, result[1].weight)
+	end)
+
+	it("implicit chaos resist mod is merged into chaos pseudo", function()
+		local weights = {
+			{ tradeModId = "implicit.stat_chaos_resist", weight = 4, resistTag = { chaos = true } },
+		}
+		local result = mergeResists(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("pseudo.pseudo_total_chaos_resistance", result[1].tradeModId)
+		assert.are.equal(4, result[1].weight)
+	end)
+
+	it("explicit and implicit elemental mods are merged together (max wins)", function()
+		local weights = {
+			{ tradeModId = "explicit.stat_fire_resist",  weight = 10, resistTag = { elem = true } },
+			{ tradeModId = "implicit.stat_cold_resist",  weight = 7,  resistTag = { elem = true } },
+		}
+		local result = mergeResists(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("pseudo.pseudo_total_elemental_resistance", result[1].tradeModId)
+		assert.are.equal(10, result[1].weight)
+	end)
+
+	it("explicit and implicit chaos mods are merged together (max wins)", function()
+		local weights = {
+			{ tradeModId = "explicit.stat_chaos_resist", weight = 3, resistTag = { chaos = true } },
+			{ tradeModId = "implicit.stat_chaos_resist", weight = 6, resistTag = { chaos = true } },
+		}
+		local result = mergeResists(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("pseudo.pseudo_total_chaos_resistance", result[1].tradeModId)
+		assert.are.equal(6, result[1].weight) -- implicit had higher weight
 	end)
 
 	it("dual/all-elem mods are removed from individual filters (no double-counting)", function()
@@ -454,5 +521,324 @@ describe("Resistance Swap — combo enumeration", function()
 		-- first combo: {1,1,1}, last combo: {3,3,3}
 		assert.are.equal(1, combos[1][1]) assert.are.equal(1, combos[1][2]) assert.are.equal(1, combos[1][3])
 		assert.are.equal(3, combos[27][1]) assert.are.equal(3, combos[27][2]) assert.are.equal(3, combos[27][3])
+	end)
+end)
+
+-- =====================
+-- Damage Swap Tests
+-- =====================
+
+-- Returns the list of explicit mod lines that are Harvest-swappable elemental damage mods
+local function swappableDamage(item)
+	local found = {}
+	for i, modLine in ipairs(item.explicitModLines or {}) do
+		local t = modLine.line and modLine.line:match("(%a+) Damage")
+		if t == "Fire" or t == "Cold" or t == "Lightning" then
+			table.insert(found, { idx = i, elemType = t })
+		end
+	end
+	return found
+end
+
+-- Combined detection (mirrors TradeQuery:GetResultEvaluation)
+local function swappableMods(item)
+	local found = {}
+	for i, modLine in ipairs(item.explicitModLines or {}) do
+		if not modLine.fractured and modLine.line then
+			local resistType = modLine.line:match("to (%a+) Resistance$")
+			if resistType == "Fire" or resistType == "Cold" or resistType == "Lightning" then
+				table.insert(found, { idx = i, originalType = resistType, kind = "resist" })
+			else
+				local damageType = modLine.line:match("(%a+) Damage")
+				if damageType == "Fire" or damageType == "Cold" or damageType == "Lightning" then
+					table.insert(found, { idx = i, originalType = damageType, kind = "damage" })
+				end
+			end
+		end
+	end
+	return found
+end
+
+local function makeWeapon(explicits)
+	local lines = { "Rarity: Rare", "Name", "Vaal Rapier" }
+	for _, mod in ipairs(explicits) do
+		table.insert(lines, mod)
+	end
+	return table.concat(lines, "\n")
+end
+
+describe("Damage Swap — Item parsing", function()
+	it("detects explicit elemental damage mods", function()
+		local item = new("Item", makeRing({
+			"Adds 10 to 20 Fire Damage to Attacks",
+			"Adds 5 to 15 Cold Damage to Spells",
+			"Adds 1 to 30 Lightning Damage",
+		}))
+		local found = swappableDamage(item)
+		assert.are.equal(3, #found)
+		assert.are.equal("Fire", found[1].elemType)
+		assert.are.equal("Cold", found[2].elemType)
+		assert.are.equal("Lightning", found[3].elemType)
+	end)
+
+	it("does not detect Physical or Chaos damage as swappable", function()
+		local item = new("Item", makeRing({
+			"Adds 10 to 20 Physical Damage to Attacks",
+			"Adds 5 to 15 Chaos Damage to Spells",
+		}))
+		local found = swappableDamage(item)
+		assert.are.equal(0, #found)
+	end)
+
+	it("does not detect implicit damage mods as swappable in explicitModLines", function()
+		local item = new("Item", makeRing(
+			{ "+40 to maximum Life" },
+			{ "Adds 10 to 20 Fire Damage to Attacks" }
+		))
+		local found = swappableDamage(item)
+		assert.are.equal(0, #found)
+	end)
+
+	it("detects increased elemental damage mods", function()
+		local item = new("Item", makeRing({
+			"20% increased Fire Damage",
+			"15% increased Cold Damage",
+		}))
+		local found = swappableDamage(item)
+		assert.are.equal(2, #found)
+	end)
+
+	it("detects increased elemental damage with Attack Skills", function()
+		local item = new("Item", makeRing({
+			"20% increased Fire Damage with Attack Skills",
+		}))
+		local found = swappableDamage(item)
+		assert.are.equal(1, #found)
+		assert.are.equal("Fire", found[1].elemType)
+	end)
+end)
+
+describe("Damage Swap — combined detection with resistance", function()
+	it("detects both resist and damage mods on the same item", function()
+		local item = new("Item", makeRing({
+			"+40% to Fire Resistance",
+			"Adds 10 to 20 Cold Damage to Attacks",
+			"+30% to Lightning Resistance",
+			"15% increased Fire Damage",
+		}))
+		local found = swappableMods(item)
+		assert.are.equal(4, #found)
+		assert.are.equal("resist", found[1].kind)
+		assert.are.equal("Fire", found[1].originalType)
+		assert.are.equal("damage", found[2].kind)
+		assert.are.equal("Cold", found[2].originalType)
+		assert.are.equal("resist", found[3].kind)
+		assert.are.equal("Lightning", found[3].originalType)
+		assert.are.equal("damage", found[4].kind)
+		assert.are.equal("Fire", found[4].originalType)
+	end)
+
+	it("excludes fractured mods from both resist and damage", function()
+		local item = new("Item", makeRing({
+			"+40% to Fire Resistance",
+			"Adds 10 to 20 Cold Damage to Attacks",
+		}))
+		-- Mark both as fractured
+		for _, ml in ipairs(item.explicitModLines) do
+			ml.fractured = true
+		end
+		local found = swappableMods(item)
+		assert.are.equal(0, #found)
+	end)
+end)
+
+describe("Damage Swap — gsub patterns", function()
+	it("swaps flat added damage to attacks", function()
+		local elemTypes = { "Fire", "Cold", "Lightning" }
+		local line = "Adds 10 to 20 Fire Damage to Attacks"
+		for _, target in ipairs(elemTypes) do
+			local swapped = line:gsub("%a+ Damage", target .. " Damage", 1)
+			assert.are.equal("Adds 10 to 20 " .. target .. " Damage to Attacks", swapped)
+		end
+	end)
+
+	it("swaps flat added damage to spells", function()
+		local line = "Adds 5 to 15 Cold Damage to Spells"
+		local swapped = line:gsub("%a+ Damage", "Lightning Damage", 1)
+		assert.are.equal("Adds 5 to 15 Lightning Damage to Spells", swapped)
+	end)
+
+	it("swaps increased elemental damage", function()
+		local line = "20% increased Lightning Damage"
+		local swapped = line:gsub("%a+ Damage", "Fire Damage", 1)
+		assert.are.equal("20% increased Fire Damage", swapped)
+	end)
+
+	it("swaps increased elemental damage with Attack Skills", function()
+		local line = "20% increased Fire Damage with Attack Skills"
+		local swapped = line:gsub("%a+ Damage", "Cold Damage", 1)
+		assert.are.equal("20% increased Cold Damage with Attack Skills", swapped)
+	end)
+
+	it("swaps local weapon damage", function()
+		local line = "Adds 10 to 20 Fire Damage"
+		local swapped = line:gsub("%a+ Damage", "Cold Damage", 1)
+		assert.are.equal("Adds 10 to 20 Cold Damage", swapped)
+	end)
+
+	it("does not alter unrelated lines", function()
+		local line = "+50 to maximum Life"
+		local swapped = line:gsub("%a+ Damage", "Fire Damage", 1)
+		assert.are.equal(line, swapped)
+	end)
+
+	it("gsub is idempotent when target matches current type", function()
+		local line = "Adds 10 to 20 Fire Damage to Attacks"
+		local swapped = line:gsub("%a+ Damage", "Fire Damage", 1)
+		assert.are.equal(line, swapped)
+	end)
+
+	it("gsub with limit 1 only replaces first occurrence", function()
+		-- Edge case: a line with "Damage" appearing in different contexts
+		local line = "Gain 5% of Physical Damage as Extra Fire Damage"
+		-- The first %a+ Damage match is "Physical Damage", which gets replaced
+		local swapped = line:gsub("%a+ Damage", "Cold Damage", 1)
+		assert.are.equal("Gain 5% of Cold Damage as Extra Fire Damage", swapped)
+		-- This mod wouldn't be detected as swappable because match("(%a+) Damage")
+		-- returns "Physical", not Fire/Cold/Lightning
+	end)
+end)
+
+-- =====================
+-- Swap Group & Duplicate Element Constraint
+-- =====================
+
+-- Mirrors the swap group computation in TradeQuery:GetResultEvaluation
+local function swapGroupKey(line, elemType, kind)
+	if kind == "resist" then
+		return "resist"
+	end
+	return line:gsub(elemType .. " Damage", "ELEM Damage", 1):gsub("%d+", "#")
+end
+
+-- Mirrors the validity check: no two mods in the same group can share an element
+local function isComboValid(swapMods, combo)
+	local N = #swapMods
+	for a = 1, N - 1 do
+		for b = a + 1, N do
+			if swapMods[a].group == swapMods[b].group and combo[a] == combo[b] then
+				return false
+			end
+		end
+	end
+	return true
+end
+
+describe("Swap Group — key computation", function()
+	it("all pure resist mods share the same group", function()
+		assert.are.equal("resist", swapGroupKey("+40% to Fire Resistance", "Fire", "resist"))
+		assert.are.equal("resist", swapGroupKey("+35% to Cold Resistance", "Cold", "resist"))
+		assert.are.equal("resist", swapGroupKey("+30% to Lightning Resistance", "Lightning", "resist"))
+	end)
+
+	it("same damage mod template produces same group", function()
+		local g1 = swapGroupKey("Adds 10 to 20 Fire Damage to Attacks", "Fire", "damage")
+		local g2 = swapGroupKey("Adds 5 to 15 Cold Damage to Attacks", "Cold", "damage")
+		assert.are.equal(g1, g2)
+	end)
+
+	it("different damage mod templates produce different groups", function()
+		local gAttacks = swapGroupKey("Adds 10 to 20 Fire Damage to Attacks", "Fire", "damage")
+		local gSpells = swapGroupKey("Adds 10 to 20 Fire Damage to Spells", "Fire", "damage")
+		local gIncreased = swapGroupKey("20% increased Fire Damage", "Fire", "damage")
+		local gLocal = swapGroupKey("Adds 10 to 20 Fire Damage", "Fire", "damage")
+		assert.are_not.equal(gAttacks, gSpells)
+		assert.are_not.equal(gAttacks, gIncreased)
+		assert.are_not.equal(gAttacks, gLocal)
+		assert.are_not.equal(gSpells, gIncreased)
+	end)
+
+	it("increased damage with Attack Skills is a separate group", function()
+		local g1 = swapGroupKey("20% increased Fire Damage", "Fire", "damage")
+		local g2 = swapGroupKey("20% increased Fire Damage with Attack Skills", "Fire", "damage")
+		assert.are_not.equal(g1, g2)
+	end)
+end)
+
+describe("Swap Group — duplicate element constraint", function()
+	it("rejects combo with two resist mods assigned the same element", function()
+		local mods = {
+			{ group = "resist", kind = "resist" },
+			{ group = "resist", kind = "resist" },
+		}
+		-- combo {1,1} = both Fire → invalid
+		assert.is_false(isComboValid(mods, {1, 1}))
+		-- combo {1,2} = Fire + Cold → valid
+		assert.is_true(isComboValid(mods, {1, 2}))
+	end)
+
+	it("rejects combo with two same-group damage mods assigned the same element", function()
+		local group = "Adds # to # ELEM Damage to Attacks"
+		local mods = {
+			{ group = group, kind = "damage" },
+			{ group = group, kind = "damage" },
+		}
+		assert.is_false(isComboValid(mods, {2, 2}))
+		assert.is_true(isComboValid(mods, {2, 3}))
+	end)
+
+	it("allows same element across different groups", function()
+		local mods = {
+			{ group = "resist", kind = "resist" },
+			{ group = "Adds # to # ELEM Damage to Attacks", kind = "damage" },
+		}
+		-- Both assigned Fire → valid (different groups)
+		assert.is_true(isComboValid(mods, {1, 1}))
+	end)
+
+	it("allows same element for damage mods in different subgroups", function()
+		local mods = {
+			{ group = "Adds # to # ELEM Damage to Attacks", kind = "damage" },
+			{ group = "#% increased ELEM Damage", kind = "damage" },
+		}
+		-- Both assigned Fire → valid (different damage subgroups)
+		assert.is_true(isComboValid(mods, {1, 1}))
+	end)
+
+	it("validates mixed resist + damage combo correctly", function()
+		local mods = {
+			{ group = "resist", kind = "resist" },
+			{ group = "resist", kind = "resist" },
+			{ group = "Adds # to # ELEM Damage to Attacks", kind = "damage" },
+			{ group = "Adds # to # ELEM Damage to Attacks", kind = "damage" },
+		}
+		-- {1,2,1,2} = Fire res + Cold res + Fire dmg + Cold dmg → valid
+		assert.is_true(isComboValid(mods, {1, 2, 1, 2}))
+		-- {1,1,1,2} = Fire res + Fire res + ... → invalid (resist duplicate)
+		assert.is_false(isComboValid(mods, {1, 1, 1, 2}))
+		-- {1,2,3,3} = valid resist + Lightning dmg + Lightning dmg → invalid (damage duplicate)
+		assert.is_false(isComboValid(mods, {1, 2, 3, 3}))
+	end)
+
+	it("three resist mods: only combos with all distinct elements are valid", function()
+		local mods = {
+			{ group = "resist", kind = "resist" },
+			{ group = "resist", kind = "resist" },
+			{ group = "resist", kind = "resist" },
+		}
+		-- Count valid combos: should be 3! = 6 (all permutations of {1,2,3})
+		local validCount = 0
+		local combo = {1, 1, 1}
+		for _ = 1, 27 do
+			if isComboValid(mods, combo) then
+				validCount = validCount + 1
+			end
+			for j = 3, 1, -1 do
+				combo[j] = combo[j] + 1
+				if combo[j] <= 3 then break end
+				combo[j] = 1
+			end
+		end
+		assert.are.equal(6, validCount)
 	end)
 end)

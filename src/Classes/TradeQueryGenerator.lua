@@ -629,7 +629,8 @@ function TradeQueryGeneratorClass:GenerateModWeights(modsToTest)
 				else
 					local hybridElem = modText:match("to (%a+) and Chaos Resistances$")
 					if hybridElem == "Fire" or hybridElem == "Cold" or hybridElem == "Lightning" then
-						-- element+Chaos hybrid: contributes 1 type to elem pseudo-total and 1 to chaos pseudo-total
+						-- element+Chaos hybrid: each pseudo stat on the trade site only sees its own
+						-- component (elem sees fire, chaos sees chaos), so no need to split the weight.
 						resistTag = { elem = true, chaos = true }
 					elseif modText:match("^%+#%% to all Elemental Resistances$") then
 						-- all-elemental mod: contributes 3× (Fire+Cold+Lightning) to pseudo_total_elemental
@@ -1003,7 +1004,10 @@ function TradeQueryGeneratorClass:FinishQuery()
 
 	local effective_max = MAX_FILTERS - num_extra
 
-	-- Merge elemental/chaos resistance mods into pseudo stats if option enabled
+	-- Merge resistance mods into pseudo stats if option enabled.
+	-- Elemental and chaos pseudo stats are independent; hybrid elem+chaos mods
+	-- contribute to both (no double-counting because each trade pseudo stat
+	-- only counts its own component on the item).
 	if self.calcContext.options.groupResists then
 		local elemMax, chaosMax = 0, 0
 		local filtered = { }
@@ -1241,10 +1245,10 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 	controls.maxLevelLabel = new("LabelControl", {"RIGHT",controls.maxLevel,"LEFT"}, {-5, 0, 0, 16}, "Max Level:")
 	updateLastAnchor(controls.maxLevel)
 
-	-- When enabled, elemental/chaos resistance mods are merged into pseudo stats (reflects swappable nature, saves filter slots)
+	-- When enabled, resistance mods are merged into pseudo stats (reflects swappable nature, saves filter slots)
 	controls.groupResists = new("CheckBoxControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 18}, "Pseudo Resistances:", function(state) end)
 	controls.groupResists.state = (self.lastGroupResists == true)
-	controls.groupResists.tooltipText = "Merges Fire/Cold/Lightning resistance mods (including hybrid Elemental+Chaos)\ninto pseudo.pseudo_total_elemental_resistance and pseudo.pseudo_total_chaos_resistance.\nSaves filter slots and reflects the interchangeable nature of elemental resistance suffixes."
+	controls.groupResists.tooltipText = "Merges Fire/Cold/Lightning resistance mods into pseudo.pseudo_total_elemental_resistance\nand Chaos resistance mods into pseudo.pseudo_total_chaos_resistance.\nHybrid Elemental+Chaos mods contribute half weight to each.\nSaves filter slots and reflects the interchangeable nature of elemental resistance suffixes."
 	updateLastAnchor(controls.groupResists)
 	popupHeight = popupHeight + 28
 
