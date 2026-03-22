@@ -890,4 +890,239 @@ describe("TradeQueryGenerator", function()
             assert.are.equal("Cone Helmet", dkjson.decode(queryGen.requesterContext.tradeQueryPlan[2].query).query.type)
         end)
     end)
+
+    describe("Required mod filters", function()
+        -- Synthetic trade IDs used to isolate tests from the live trade stats lookup.
+        local CORRUPTED_BLOOD_ID = "corrupted.stat_3299347024"
+        local MAX_LIFE_ID        = "explicit.stat_3299347025"
+
+        local function makeQueryGen()
+            local qg = new("TradeQueryGenerator", { itemsTab = { items = {} } })
+            -- Inject known trade ID mappings; avoids dependency on live API data.
+            qg.modTradeIdByText = {
+                ["Corrupted Blood cannot be inflicted on you"] = CORRUPTED_BLOOD_ID,
+                [" to maximum Life"] = MAX_LIFE_ID,  -- normalized form of "+# to maximum Life"
+            }
+            qg.requesterContext = {}
+            return qg
+        end
+
+        local function baseCalcContext(pinnedModLines)
+            return {
+                slot = { selItemId = 1, slotName = "Jewel 1" },
+                testItem = new("Item", "Rarity: RARE\nStat Tester\nCrimson Jewel"),
+                calcFunc = function() return { Score = 0 } end,
+                baseOutput = { Score = 0 },
+                baseStatValue = 0,
+                itemCategoryQueryStr = "jewel",
+                options = {
+                    includeMirrored = true,
+                    influence1 = 1,
+                    influence2 = 1,
+                    statWeights = {},
+                    pinnedModLines = pinnedModLines or {},
+                },
+                special = {},
+            }
+        end
+
+        local function equippedItem()
+            return {
+                explicitModLines = {},
+                scourgeModLines  = {},
+                implicitModLines = {},
+                crucibleModLines = {},
+            }
+        end
+
+        describe("ResolveRequiredModFilters", function()
+            -- Pass: No mods pinned => empty list, existing query unchanged.
+            -- Fail: Returns non-empty list, inserting spurious and-filters into the query.
+            it("returns empty list when pinnedModLines is empty", function()
+                local qg = makeQueryGen()
+                local result = qg:ResolveRequiredModFilters({})
+                assert.are.same({}, result)
+            end)
+
+            -- Pass: nil input treated as no mods pinned.
+            -- Fail: Crashes on nil, breaking queries that never set pinnedModLines.
+            it("returns empty list when pinnedModLines is nil", function()
+                local qg = makeQueryGen()
+                local result = qg:ResolveRequiredModFilters(nil)
+                assert.are.same({}, result)
+            end)
+
+            -- Pass: Single mod resolves to the correct trade stat ID.
+            -- Fail: Wrong ID or empty list, causing the filter to be missing from the query.
+            it("resolves a single required mod to its trade filter id", function()
+                local qg = makeQueryGen()
+                local result = qg:ResolveRequiredModFilters({ "Corrupted Blood cannot be inflicted on you" })
+                assert.are.equal(1, #result)
+                assert.are.equal(CORRUPTED_BLOOD_ID, result[1].id)
+            end)
+
+            -- Pass: Corrupted Blood specifically maps to a valid trade stat id.
+            -- Fail: Returns nil/empty, meaning the immunity would not be enforced in trade queries.
+            it("handles 'Corrupted Blood cannot be inflicted on you' mod", function()
+                local qg = makeQueryGen()
+                local result = qg:ResolveRequiredModFilters({ "Corrupted Blood cannot be inflicted on you" })
+                assert.are.equal(1, #result)
+                assert.is_not_nil(result[1].id)
+                assert.are.equal(CORRUPTED_BLOOD_ID, result[1].id)
+            end)
+
+            -- Pass: Two mods each produce their own filter entry.
+            -- Fail: Only one entry returned, silently dropping a required constraint.
+            it("resolves multiple required mods to separate filter entries", function()
+                local qg = makeQueryGen()
+                local result = qg:ResolveRequiredModFilters({
+                    "Corrupted Blood cannot be inflicted on you",
+                    "+42 to maximum Life",
+                })
+                assert.are.equal(2, #result)
+                assert.are.equal(CORRUPTED_BLOOD_ID, result[1].id)
+                assert.are.equal(MAX_LIFE_ID,        result[2].id)
+            end)
+
+            -- Pass: Unknown mod is skipped; function returns empty without crashing.
+            -- Fail: Crashes or raises an error, breaking the query flow entirely.
+            it("skips mods with no trade mapping without crashing", function()
+                local qg = makeQueryGen()
+                local ok, result = pcall(function()
+                    return qg:ResolveRequiredModFilters({ "This mod does not exist in trade data" })
+                end)
+                assert.is_true(ok)
+                assert.are.same({}, result)
+            end)
+        end)
+
+        describe("FinishQuery with pinnedModLines", function()
+            -- Pass: No pinned mods => query has only the weighted stat group, no and-group.
+            -- Fail: Spurious and-group inserted, altering previously working queries.
+            it("generates query without required mods: no and-group added", function()
+                local queryJson
+                local originalClosePopup = main.ClosePopup
+                main.ClosePopup = function() end
+
+                local qg = makeQueryGen()
+                qg.requesterCallback = function(_, payload) queryJson = payload end
+                qg.modWeights = { { tradeModId = "explicit.stat_1", weight = 10, meanStatDiff = 100 } }
+                qg.calcContext = baseCalcContext(nil)
+                qg.itemsTab.items[1] = equippedItem()
+
+                qg:FinishQuery()
+                main.ClosePopup = originalClosePopup
+
+                local query = dkjson.decode(queryJson)
+                assert.are.equal(1, #query.query.stats)
+                assert.are.equal("weight", query.query.stats[1].type)
+            end)
+
+            -- Pass: Pinned mod appears as an and-filter in the generated query.
+            -- Fail: No and-group in query, meaning the required mod constraint is silently dropped.
+            it("adds a required mod as an and-filter in the query", function()
+                local queryJson
+                local originalClosePopup = main.ClosePopup
+                main.ClosePopup = function() end
+
+                local qg = makeQueryGen()
+                qg.requesterCallback = function(_, payload) queryJson = payload end
+                qg.modWeights = { { tradeModId = "explicit.stat_1", weight = 10, meanStatDiff = 100 } }
+                qg.calcContext = baseCalcContext({ "Corrupted Blood cannot be inflicted on you" })
+                qg.itemsTab.items[1] = equippedItem()
+
+                qg:FinishQuery()
+                main.ClosePopup = originalClosePopup
+
+                local query = dkjson.decode(queryJson)
+                assert.are.equal(2, #query.query.stats)
+                local andGroup = query.query.stats[2]
+                assert.are.equal("and", andGroup.type)
+                assert.are.equal(1, #andGroup.filters)
+                assert.are.equal(CORRUPTED_BLOOD_ID, andGroup.filters[1].id)
+            end)
+
+            -- Pass: Corrupted Blood mod is enforced end-to-end in the trade query JSON.
+            -- Fail: No and-group or wrong id, allowing trade results that lack the immunity.
+            it("enforces 'Corrupted Blood cannot be inflicted on you' as a required filter", function()
+                local queryJson
+                local originalClosePopup = main.ClosePopup
+                main.ClosePopup = function() end
+
+                local qg = makeQueryGen()
+                qg.requesterCallback = function(_, payload) queryJson = payload end
+                qg.modWeights = { { tradeModId = "explicit.stat_1", weight = 5, meanStatDiff = 50 } }
+                qg.calcContext = baseCalcContext({ "Corrupted Blood cannot be inflicted on you" })
+                qg.itemsTab.items[1] = equippedItem()
+
+                qg:FinishQuery()
+                main.ClosePopup = originalClosePopup
+
+                local query = dkjson.decode(queryJson)
+                local andGroup = nil
+                for _, g in ipairs(query.query.stats) do
+                    if g.type == "and" then andGroup = g break end
+                end
+                assert.is_not_nil(andGroup, "Expected an and-group for the required mod")
+                assert.are.equal(CORRUPTED_BLOOD_ID, andGroup.filters[1].id)
+            end)
+
+            -- Pass: All pinned mods appear in the and-group.
+            -- Fail: Only the first mod appears, losing subsequent constraints.
+            it("adds multiple required mods to the and-group", function()
+                local queryJson
+                local originalClosePopup = main.ClosePopup
+                main.ClosePopup = function() end
+
+                local qg = makeQueryGen()
+                qg.requesterCallback = function(_, payload) queryJson = payload end
+                qg.modWeights = { { tradeModId = "explicit.stat_1", weight = 10, meanStatDiff = 100 } }
+                qg.calcContext = baseCalcContext({
+                    "Corrupted Blood cannot be inflicted on you",
+                    "+42 to maximum Life",
+                })
+                qg.itemsTab.items[1] = equippedItem()
+
+                qg:FinishQuery()
+                main.ClosePopup = originalClosePopup
+
+                local query = dkjson.decode(queryJson)
+                local andGroup = nil
+                for _, g in ipairs(query.query.stats) do
+                    if g.type == "and" then andGroup = g break end
+                end
+                assert.is_not_nil(andGroup)
+                assert.are.equal(2, #andGroup.filters)
+                assert.are.equal(CORRUPTED_BLOOD_ID, andGroup.filters[1].id)
+                assert.are.equal(MAX_LIFE_ID,        andGroup.filters[2].id)
+            end)
+
+            -- Pass: Unmappable mod is silently skipped; query still returns successfully.
+            -- Fail: FinishQuery crashes or propagates an error, breaking the entire search.
+            it("skips unmappable required mods without crashing or corrupting the query", function()
+                local queryJson
+                local errMsg
+                local originalClosePopup = main.ClosePopup
+                main.ClosePopup = function() end
+
+                local qg = makeQueryGen()
+                qg.requesterCallback = function(_, payload, err)
+                    queryJson = payload
+                    errMsg = err
+                end
+                qg.modWeights = { { tradeModId = "explicit.stat_1", weight = 10, meanStatDiff = 100 } }
+                qg.calcContext = baseCalcContext({ "This mod cannot be mapped to any trade stat" })
+                qg.itemsTab.items[1] = equippedItem()
+
+                local ok = pcall(function() qg:FinishQuery() end)
+                main.ClosePopup = originalClosePopup
+
+                assert.is_true(ok, "FinishQuery must not crash when a required mod has no trade mapping")
+                assert.is_nil(errMsg, "Query should still succeed with the remaining weighted mods")
+                local query = dkjson.decode(queryJson)
+                -- No and-group since the only pinned mod was unmappable
+                assert.are.equal(1, #query.query.stats)
+            end)
+        end)
+    end)
 end)
