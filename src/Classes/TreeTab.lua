@@ -291,7 +291,7 @@ local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 
 	-- Edit Weights button (only shown when Weighted Score heatmap mode is active)
 	self.controls.editWeights = new("ButtonControl",
-		{ "LEFT", self.controls.powerReport, "RIGHT" }, { 8, 0, 130, 20 },
+		{ "LEFT", self.controls.powerReportOptions, "RIGHT" }, { 8, 0, 130, 20 },
 		"Edit Weights...",
 		function()
 			local tq = self.build.itemsTab.tradeQuery
