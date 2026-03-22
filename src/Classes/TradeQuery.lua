@@ -1232,7 +1232,7 @@ function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, ba
 			end
 			return item
 		end
-		if self.slotTables[row_idx].groupResists then
+		if self.slotTables[row_idx].groupResists or self.slotTables[row_idx].groupDamage then
 			local baseItem = buildItem(result.item_string)
 			-- Corrupted and mirrored items cannot be modified via Harvest
 			if baseItem.corrupted or baseItem.mirrored then
@@ -1240,35 +1240,63 @@ function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, ba
 				local weight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, output, self.statSortSelectionList)
 				result.evaluation = {{ output = output, weight = weight }}
 			else
-			-- Only single-element explicit resistance mods are Harvest-swappable:
+			-- Only single-element explicit mods are Harvest-swappable:
 			-- implicits/enchants excluded (explicitModLines), fractured mods are locked,
 			-- dual-element and element+chaos hybrids are not swappable via Harvest
 			local elemTypes = { "Fire", "Cold", "Lightning" }
-			-- Collect explicit single-element non-fractured resistance mod indices (with original type)
-			local resistMods = {} -- { idx, originalType }
+			-- Collect explicit single-element non-fractured swappable mod indices
+			local swapMods = {} -- { idx, originalType, kind, group }
 			for i, modLine in ipairs(baseItem.explicitModLines or {}) do
-				local t = modLine.line and modLine.line:match("to (%a+) Resistance$")
-				if (t == "Fire" or t == "Cold" or t == "Lightning") and not modLine.fractured then
-					t_insert(resistMods, { idx = i, originalType = t })
+				if not modLine.fractured and modLine.line then
+					local resistType = modLine.line:match("to (%a+) Resistance$")
+					if resistType == "Fire" or resistType == "Cold" or resistType == "Lightning" then
+						t_insert(swapMods, { idx = i, originalType = resistType, kind = "resist",
+							group = "resist" })
+					else
+						local damageType = modLine.line:match("(%a+) Damage")
+						if damageType == "Fire" or damageType == "Cold" or damageType == "Lightning" then
+							-- Group key: mod template with element and numbers normalized
+							local group = modLine.line:gsub(damageType .. " Damage", "ELEM Damage", 1):gsub("%d+", "#")
+							t_insert(swapMods, { idx = i, originalType = damageType, kind = "damage",
+								group = group })
+						end
+					end
 				end
 			end
-			local N = #resistMods
+			local N = #swapMods
 			local bestWeight, bestOutput, bestCombo
 			local combo = {}
 			for i = 1, N do combo[i] = 1 end
 			for _ = 1, (N == 0 and 1 or 3 ^ N) do
-				-- Apply this combination to explicit mod lines and rebuild
-				for j, mod in ipairs(resistMods) do
-					local modLine = baseItem.explicitModLines[mod.idx]
-					modLine.line = modLine.line:gsub("to %a+ Resistance$", "to "..elemTypes[combo[j]].." Resistance")
+				-- Skip combos where two mods in the same group share an element
+				local valid = true
+				for a = 1, N - 1 do
+					if not valid then break end
+					for b = a + 1, N do
+						if swapMods[a].group == swapMods[b].group and combo[a] == combo[b] then
+							valid = false
+							break
+						end
+					end
 				end
-				baseItem:BuildAndParseRaw()
-				local output = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = baseItem }))
-				local weight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, output, self.statSortSelectionList)
-				if not bestWeight or weight > bestWeight then
-					bestWeight, bestOutput = weight, output
-					bestCombo = {}
-					for i = 1, N do bestCombo[i] = combo[i] end
+				if valid then
+					-- Apply this combination to explicit mod lines and rebuild
+					for j, mod in ipairs(swapMods) do
+						local modLine = baseItem.explicitModLines[mod.idx]
+						if mod.kind == "resist" then
+							modLine.line = modLine.line:gsub("to %a+ Resistance$", "to "..elemTypes[combo[j]].." Resistance")
+						else
+							modLine.line = modLine.line:gsub("%a+ Damage", elemTypes[combo[j]] .. " Damage", 1)
+						end
+					end
+					baseItem:BuildAndParseRaw()
+					local output = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = baseItem }))
+					local weight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, output, self.statSortSelectionList)
+					if not bestWeight or weight > bestWeight then
+						bestWeight, bestOutput = weight, output
+						bestCombo = {}
+						for i = 1, N do bestCombo[i] = combo[i] end
+					end
 				end
 				-- Increment mixed-radix counter
 				for j = N, 1, -1 do
@@ -1279,15 +1307,21 @@ function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, ba
 			end
 			-- Derive which mods need swapping (original type -> best assigned type)
 			local resistSwaps = {}
+			local damageSwaps = {}
 			if bestCombo then
-				for j, mod in ipairs(resistMods) do
+				for j, mod in ipairs(swapMods) do
 					local targetType = elemTypes[bestCombo[j]]
 					if mod.originalType ~= targetType then
-						t_insert(resistSwaps, { from = mod.originalType, to = targetType })
+						local swap = { from = mod.originalType, to = targetType }
+						if mod.kind == "resist" then
+							t_insert(resistSwaps, swap)
+						else
+							t_insert(damageSwaps, swap)
+						end
 					end
 				end
 			end
-			result.evaluation = {{ output = bestOutput, weight = bestWeight, resistSwaps = resistSwaps }}
+			result.evaluation = {{ output = bestOutput, weight = bestWeight, resistSwaps = resistSwaps, damageSwaps = damageSwaps }}
 			end -- corrupted check
 		else
 			local item = self:BuildComparableResultItem(slotName, result, self.enchantInSort, preserveExistingEldritchImplicits)
@@ -1950,16 +1984,27 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 		addMegalomaniacCompareToTooltipIfApplicable(tooltip, pb_index)
 		tooltip:AddSeparator(10)
 		tooltip:AddLine(16, string.format("^7Price: %s %s", result.amount, result.currency))
-		-- Show Harvest resistance swap suggestions when groupResists is active
-		if slotTbl.groupResists and result.evaluation then
+		-- Show Harvest swap suggestions when groupResists is active
+		if (slotTbl.groupResists or slotTbl.groupDamage) and result.evaluation then
 			local eval = result.evaluation[1]
-			if eval and eval.resistSwaps and #eval.resistSwaps > 0 then
-				local resistColors = { Fire = colorCodes.FIRE, Cold = colorCodes.COLD, Lightning = colorCodes.LIGHTNING }
+			local hasResistSwaps = eval and eval.resistSwaps and #eval.resistSwaps > 0
+			local hasDamageSwaps = eval and eval.damageSwaps and #eval.damageSwaps > 0
+			if hasResistSwaps or hasDamageSwaps then
+				local elemColors = { Fire = colorCodes.FIRE, Cold = colorCodes.COLD, Lightning = colorCodes.LIGHTNING }
 				tooltip:AddSeparator(6)
-				for _, swap in ipairs(eval.resistSwaps) do
-					local fromColor = resistColors[swap.from] or "^7"
-					local toColor = resistColors[swap.to] or "^7"
-					tooltip:AddLine(16, string.format("^8Harvest: %s%s Resistance ^8-> %s%s Resistance", fromColor, swap.from, toColor, swap.to))
+				if hasResistSwaps then
+					for _, swap in ipairs(eval.resistSwaps) do
+						local fromColor = elemColors[swap.from] or "^7"
+						local toColor = elemColors[swap.to] or "^7"
+						tooltip:AddLine(16, string.format("^8Harvest: %s%s Resistance ^8-> %s%s Resistance", fromColor, swap.from, toColor, swap.to))
+					end
+				end
+				if hasDamageSwaps then
+					for _, swap in ipairs(eval.damageSwaps) do
+						local fromColor = elemColors[swap.from] or "^7"
+						local toColor = elemColors[swap.to] or "^7"
+						tooltip:AddLine(16, string.format("^8Harvest: %s%s Damage ^8-> %s%s Damage", fromColor, swap.from, toColor, swap.to))
+					end
 				end
 			end
 		end

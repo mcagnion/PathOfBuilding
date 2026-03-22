@@ -2052,7 +2052,7 @@ function ItemsTabClass:UpdateCustomControls()
 	self:UpdateResistSwapControls()
 end
 
--- Updates the resistance swap buttons for elemental resistance mods on imported/non-crafted items
+-- Updates the element swap buttons for elemental resistance and damage mods on imported/non-crafted items
 function ItemsTabClass:UpdateResistSwapControls()
 	local item = self.displayItem
 	if not item or not item.explicitModLines or item.corrupted or item.mirrored then
@@ -2061,12 +2061,21 @@ function ItemsTabClass:UpdateResistSwapControls()
 	local i = 1
 	if item.rarity == "MAGIC" or item.rarity == "RARE" then
 		for index, modLine in ipairs(item.explicitModLines) do
-			if not modLine.crafted and not modLine.fractured then
-				local resistType = modLine.line and modLine.line:match("to (%a+) Resistance$")
-				if resistType ~= "Fire" and resistType ~= "Cold" and resistType ~= "Lightning" then
-					resistType = nil
+			if not modLine.crafted and not modLine.fractured and modLine.line then
+				-- Detect swappable elemental resistance or damage mod
+				local swapKind, elemType
+				local resistType = modLine.line:match("to (%a+) Resistance$")
+				if resistType == "Fire" or resistType == "Cold" or resistType == "Lightning" then
+					swapKind = "resist"
+					elemType = resistType
+				else
+					local damageType = modLine.line:match("(%a+) Damage")
+					if damageType == "Fire" or damageType == "Cold" or damageType == "Lightning" then
+						swapKind = "damage"
+						elemType = damageType
+					end
 				end
-				if resistType then
+				if elemType then
 					if not self.controls["displayItemResistSwap"..i] then
 						local btn = new("ButtonControl", {"TOPLEFT",self.controls.displayItemSectionResistSwap,"TOPLEFT"}, {0, (i-1) * 22, 58, 20}, "", function() end)
 						self.controls["displayItemResistSwap"..i] = btn
@@ -2075,30 +2084,77 @@ function ItemsTabClass:UpdateResistSwapControls()
 							if mode == "OUT" then
 								tooltip:Clear()
 							elseif tooltip:CheckForUpdate(btn.label) then
-								tooltip:AddLine(14, "^7Click to cycle the resistance type (Fire / Cold / Lightning).")
+								tooltip:AddLine(14, "^7Click to cycle the element type (Fire / Cold / Lightning).")
 								tooltip:AddLine(14, "^7The roll value is preserved.")
 							end
 						end
 					end
-					local nextType = resistType == "Fire" and "Cold" or resistType == "Cold" and "Lightning" or "Fire"
+					local nextType = elemType == "Fire" and "Cold" or elemType == "Cold" and "Lightning" or "Fire"
 					local nextNext = nextType == "Fire" and "Cold" or nextType == "Cold" and "Lightning" or "Fire"
 					local colors = { Fire = colorCodes.FIRE, Cold = colorCodes.COLD, Lightning = colorCodes.LIGHTNING }
-					self.controls["displayItemResistSwap"..i].label = colors[resistType]..resistType:sub(1,1).."^7/"..colors[nextType]..nextType:sub(1,1).."^7/"..colors[nextNext]..nextNext:sub(1,1)
+					self.controls["displayItemResistSwap"..i].label = colors[elemType]..elemType:sub(1,1).."^7/"..colors[nextType]..nextType:sub(1,1).."^7/"..colors[nextNext]..nextNext:sub(1,1)
 					self.controls["displayItemResistSwap"..i].shown = true
 					self.controls["displayItemResistSwapLabel"..i].label = "^7" .. modLine.line
 					self.controls["displayItemResistSwapLabel"..i].shown = true
 					local capturedIndex = index
+					local capturedKind = swapKind
 					self.controls["displayItemResistSwap"..i].onClick = function()
 						local ml = item.explicitModLines[capturedIndex]
 						if ml then
-							local curType = ml.line:match("to (%a+) Resistance$")
+							local curType
+							if capturedKind == "resist" then
+								curType = ml.line:match("to (%a+) Resistance$")
+							else
+								curType = ml.line:match("(%a+) Damage")
+							end
 							if curType == "Fire" or curType == "Cold" or curType == "Lightning" then
-								local nxt = curType == "Fire" and "Cold" or curType == "Cold" and "Lightning" or "Fire"
-								ml.line = ml.line:gsub("to " .. curType .. " Resistance", "to " .. nxt .. " Resistance")
-								item:BuildAndParseRaw()
-								local id = item.id
-								self:CreateDisplayItemFromRaw(item:BuildRaw())
-								self.displayItem.id = id
+								-- Find elements already used by other mods in the same swap group
+								local myGroup
+								if capturedKind == "resist" then
+									myGroup = "resist"
+								else
+									myGroup = ml.line:gsub(curType .. " Damage", "ELEM Damage", 1):gsub("%d+", "#")
+								end
+								local usedElems = {}
+								for otherIdx, otherMl in ipairs(item.explicitModLines) do
+									if otherIdx ~= capturedIndex and otherMl.line and not otherMl.crafted and not otherMl.fractured then
+										local otherType, otherGroup
+										if capturedKind == "resist" then
+											otherType = otherMl.line:match("to (%a+) Resistance$")
+											if otherType then otherGroup = "resist" end
+										else
+											otherType = otherMl.line:match("(%a+) Damage")
+											if otherType and (otherType == "Fire" or otherType == "Cold" or otherType == "Lightning") then
+												otherGroup = otherMl.line:gsub(otherType .. " Damage", "ELEM Damage", 1):gsub("%d+", "#")
+											end
+										end
+										if otherGroup == myGroup and otherType then
+											usedElems[otherType] = true
+										end
+									end
+								end
+								-- Cycle to next element not already used in this group
+								local order = { "Fire", "Cold", "Lightning" }
+								local startIdx = curType == "Fire" and 1 or curType == "Cold" and 2 or 3
+								local nxt
+								for offset = 1, 3 do
+									local candidate = order[((startIdx - 1 + offset) % 3) + 1]
+									if not usedElems[candidate] then
+										nxt = candidate
+										break
+									end
+								end
+								if nxt and nxt ~= curType then
+									if capturedKind == "resist" then
+										ml.line = ml.line:gsub("to " .. curType .. " Resistance", "to " .. nxt .. " Resistance")
+									else
+										ml.line = ml.line:gsub(curType .. " Damage", nxt .. " Damage", 1)
+									end
+									item:BuildAndParseRaw()
+									local id = item.id
+									self:CreateDisplayItemFromRaw(item:BuildRaw())
+									self.displayItem.id = id
+								end
 							end
 						end
 					end
