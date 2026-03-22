@@ -1274,13 +1274,11 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 			updateLastAnchor(controls.requiredModsLabel, 21)
 			for i, modLine in ipairs(pinnableLines) do
 				local checkKey = "pinnedMod_" .. i
-				local displayLabel = #modLine > 52 and modLine:sub(1, 49) .. "..." or modLine
+				local displayLabel = #modLine > 36 and modLine:sub(1, 33) .. "..." or modLine
 				local isPinned = self.lastPinnedModLines and self.lastPinnedModLines[modLine] or false
-				-- xOffset 200 on the first checkbox shifts it to the popup's right side
-				-- (same column as the other option checkboxes), giving the label room left.
-				local xOff = (i == 1) and 200 or 0
-				controls[checkKey] = new("CheckBoxControl", {"TOPLEFT", lastItemAnchor, "BOTTOMLEFT"}, {xOff, 3, 18}, displayLabel, function(state) end)
+				controls[checkKey] = new("CheckBoxControl", {"TOPLEFT", lastItemAnchor, "BOTTOMLEFT"}, {0, 3, 18}, "", function(state) end, modLine)
 				controls[checkKey].state = isPinned
+				controls[checkKey.."_text"] = new("LabelControl", {"LEFT", controls[checkKey], "RIGHT"}, {5, 2, 0, 14}, displayLabel)
 				t_insert(pinnedModCheckboxes, { checkKey = checkKey, modLine = modLine })
 				updateLastAnchor(controls[checkKey], 21)
 			end
