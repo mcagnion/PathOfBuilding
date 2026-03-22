@@ -210,11 +210,10 @@ describe("Resistance Swap — resistTag tagging", function()
 	end)
 end)
 
-describe("Resistance Swap — groupResists merging", function()
-	-- mirrors the logic in TradeQueryGenerator:FinishQuery
-	-- Elemental and chaos pseudo stats are separate; hybrid elem+chaos mods
-	-- contribute only to the elemental pseudo (no double-counting).
-	local function mergeResists(modWeights)
+-- mirrors the logic in TradeQueryGenerator:FinishQuery
+-- Elemental and chaos pseudo stats are separate; hybrid elem+chaos mods
+-- contribute only to the elemental pseudo (no double-counting).
+local function mergeResists(modWeights)
 		local elemMax, chaosMax = 0, 0
 		local filtered = {}
 		for _, entry in ipairs(modWeights) do
@@ -233,8 +232,9 @@ describe("Resistance Swap — groupResists merging", function()
 			table.insert(filtered, { tradeModId = "pseudo.pseudo_total_chaos_resistance", weight = chaosMax })
 		end
 		return filtered
-	end
+end
 
+describe("Resistance Swap — groupResists merging", function()
 	it("replaces elemental mods with a single pseudo_total_elemental_resistance", function()
 		local weights = {
 			{ tradeModId = "fire_resist",  weight = 10, resistTag = { elem = true } },
@@ -438,10 +438,11 @@ end)
 -- =====================
 
 -- Mirrors the damageTag tagging logic in TradeQueryGenerator:GenerateModWeights.
--- Uses specific subcategories; overlap is resolved at merge time.
+-- "Adds" pseudo stats cover Fire/Cold/Lightning individually,
+-- but "increased" pseudo stats only cover generic "Elemental".
 local function getDamageTag(modText)
 	local damageElem = modText:match("(%a+) Damage")
-	if damageElem ~= "Fire" and damageElem ~= "Cold" and damageElem ~= "Lightning" then
+	if damageElem ~= "Fire" and damageElem ~= "Cold" and damageElem ~= "Lightning" and damageElem ~= "Elemental" then
 		return nil
 	end
 	if modText:match("Adds") then
@@ -454,7 +455,7 @@ local function getDamageTag(modText)
 		else
 			return { adds = true }
 		end
-	elseif modText:match("increased") then
+	elseif damageElem == "Elemental" and modText:match("increased") then
 		if modText:match("with Attack Skills") then
 			return { increased_attacks = true }
 		else
@@ -498,17 +499,21 @@ describe("Damage Swap — damageTag tagging", function()
 		assert.is_true(tag.adds)
 	end)
 
-	it("tags increased elemental damage", function()
-		local tag = getDamageTag("#% increased Fire Damage")
+	it("does not tag element-specific increased damage (pseudo only covers generic)", function()
+		assert.is_nil(getDamageTag("#% increased Fire Damage"))
+		assert.is_nil(getDamageTag("#% increased Cold Damage with Attack Skills"))
+	end)
+
+	it("tags generic increased Elemental Damage", function()
+		local tag = getDamageTag("#% increased Elemental Damage")
 		assert.is_not_nil(tag)
 		assert.is_true(tag.increased)
 	end)
 
-	it("tags increased damage with Attack Skills", function()
-		local tag = getDamageTag("#% increased Cold Damage with Attack Skills")
+	it("tags increased Elemental Damage with Attack Skills", function()
+		local tag = getDamageTag("#% increased Elemental Damage with Attack Skills")
 		assert.is_not_nil(tag)
 		assert.is_true(tag.increased_attacks)
-		assert.is_nil(tag.increased)
 	end)
 
 	it("does not tag Physical damage", function()
@@ -692,6 +697,28 @@ describe("Damage Swap — groupDamage merging", function()
 		assert.are.equal(3, #result)
 		assert.are.equal("life", result[1].tradeModId)
 		assert.are.equal("mana", result[2].tradeModId)
+	end)
+
+	it("explicit + implicit increased Elemental Damage merge into pseudo", function()
+		local weights = {
+			{ tradeModId = "inc_elem_explicit", weight = 8, damageTag = { increased = true } },
+			{ tradeModId = "inc_elem_implicit", weight = 6, damageTag = { increased = true } },
+		}
+		local result = mergeDamage(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("pseudo.pseudo_increased_elemental_damage", result[1].tradeModId)
+		assert.are.equal(8, result[1].weight)
+	end)
+
+	it("increased Elemental Damage + with Attack Skills overlap → generic pseudo", function()
+		local weights = {
+			{ tradeModId = "inc_elem",     weight = 8, damageTag = { increased = true } },
+			{ tradeModId = "inc_elem_atk", weight = 5, damageTag = { increased_attacks = true } },
+		}
+		local result = mergeDamage(weights)
+		assert.are.equal(1, #result)
+		assert.are.equal("pseudo.pseudo_increased_elemental_damage", result[1].tradeModId)
+		assert.are.equal(8, result[1].weight)
 	end)
 
 	it("groupResists and groupDamage can coexist independently", function()

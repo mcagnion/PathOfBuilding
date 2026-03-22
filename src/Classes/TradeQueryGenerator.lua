@@ -651,11 +651,12 @@ function TradeQueryGeneratorClass:GenerateModWeights(modsToTest)
 					end
 				end
 				-- Tag elemental damage mods for groupDamage merging.
-				-- Uses specific subcategories; overlap is resolved at merge time.
+				-- "Adds" pseudo stats cover Fire/Cold/Lightning individually,
+				-- but "increased" pseudo stats only cover generic "Elemental".
 				local damageTag
 				if not resistTag then
 					local damageElem = modText:match("(%a+) Damage")
-					if damageElem == "Fire" or damageElem == "Cold" or damageElem == "Lightning" then
+					if damageElem == "Fire" or damageElem == "Cold" or damageElem == "Lightning" or damageElem == "Elemental" then
 						if modText:match("Adds") then
 							if modText:match("to Spells and Attacks") then
 								damageTag = { adds_attacks = true, adds_spells = true }
@@ -666,7 +667,7 @@ function TradeQueryGeneratorClass:GenerateModWeights(modsToTest)
 							else
 								damageTag = { adds = true }
 							end
-						elseif modText:match("increased") then
+						elseif damageElem == "Elemental" and modText:match("increased") then
 							if modText:match("with Attack Skills") then
 								damageTag = { increased_attacks = true }
 							else
