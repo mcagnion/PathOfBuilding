@@ -499,7 +499,7 @@ function CalcsTabClass:PowerBuilder()
 
 	for nodeId, node in pairs(self.build.spec.nodes) do
 		wipeTable(node.power)
-		if node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] then
+		if node.modKey ~= "" then
 			distanceMap[node.pathDist or 1000] = distanceMap[node.pathDist or 1000] or { }
 			distanceMap[node.pathDist or 1000][nodeId] = node
 			if not (self.nodePowerMaxDepth and self.nodePowerMaxDepth < node.pathDist) then
@@ -553,7 +553,7 @@ function CalcsTabClass:PowerBuilder()
 						newPowerMax.defencePerPoint = m_max(newPowerMax.defencePerPoint, node.power.defence / node.pathDist)
 					end
 				end
-			elseif node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] then
+			elseif (node.alloc or self.mainEnv.grantedPassives[nodeId]) and node.modKey ~= "" then
 				if not cache[node.modKey.."_remove"] then
 					cache[node.modKey.."_remove"] = calcFunc({ removeNodes = { [node] = true } }, useFullDPS)
 				end

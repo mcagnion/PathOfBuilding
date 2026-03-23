@@ -1248,8 +1248,9 @@ function calcs.initEnv(build, mode, override, specEnv)
 	if not accelerate.nodeAlloc then
 		for _, passive in pairs(env.modDB:List(nil, "GrantedPassive")) do
 			local node = env.spec.tree.notableMap[passive]
-			if node and (not override.removeNodes or not override.removeNodes[node.id]) then
-				env.allocNodes[node.id] = env.spec.nodes[node.id] or node -- use the conquered node data, if available
+			local specNode = node and env.spec.nodes[node.id]
+			if node and (not override.removeNodes or not (override.removeNodes[specNode] or override.removeNodes[node] or override.removeNodes[node.id])) then
+				env.allocNodes[node.id] = specNode or node -- use the conquered node data, if available
 				env.grantedPassives[node.id] = true
 				env.extraRadiusNodeList[node.id] = nil
 			end
@@ -1263,7 +1264,8 @@ function calcs.initEnv(build, mode, override, specEnv)
 		if matchedName[name] and matchedName[name].side ~= ascTbl.side and matchedName[name].matched == false then
 			matchedName[name].matched = true
 			local node = env.spec.tree.ascendancyMap[name] or build.latestTree.ascendancyMap[name]
-			if node and (not override.removeNodes or not override.removeNodes[node.id]) then
+			local specNode = node and env.spec.nodes[node.id]
+			if node and (not override.removeNodes or not (override.removeNodes[specNode] or override.removeNodes[node] or override.removeNodes[node.id])) then
 				if env.itemModDB.conditions["ForbiddenFlesh"] == env.spec.curClassName and env.itemModDB.conditions["ForbiddenFlame"] == env.spec.curClassName then
 					env.allocNodes[node.id] = node
 					env.grantedPassives[node.id] = true
