@@ -66,6 +66,48 @@ describe("TestCalcSetup", function()
 			"Removing a granted passive with node.id key should change Life")
 	end)
 
+	it("power builder computes non-zero power for granted passives with nodePowerMaxDepth", function()
+		-- Granted passives have no pathDist (distance 1000 by default).
+		-- With nodePowerMaxDepth set, the distance filter must not skip them.
+		build.itemsTab:CreateDisplayItemFromRaw([[
+		New Item
+		Coral Amulet
+		Allocates Heart of the Warrior
+		]])
+		build.itemsTab:AddDisplayItem()
+		runCallback("OnFrame")
+
+		local powerStat
+		for _, stat in ipairs(data.powerStatList) do
+			if stat.stat == "Life" then
+				powerStat = stat
+				break
+			end
+		end
+		assert.truthy(powerStat, "Expected to find Life in powerStatList")
+		build.calcsTab.powerStat = powerStat
+		build.calcsTab.nodePowerMaxDepth = 5
+
+		build.calcsTab.powerBuildFlag = true
+		local co = coroutine.create(build.calcsTab.PowerBuilder)
+		while coroutine.status(co) ~= "dead" do
+			local ok, err = coroutine.resume(co, build.calcsTab)
+			assert.truthy(ok, err)
+		end
+
+		local grantedNodeId
+		for nodeId in pairs(build.calcsTab.mainEnv.grantedPassives) do
+			grantedNodeId = nodeId
+			break
+		end
+		assert.truthy(grantedNodeId)
+
+		local node = build.spec.nodes[grantedNodeId]
+		assert.truthy(node, "Expected granted node in spec.nodes")
+		assert.truthy(node.power and node.power.singleStat and node.power.singleStat ~= 0,
+			"Expected non-zero power.singleStat for granted passive with nodePowerMaxDepth=5, got: " .. tostring(node.power and node.power.singleStat))
+	end)
+
 	it("power builder computes non-zero power for granted passives", function()
 		-- Equip an amulet that grants a notable
 		build.itemsTab:CreateDisplayItemFromRaw([[

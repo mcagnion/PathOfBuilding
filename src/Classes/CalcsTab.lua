@@ -632,15 +632,23 @@ function CalcsTabClass:PowerBuilder()
 	local start = GetTime()
 	local nodeIndex = 0
 	local total = 0
+	local grantedNodes = { }
 
 	for nodeId, node in pairs(self.build.spec.nodes) do
 		wipeTable(node.power)
 		if node.modKey ~= "" then
-			local nodeDistance = isRemoteAscendancyCandidate(node) and 1 or (node.pathDist or 1000)
-			distanceMap[nodeDistance] = distanceMap[nodeDistance] or { }
-			distanceMap[nodeDistance][nodeId] = node
-			if not (self.nodePowerMaxDepth and self.nodePowerMaxDepth < nodeDistance) then
+			if self.mainEnv.grantedPassives[nodeId] then
+				-- Granted passives (anoints, Forbidden Flame/Flesh) have no pathDist;
+				-- process them separately so nodePowerMaxDepth never filters them out.
+				grantedNodes[nodeId] = node
 				total = total + 1
+			else
+				local nodeDistance = isRemoteAscendancyCandidate(node) and 1 or (node.pathDist or 1000)
+				distanceMap[nodeDistance] = distanceMap[nodeDistance] or { }
+				distanceMap[nodeDistance][nodeId] = node
+				if not (self.nodePowerMaxDepth and self.nodePowerMaxDepth < nodeDistance) then
+					total = total + 1
+				end
 			end
 		end
 	end
@@ -662,7 +670,7 @@ function CalcsTabClass:PowerBuilder()
 			break
 		end
 		for nodeId, node in pairs(nodes) do
-			if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] and isIncludedNodeType(node) then
+			if not node.alloc and node.modKey ~= "" and isIncludedNodeType(node) then
 				local nodeOverride = { addNodes = { [node] = true } }
 				if not cache[node.modKey] then
 					cache[node.modKey] = calcFunc(nodeOverride, useFullDPS)
@@ -808,7 +816,7 @@ function CalcsTabClass:PowerBuilder()
 						newPowerMax.defencePerPoint = m_max(newPowerMax.defencePerPoint, node.power.defence / node.pathDist)
 					end
 				end
-			elseif (node.alloc or self.mainEnv.grantedPassives[nodeId]) and node.modKey ~= "" and isIncludedNodeType(node) then
+			elseif node.alloc and node.modKey ~= "" and isIncludedNodeType(node) then
 				local removeKey = node.modKey.."_remove"
 				local removeOverride = { removeNodes = { [node] = true } }
 				if not cache[removeKey] then
@@ -851,6 +859,34 @@ function CalcsTabClass:PowerBuilder()
 				coroutine.yield()
 				start = GetTime()
 			end
+		end
+	end
+
+	-- Calculate power for granted passives (anoints, Forbidden Flame/Flesh)
+	-- These are processed separately so nodePowerMaxDepth never filters them out.
+	for nodeId, node in pairs(grantedNodes) do
+		local removeKey = node.modKey.."_remove"
+		local removeOverride = { removeNodes = { [node] = true } }
+		if not cache[removeKey] then
+			cache[removeKey] = calcFunc(removeOverride, useFullDPS)
+			cacheOwner[removeKey] = nodeId
+		end
+		local output, assumedEnemyConditions = calcWithPowerReportAssumptions(
+			removeOverride,
+			removeKey
+		)
+		node.power.cacheOwner = cacheOwner[removeKey] == nodeId
+		node.power.assumedEnemyConditions = assumedEnemyConditions
+		if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
+			node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
+		end
+		nodeIndex = nodeIndex + 1
+		if coroutine.running() and GetTime() - start > 100 then
+			if self.build.powerBuilderProgressCallback then
+				self.build.powerBuilderProgressCallback(m_floor(nodeIndex/total*100))
+			end
+			coroutine.yield()
+			start = GetTime()
 		end
 	end
 
