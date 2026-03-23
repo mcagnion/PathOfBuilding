@@ -496,14 +496,22 @@ function CalcsTabClass:PowerBuilder()
 	local start = GetTime()
 	local nodeIndex = 0
 	local total = 0
+	local grantedNodes = { }
 
 	for nodeId, node in pairs(self.build.spec.nodes) do
 		wipeTable(node.power)
 		if node.modKey ~= "" then
-			distanceMap[node.pathDist or 1000] = distanceMap[node.pathDist or 1000] or { }
-			distanceMap[node.pathDist or 1000][nodeId] = node
-			if not (self.nodePowerMaxDepth and self.nodePowerMaxDepth < node.pathDist) then
+			if self.mainEnv.grantedPassives[nodeId] then
+				-- Granted passives (anoints, Forbidden Flame/Flesh) have no pathDist;
+				-- process them separately so nodePowerMaxDepth never filters them out.
+				grantedNodes[nodeId] = node
 				total = total + 1
+			else
+				distanceMap[node.pathDist or 1000] = distanceMap[node.pathDist or 1000] or { }
+				distanceMap[node.pathDist or 1000][nodeId] = node
+				if not (self.nodePowerMaxDepth and self.nodePowerMaxDepth < node.pathDist) then
+					total = total + 1
+				end
 			end
 		end
 	end
@@ -525,7 +533,7 @@ function CalcsTabClass:PowerBuilder()
 			break
 		end
 		for nodeId, node in pairs(nodes) do
-			if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] then
+			if not node.alloc and node.modKey ~= "" then
 				if not cache[node.modKey] then
 					cache[node.modKey] = calcFunc({ addNodes = { [node] = true } }, useFullDPS)
 				end
@@ -553,7 +561,7 @@ function CalcsTabClass:PowerBuilder()
 						newPowerMax.defencePerPoint = m_max(newPowerMax.defencePerPoint, node.power.defence / node.pathDist)
 					end
 				end
-			elseif (node.alloc or self.mainEnv.grantedPassives[nodeId]) and node.modKey ~= "" then
+			elseif node.alloc and node.modKey ~= "" then
 				if not cache[node.modKey.."_remove"] then
 					cache[node.modKey.."_remove"] = calcFunc({ removeNodes = { [node] = true } }, useFullDPS)
 				end
@@ -580,6 +588,26 @@ function CalcsTabClass:PowerBuilder()
 				coroutine.yield()
 				start = GetTime()
 			end
+		end
+	end
+
+	-- Calculate power for granted passives (anoints, Forbidden Flame/Flesh)
+	-- These are processed separately so nodePowerMaxDepth never filters them out.
+	for nodeId, node in pairs(grantedNodes) do
+		if not cache[node.modKey.."_remove"] then
+			cache[node.modKey.."_remove"] = calcFunc({ removeNodes = { [node] = true } }, useFullDPS)
+		end
+		local output = cache[node.modKey.."_remove"]
+		if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
+			node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
+		end
+		nodeIndex = nodeIndex + 1
+		if coroutine.running() and GetTime() - start > 100 then
+			if self.build.powerBuilderProgressCallback then
+				self.build.powerBuilderProgressCallback(m_floor(nodeIndex/total*100))
+			end
+			coroutine.yield()
+			start = GetTime()
 		end
 	end
 
