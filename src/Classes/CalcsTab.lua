@@ -879,6 +879,7 @@ function CalcsTabClass:PowerBuilder()
 		node.power.assumedEnemyConditions = assumedEnemyConditions
 		if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
 			node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
+			node.power.pathPower = node.power.singleStat
 		end
 		nodeIndex = nodeIndex + 1
 		if coroutine.running() and GetTime() - start > 100 then
