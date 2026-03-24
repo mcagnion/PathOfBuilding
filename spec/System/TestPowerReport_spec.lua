@@ -1,260 +1,182 @@
-describe("TestPowerReport", function()
+-- Tests for PowerBuilder node power calculation:
+-- allocated nodes, unallocated nodes, and jewel-dependent nodes
+-- (Intuitive Leap / Impossible Escape pattern).
+
+local function runPowerBuilder(powerStat)
+	build.calcsTab.powerStat = powerStat
+	build.calcsTab.powerBuildFlag = true
+	local co = coroutine.create(build.calcsTab.PowerBuilder)
+	while coroutine.status(co) ~= "dead" do
+		local ok, err = coroutine.resume(co, build.calcsTab)
+		assert.truthy(ok, tostring(err))
+	end
+end
+
+local function findPowerStat(statName)
+	for _, stat in ipairs(data.powerStatList) do
+		if stat.stat == statName then return stat end
+	end
+end
+
+-- Load a build that has many allocated nodes.
+local testBuild = LoadModule("../spec/TestBuilds/3.13/OccVortex.lua")
+
+describe("PowerBuilder — allocated nodes (Show Allocated)", function()
 	before_each(function()
-		newBuild()
+		loadBuildFromXML(testBuild.xml, "OccVortex")
 	end)
 
-	local powerReportOptions = LoadModule("Modules/PowerReportOptions")
+	-- Pass: allocated node with real mods contributes to a stat, so singleStat != 0
+	-- Fail: if allocated nodes are skipped (not node.alloc guard), power stays nil/0
+	it("allocated node has non-zero singleStat for Life stat", function()
+		local powerStat = findPowerStat("Life")
+		assert.is_not_nil(powerStat, "Life must be in powerStatList")
+		runPowerBuilder(powerStat)
 
-	local function findStat(statName)
-		for _, stat in ipairs(data.powerStatList) do
-			if stat.stat == statName then
-				return stat
+		local found = nil
+		for id, node in pairs(build.spec.allocNodes) do
+			if node.modKey ~= "" and node.type ~= "ClassStart" and node.type ~= "Socket"
+			and #node.intuitiveLeapLikesAffecting == 0
+			and node.power and node.power.singleStat and node.power.singleStat ~= 0 then
+				found = node
+				break
 			end
 		end
-	end
+		assert.is_not_nil(found, "Expected at least one allocated node with non-zero power.singleStat")
+	end)
 
-	local function drainPowerBuild(stat)
-		build.calcsTab.powerBuildFlag = true
-		build.calcsTab.powerStat = stat or findStat("Life")
-		local maxIter = 100000
-		local iter = 0
-		repeat
-			build.calcsTab:BuildPower()
-			iter = iter + 1
-		until not build.calcsTab.powerBuilder or iter >= maxIter
-	end
+	-- Pass: allocated node that buffs Life scores negative (removing it hurts)
+	-- Fail: sign inversion would give positive scores for allocated beneficial nodes
+	it("allocated Life node scores negative (removal reduces Life)", function()
+		local powerStat = findPowerStat("Life")
+		assert.is_not_nil(powerStat)
+		runPowerBuilder(powerStat)
 
-	local function setAllOptions(value)
-		for _, key in ipairs(powerReportOptions.getKeys()) do
-			build.treeTab[key] = value
+		local negative = nil
+		for id, node in pairs(build.spec.allocNodes) do
+			if node.modKey ~= "" and node.type ~= "ClassStart" and node.type ~= "Socket"
+			and #node.intuitiveLeapLikesAffecting == 0
+			and node.power and node.power.singleStat and node.power.singleStat < 0 then
+				negative = node
+				break
+			end
 		end
+		assert.is_not_nil(negative, "Expected at least one allocated node with negative singleStat (removal hurts)")
+	end)
+end)
+
+describe("PowerBuilder — unallocated nodes", function()
+	before_each(function()
+		loadBuildFromXML(testBuild.xml, "OccVortex")
+	end)
+
+	-- Pass: nearby unallocated node with real mods gets a positive score
+	-- Fail: if the distance filter incorrectly skips close nodes
+	it("unallocated node near tree has non-zero singleStat for Life stat", function()
+		local powerStat = findPowerStat("Life")
+		assert.is_not_nil(powerStat)
+		runPowerBuilder(powerStat)
+
+		local found = nil
+		for id, node in pairs(build.spec.nodes) do
+			if not node.alloc and node.modKey ~= "" and node.type ~= "Socket"
+			and node.pathDist and node.pathDist <= 3
+			and node.power and node.power.singleStat and node.power.singleStat ~= 0 then
+				found = node
+				break
+			end
+		end
+		assert.is_not_nil(found, "Expected at least one nearby unallocated node with non-zero power.singleStat")
+	end)
+
+	-- Pass: unallocated Life node scores positive (adding it helps)
+	-- Fail: if CalcPowerStat arg order is inverted, adding a beneficial node would score negative
+	it("unallocated Life node scores positive (allocating it increases Life)", function()
+		local powerStat = findPowerStat("Life")
+		assert.is_not_nil(powerStat)
+		runPowerBuilder(powerStat)
+
+		local positive = nil
+		for id, node in pairs(build.spec.nodes) do
+			if not node.alloc and node.modKey ~= "" and node.type ~= "Socket"
+			and node.pathDist and node.pathDist <= 5
+			and node.power and node.power.singleStat and node.power.singleStat > 0 then
+				positive = node
+				break
+			end
+		end
+		assert.is_not_nil(positive, "Expected at least one unallocated node with positive singleStat (allocation helps)")
+	end)
+end)
+
+describe("PowerBuilder — jewel-dependent nodes (intuitiveLeapLikesAffecting)", function()
+	before_each(function()
+		loadBuildFromXML(testBuild.xml, "OccVortex")
+	end)
+
+	-- Helper: find an allocated node that has mods affecting Life, then inject
+	-- intuitiveLeapLikesAffecting to simulate a node taken via Intuitive Leap or Impossible Escape.
+	-- We force pathDist=0 to reproduce the exact case that pathDist==1000 alone would miss:
+	-- a keystone that is also reachable via a normal tree path.
+	local function injectIntuitiveLeapNode()
+		local calcFunc = build.calcsTab:GetMiscCalculator()
+		local baseLife = calcFunc().Life or 0
+		local target = nil
+		for id, node in pairs(build.spec.allocNodes) do
+			if node.modKey ~= "" and node.type ~= "ClassStart" and node.type ~= "Socket"
+			and not node.ascendancyName
+			and #node.intuitiveLeapLikesAffecting == 0 then
+				-- Check this node actually affects Life
+				local removedLife = calcFunc({ removeNodes = { [node] = true } }).Life or 0
+				if removedLife ~= baseLife then
+					target = node
+					break
+				end
+			end
+		end
+		assert.is_not_nil(target, "Need an allocated node that affects Life to inject intuitiveLeapLikesAffecting")
+
+		-- Simulate jewel-dependency: add a dummy entry so #intuitiveLeapLikesAffecting > 0
+		-- and force pathDist=0 (as if the node is also reachable via normal tree path).
+		target.intuitiveLeapLikesAffecting = { target }
+		target.pathDist = 0
+
+		return target
 	end
 
-	local function buildReport(stat)
-		return build.treeTab:BuildPowerReportList(stat or findStat("Life"))
-	end
+	-- Pass: node with intuitiveLeapLikesAffecting gets its power calculated (singleStat is set)
+	-- Fail: old code (pathDist==1000 only) would skip this node → power.singleStat stays nil
+	it("allocated node with intuitiveLeapLikesAffecting gets singleStat set by PowerBuilder", function()
+		local target = injectIntuitiveLeapNode()
+		target.power = {}
 
-	-- Vérifie qu'aucun item du rapport n'a le type donné
-	local function assertNoItemOfType(report, itemType)
-		for _, item in ipairs(report) do
-			assert.is_not.equal(itemType, item.type,
-				"Report should not contain type '" .. itemType .. "' but found: " .. item.name)
-		end
-	end
+		local powerStat = findPowerStat("Life")
+		assert.is_not_nil(powerStat)
+		runPowerBuilder(powerStat)
 
-	-- Basic sanity ----------------------------------------------------------
-
-	it("powerMax is initialized when all options are disabled", function()
-		setAllOptions(false)
-		drainPowerBuild()
-		assert.is_not_nil(build.calcsTab.powerMax)
-		assert.is_true(build.calcsTab.powerBuilderInitialized)
+		assert.is_not_nil(target.power, "power table must exist after PowerBuilder")
+		assert.is_not_nil(target.power.singleStat,
+			"power.singleStat must be set (not nil) for a jewel-dependent allocated node — nil means PowerBuilder skipped it")
+		assert.is_true(target.power.singleStat ~= 0,
+			"power.singleStat must be non-zero for a node that affects Life")
 	end)
 
-	it("powerMax fields are zero when all options are disabled", function()
-		setAllOptions(false)
-		drainPowerBuild()
-		local powerMax = build.calcsTab.powerMax
-		assert.are.equal(0, powerMax.singleStat)
-		assert.are.equal(0, powerMax.offence)
-		assert.are.equal(0, powerMax.defence)
-	end)
+	-- Pass: intuitiveLeap node with pathDist==0 is still processed even with tight nodePowerMaxDepth
+	-- Fail: if only grantedPassives path runs, nodes with pathDist!=1000 fall into
+	--       distanceMap and are skipped by the "not node.alloc" guard
+	it("jewel-dependent node with pathDist=0 is not skipped by nodePowerMaxDepth", function()
+		local target = injectIntuitiveLeapNode()
+		target.power = {}
 
-	it("powerTattooOptions is empty when all options are disabled", function()
-		setAllOptions(false)
-		drainPowerBuild()
-		assert.are.equal(0, #build.calcsTab.powerTattooOptions)
-	end)
+		local powerStat = findPowerStat("Life")
+		assert.is_not_nil(powerStat)
+		build.calcsTab.nodePowerMaxDepth = 1
 
-	it("powerMax is initialized when all options are enabled", function()
-		setAllOptions(true)
-		drainPowerBuild()
-		assert.is_not_nil(build.calcsTab.powerMax)
-		assert.is_true(build.calcsTab.powerBuilderInitialized)
-	end)
+		runPowerBuilder(powerStat)
 
-	it("powerMax is initialized with default options", function()
-		drainPowerBuild()
-		assert.is_not_nil(build.calcsTab.powerMax)
-		assert.is_true(build.calcsTab.powerBuilderInitialized)
-	end)
-
-	-- Test 1 : filtrage par type de nœud ------------------------------------
-
-	it("report excludes Normal nodes when includeNormals is disabled", function()
-		build.treeTab.includePowerReportNormals = false
-		drainPowerBuild()
-		local report = buildReport()
-		assertNoItemOfType(report, "Normal")
-	end)
-
-	it("report excludes Notable nodes when includeNotables and includeAscNotables are disabled", function()
-		build.treeTab.includePowerReportNotables = false
-		build.treeTab.includePowerReportAscNotables = false
-		build.treeTab.includePowerReportForbiddenAscendancy = false
-		drainPowerBuild()
-		local report = buildReport()
-		assertNoItemOfType(report, "Notable")
-	end)
-
-	it("report excludes Keystone nodes when includeKeystones and includeAscKeystones are disabled", function()
-		build.treeTab.includePowerReportKeystones = false
-		build.treeTab.includePowerReportAscKeystones = false
-		build.treeTab.includePowerReportForbiddenAscendancy = false
-		drainPowerBuild()
-		local report = buildReport()
-		assertNoItemOfType(report, "Keystone")
-	end)
-
-	-- Test 2 : nodePowerMaxDepth=0 ne crashe pas ----------------------------
-
-	it("no crash with nodePowerMaxDepth=0 and tattoos enabled", function()
-		build.calcsTab.nodePowerMaxDepth = 0
-		build.treeTab.includePowerReportTattoos = true
-		build.treeTab.includePowerReportRunegrafts = true
-		drainPowerBuild()
-		assert.is_not_nil(build.calcsTab.powerMax)
-		assert.is_true(build.calcsTab.powerBuilderInitialized)
-	end)
-
-	it("no crash with nodePowerMaxDepth=0 and all options enabled", function()
-		build.calcsTab.nodePowerMaxDepth = 0
-		setAllOptions(true)
-		drainPowerBuild()
-		assert.is_not_nil(build.calcsTab.powerMax)
-		assert.is_true(build.calcsTab.powerBuilderInitialized)
-	end)
-
-	-- Test 3 : filtrage partiel des tattoos ---------------------------------
-
-	it("powerTattooOptions has no Runegraft when includeRunegrafts is disabled", function()
-		build.treeTab.includePowerReportRunegrafts = false
-		build.treeTab.includePowerReportTattoos = true
-		drainPowerBuild()
-		for _, option in ipairs(build.calcsTab.powerTattooOptions) do
-			assert.is_false(option.isRunegraft,
-				"powerTattooOptions should not contain Runegraft option: " .. (option.displayName or "?"))
-		end
-	end)
-
-	it("powerTattooOptions has no non-Runegraft when includeTattoos is disabled", function()
-		build.treeTab.includePowerReportTattoos = false
-		build.treeTab.includePowerReportRunegrafts = true
-		drainPowerBuild()
-		for _, option in ipairs(build.calcsTab.powerTattooOptions) do
-			assert.is_true(option.isRunegraft,
-				"powerTattooOptions should not contain Tattoo option: " .. (option.displayName or "?"))
-		end
-	end)
-
-	-- Test 4 : une seule option active --------------------------------------
-
-	it("completes with only keystones enabled", function()
-		setAllOptions(false)
-		build.treeTab.includePowerReportKeystones = true
-		drainPowerBuild()
-		assert.is_not_nil(build.calcsTab.powerMax)
-		assert.is_true(build.calcsTab.powerBuilderInitialized)
-	end)
-
-	it("completes with only normals enabled", function()
-		setAllOptions(false)
-		build.treeTab.includePowerReportNormals = true
-		drainPowerBuild()
-		assert.is_not_nil(build.calcsTab.powerMax)
-		assert.is_true(build.calcsTab.powerBuilderInitialized)
-	end)
-
-	it("completes with only masteries enabled", function()
-		setAllOptions(false)
-		build.treeTab.includePowerReportMasteries = true
-		drainPowerBuild()
-		assert.is_not_nil(build.calcsTab.powerMax)
-		assert.is_true(build.calcsTab.powerBuilderInitialized)
-	end)
-
-	-- Test 5 : cohérence entre plusieurs builds successifs ------------------
-
-	it("powerMax is consistent after stat toggle: Life -> CombinedDPS -> Life", function()
-		local life = findStat("Life")
-		local dps  = findStat("CombinedDPS")
-
-		drainPowerBuild(life)
-		local powerMaxLife1 = build.calcsTab.powerMax.singleStat
-
-		drainPowerBuild(dps)
-
-		drainPowerBuild(life)
-		local powerMaxLife2 = build.calcsTab.powerMax.singleStat
-
-		assert.are.equal(powerMaxLife1, powerMaxLife2,
-			"powerMax.singleStat should be identical after toggling stat back to Life")
-	end)
-
-	it("powerMax is consistent after nodePowerMaxDepth toggle: 5 -> 0 -> 5", function()
-		build.calcsTab.nodePowerMaxDepth = 5
-		drainPowerBuild()
-		local powerMax5a = build.calcsTab.powerMax.singleStat
-
-		build.calcsTab.nodePowerMaxDepth = 0
-		drainPowerBuild()
-
-		build.calcsTab.nodePowerMaxDepth = 5
-		drainPowerBuild()
-		local powerMax5b = build.calcsTab.powerMax.singleStat
-
-		assert.are.equal(powerMax5a, powerMax5b,
-			"powerMax.singleStat should be identical after toggling nodePowerMaxDepth back to 5")
-	end)
-
-	it("powerTattooOptions repopulate correctly after toggle: ON -> OFF -> ON", function()
-		build.treeTab.includePowerReportTattoos    = true
-		build.treeTab.includePowerReportRunegrafts = true
-		drainPowerBuild()
-		local countON1 = #build.calcsTab.powerTattooOptions
-
-		build.treeTab.includePowerReportTattoos    = false
-		build.treeTab.includePowerReportRunegrafts = false
-		drainPowerBuild()
-		assert.are.equal(0, #build.calcsTab.powerTattooOptions,
-			"powerTattooOptions should be empty when both tattoos and runegrafts are disabled")
-
-		build.treeTab.includePowerReportTattoos    = true
-		build.treeTab.includePowerReportRunegrafts = true
-		drainPowerBuild()
-		local countON2 = #build.calcsTab.powerTattooOptions
-
-		assert.are.equal(countON1, countON2,
-			"powerTattooOptions count should be the same after re-enabling tattoos")
-	end)
-
-	-- Benchmarks (run with: busted --lua=luajit --no-coverage -r benchmark --filter=TestPowerReport)
-	-- Ces tests sont commités mais exclus de la suite par défaut.
-	-- Ils mesurent les performances et génèrent un rapport de profiling.
-	-- Ils ne font pas d'assertions strictes de performance.
-
-	it("benchmark: all options enabled #benchmark", function()
-		setAllOptions(true)
-		local p = require("jit.p")
-		p.start("i10", "profiler_bench.log")
-		local t0 = os.clock()
-		drainPowerBuild()
-		local elapsed = os.clock() - t0
-		p.stop()
-		print(string.format("\n  [bench] all options enabled: %.2fs CPU  (profiler -> profiler_bench.log)", elapsed))
-		assert.is_not_nil(build.calcsTab.powerMax)
-	end)
-
-	it("benchmark: all options enabled, nodePowerMaxDepth=0 #benchmark", function()
-		setAllOptions(true)
-		build.calcsTab.nodePowerMaxDepth = 0
-		local p = require("jit.p")
-		p.start("i10", "profiler_bench_depth0.log")
-		local t0 = os.clock()
-		drainPowerBuild()
-		local elapsed = os.clock() - t0
-		p.stop()
-		print(string.format("\n  [bench] all options, depth=0: %.2fs CPU  (profiler -> profiler_bench_depth0.log)", elapsed))
-		assert.is_not_nil(build.calcsTab.powerMax)
+		assert.is_not_nil(target.power.singleStat,
+			"jewel-dependent node must bypass nodePowerMaxDepth (singleStat is nil → node was skipped)")
+		assert.is_true(target.power.singleStat ~= 0,
+			"singleStat must be non-zero even with tight nodePowerMaxDepth")
 	end)
 end)

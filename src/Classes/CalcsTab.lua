@@ -638,10 +638,13 @@ function CalcsTabClass:PowerBuilder()
 		wipeTable(node.power)
 		if node.modKey ~= "" then
 			if self.mainEnv.grantedPassives[nodeId]
-			or (node.alloc and node.pathDist == 1000) then
+			or (node.alloc and (node.pathDist == 1000 or #node.intuitiveLeapLikesAffecting > 0)) then
 				-- Granted passives (anoints, Forbidden Flame/Flesh) and nodes allocated
-				-- outside the tree (Impossible Escape) have pathDist 1000;
-				-- process them separately so nodePowerMaxDepth never filters them out.
+				-- outside the tree (Impossible Escape) are processed separately so
+				-- nodePowerMaxDepth never filters them out.
+				-- Impossible Escape nodes have intuitiveLeapLikesAffecting populated;
+				-- pathDist==1000 alone misses keystones that are also reachable via a
+				-- normal tree path (those have pathDist 0 but are still jewel-dependent).
 				grantedNodes[nodeId] = node
 				total = total + 1
 			else
