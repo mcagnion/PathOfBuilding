@@ -1,4 +1,4 @@
--- Tests for RadiusJewelFinder: buildJewelSockets, computeVariantImpact, computeSocketImpact
+-- Tests for RadiusJewelFinder: buildJewelSockets, computeBestVariantSocketImpact, computeSocketImpact
 --
 -- Uses OccVortex (3.13 Occultist/Vortex) as reference build.
 -- Allocated jewel sockets in that build: 36634, 61419, 41263 (all occupied by jewels).
@@ -471,101 +471,106 @@ describe("RadiusJewelFinder #radiusjewel", function()
 
 	end)
 
-	-- ── computeVariantImpact (LOM) ──────────────────────────────────────────
+	-- ── buildVariantsFromUniqueItem ──────────────────────────────────────────
 
-	describe("computeVariantImpact", function()
+	describe("buildVariantsFromUniqueItem", function()
 
-		-- Use socket 33631 (unallocated, empty in OccVortex)
-		local SOCKET_ID = 33631
+		it("builds Light of Meaning variants with valid name and rawText", function()
+			local variants = makeFinder():buildVariantsFromUniqueItem("The Light of Meaning")
+			assert.is_true(#variants > 0, "expected at least one LOM variant")
+			for _, v in ipairs(variants) do
+				assert.is_string(v.name)
+				assert.is_string(v.rawText)
+				assert.is_true(#v.name > 0, "variant name should not be empty")
+				assert.is_true(#v.rawText > 0, "variant rawText should not be empty")
+			end
+		end)
 
-		it("returns exactly 13 variant results", function()
-			local results, baseline = makeFinder():computeVariantImpact(SOCKET_ID, "Life")
-			assert.are.equal(13, #results)
+		it("builds Split Personality variants with unique names", function()
+			local variants = makeFinder():buildVariantsFromUniqueItem("Split Personality")
+			assert.is_true(#variants > 0, "expected at least one Split Personality variant")
+			local seenNames = {}
+			for _, v in ipairs(variants) do
+				assert.is_string(v.name)
+				assert.is_string(v.rawText)
+				assert.is_nil(seenNames[v.name], "duplicate variant name: " .. v.name)
+				seenNames[v.name] = true
+			end
+		end)
+
+		it("variant rawText contains Selected Variant header", function()
+			local variants = makeFinder():buildVariantsFromUniqueItem("The Light of Meaning")
+			for _, v in ipairs(variants) do
+				assert.is_not_nil(v.rawText:match("Selected Variant: %d+"), "rawText should contain Selected Variant: " .. v.name)
+			end
+		end)
+
+	end)
+
+	-- ── computeBestVariantSocketImpact (LOM) ─────────────────────────────────
+
+	describe("computeBestVariantSocketImpact (LOM)", function()
+
+		local function getSockets()
+			return makeFinder():buildJewelSockets(getLargeRadiusIndex())
+		end
+
+		local function getLOMVariants()
+			return makeFinder():buildVariantsFromUniqueItem("The Light of Meaning")
+		end
+
+		it("returns one result per socket, picks the best variant", function()
+			local sockets = getSockets()
+			local variants = getLOMVariants()
+			local results, baseline = makeFinder():computeBestVariantSocketImpact(sockets, variants, "Life")
+			assert.is_true(#results > 0, "expected at least one result")
+			assert.is_true(#results <= #sockets, "should not exceed socket count")
 			assert.is_number(baseline)
 			assert.is_true(baseline > 0)
-		end)
-
-		it("each result has required fields", function()
-			local results, _ = makeFinder():computeVariantImpact(SOCKET_ID, "Life")
 			for _, r in ipairs(results) do
+				assert.is_not_nil(r.socket)
 				assert.is_not_nil(r.variant)
 				assert.is_string(r.variant.name)
-				assert.is_number(r.variantIdx)
-				assert.is_number(r.value)
 				assert.is_number(r.delta)
-				assert.is_true(r.variantIdx >= 1 and r.variantIdx <= 13)
 			end
-		end)
-
-		it("returns each Light of Meaning variant exactly once", function()
-			local results, _ = makeFinder():computeVariantImpact(SOCKET_ID, "Life")
-			local seenNames = {}
-			for _, r in ipairs(results) do
-				assert.is_nil(seenNames[r.variant.name],
-					"duplicate variant in results: " .. r.variant.name)
-				seenNames[r.variant.name] = true
-			end
-			assert.are.equal(13, #results)
 		end)
 
 		it("results are sorted by delta descending", function()
-			local results, _ = makeFinder():computeVariantImpact(SOCKET_ID, "Life")
+			local sockets = getSockets()
+			local results, _ = makeFinder():computeBestVariantSocketImpact(sockets, getLOMVariants(), "Life")
 			assert.is_true(isSorted(results, "delta"),
-				"variant results should be sorted by delta descending")
+				"results should be sorted by delta descending")
 		end)
 
-		it("Life variant gives positive delta on an empty socket", function()
-			local results, _ = makeFinder():computeVariantImpact(SOCKET_ID, "Life")
-			local lifeResult
+		it("Life variant selected on sockets where it beats others", function()
+			local sockets = getSockets()
+			local results, _ = makeFinder():computeBestVariantSocketImpact(sockets, getLOMVariants(), "Life")
+			local hasLife = false
 			for _, r in ipairs(results) do
-				if r.variantIdx == 1 then
-					lifeResult = r
-					break
-				end
+				if r.variant.name == "Life" then hasLife = true; break end
 			end
-			assert.is_not_nil(lifeResult)
-			assert.is_true(lifeResult.delta > 0,
-				"Life variant should increase life on an empty socket with passives in radius")
+			assert.is_true(hasLife, "expected Life variant to be best for at least one socket")
 		end)
 
 		it("restores TotalLife after compute", function()
+			local sockets = getSockets()
 			local before = build.calcsTab.mainOutput["Life"]
-			makeFinder():computeVariantImpact(SOCKET_ID, "Life")
+			makeFinder():computeBestVariantSocketImpact(sockets, getLOMVariants(), "Life")
 			local after = build.calcsTab.mainOutput["Life"]
 			assert.are.equal(before, after)
 		end)
 
-		it("restores socket and item state after compute on an empty socket", function()
+		it("restores socket and item state after compute", function()
+			local sockets = getSockets()
 			local before = snapshotFinderState()
-			makeFinder():computeVariantImpact(SOCKET_ID, "Life")
+			makeFinder():computeBestVariantSocketImpact(sockets, getLOMVariants(), "Life")
 			assertFinderStateUnchanged(before)
 		end)
 
-		it("restores occupied socket jewel after compute on allocated socket", function()
-			-- Socket 36634 is allocated and occupied by item 17 in OccVortex
-			local slot = build.itemsTab.sockets[36634]
-			local prevId = slot.selItemId
-			makeFinder():computeVariantImpact(36634, "Life", nil, { id = "all" })
-			assert.are.equal(prevId, slot.selItemId,
-				"selItemId should be restored to " .. prevId)
-		end)
-
-		it("Life variant gives non-negative delta on allocated socket with passives", function()
-			-- Socket 36634 is allocated; its radius should contain allocated passives
-			local results, _ = makeFinder():computeVariantImpact(36634, "Life", nil, { id = "all" })
-			local lifeResult
-			for _, r in ipairs(results) do
-				if r.variantIdx == 1 then lifeResult = r; break end
-			end
-			assert.is_not_nil(lifeResult)
-			assert.is_true(lifeResult.delta >= 0,
-				"Life variant should not decrease life on allocated socket")
-		end)
-
-		it("restores socket and item state after compute on an occupied socket", function()
-			local before = snapshotFinderState()
-			makeFinder():computeVariantImpact(36634, "Life", nil, { id = "all" })
-			assertFinderStateUnchanged(before)
+		it("respects occupiedMode filter", function()
+			local sockets = getSockets()
+			local results, _ = makeFinder():computeBestVariantSocketImpact(sockets, getLOMVariants(), "Life", nil, nil, { id = "all" })
+			assert.is_true(#results > 0, "expected results with occupied mode 'all'")
 		end)
 
 	end)
