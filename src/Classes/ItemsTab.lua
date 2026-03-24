@@ -1128,32 +1128,32 @@ function ItemsTabClass:Save(xml)
 		}
 		item:BuildAndParseRaw()
 		t_insert(child, item.raw)
-		local id = #item.buffModLines + 1
-		for _, modLine in ipairs(item.enchantModLines) do
+		local id = #(item.buffModLines or { }) + 1
+		for _, modLine in ipairs(item.enchantModLines or { }) do
 			if modLine.range then
 				t_insert(child, { elem = "ModRange", attrib = { id = tostring(id), range = tostring(modLine.range) } })
 			end
 			id = id + 1
 		end
-		for _, modLine in ipairs(item.scourgeModLines) do
+		for _, modLine in ipairs(item.scourgeModLines or { }) do
 			if modLine.range then
 				t_insert(child, { elem = "ModRange", attrib = { id = tostring(id), range = tostring(modLine.range) } })
 			end
 			id = id + 1
 		end
-		for _, modLine in ipairs(item.implicitModLines) do
+		for _, modLine in ipairs(item.implicitModLines or { }) do
 			if modLine.range then
 				t_insert(child, { elem = "ModRange", attrib = { id = tostring(id), range = tostring(modLine.range) } })
 			end
 			id = id + 1
 		end
-		for _, modLine in ipairs(item.explicitModLines) do
+		for _, modLine in ipairs(item.explicitModLines or { }) do
 			if modLine.range then
 				t_insert(child, { elem = "ModRange", attrib = { id = tostring(id), range = tostring(modLine.range) } })
 			end
 			id = id + 1
 		end
-		for _, modLine in ipairs(item.crucibleModLines) do
+		for _, modLine in ipairs(item.crucibleModLines or { }) do
 			if modLine.range then
 				t_insert(child, { elem = "ModRange", attrib = { id = tostring(id), range = tostring(modLine.range) } })
 			end
