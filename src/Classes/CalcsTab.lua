@@ -501,8 +501,10 @@ function CalcsTabClass:PowerBuilder()
 	for nodeId, node in pairs(self.build.spec.nodes) do
 		wipeTable(node.power)
 		if node.modKey ~= "" then
-			if self.mainEnv.grantedPassives[nodeId] then
-				-- Granted passives (anoints, Forbidden Flame/Flesh) have no pathDist;
+			if self.mainEnv.grantedPassives[nodeId]
+			or (node.alloc and node.pathDist == 1000) then
+				-- Granted passives (anoints, Forbidden Flame/Flesh) and nodes allocated
+				-- outside the tree (Impossible Escape) have pathDist 1000;
 				-- process them separately so nodePowerMaxDepth never filters them out.
 				grantedNodes[nodeId] = node
 				total = total + 1
@@ -591,7 +593,8 @@ function CalcsTabClass:PowerBuilder()
 		end
 	end
 
-	-- Calculate power for granted passives (anoints, Forbidden Flame/Flesh)
+	-- Calculate power for granted passives and nodes allocated outside the tree
+	-- (anoints, Forbidden Flame/Flesh, Impossible Escape).
 	-- These are processed separately so nodePowerMaxDepth never filters them out.
 	for nodeId, node in pairs(grantedNodes) do
 		if not cache[node.modKey.."_remove"] then
@@ -601,6 +604,13 @@ function CalcsTabClass:PowerBuilder()
 		if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
 			node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
 			node.power.pathPower = node.power.singleStat
+			if node.depends and not node.ascendancyName and #node.depends > 1 then
+				local pathNodes = { }
+				for _, depNode in pairs(node.depends) do
+					pathNodes[depNode] = true
+				end
+				node.power.pathPower = self:CalculatePowerStat(self.powerStat, calcFunc({ removeNodes = pathNodes }, useFullDPS), calcBase)
+			end
 		end
 		nodeIndex = nodeIndex + 1
 		if coroutine.running() and GetTime() - start > 100 then
