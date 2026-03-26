@@ -38,7 +38,7 @@ local function progressChild(progress, startFraction, spanFraction)
 	return progress
 end
 
-local function isConnectionlessCandidateNode(node, keystoneOnly)
+local function isConnectionlessCandidateNode(node, keystoneOnly, notableOrKeystoneOnly)
 	if not node then
 		return false
 	end
@@ -50,6 +50,9 @@ local function isConnectionlessCandidateNode(node, keystoneOnly)
 	end
 	if keystoneOnly then
 		return node.type == "Keystone"
+	end
+	if notableOrKeystoneOnly then
+		return node.type == "Keystone" or node.type == "Notable"
 	end
 	return true
 end
@@ -251,7 +254,7 @@ function Class:collectConnectionlessCandidates(socketNode, options)
 		return candidates
 	end
 	for nodeId, node in pairs(sourceNodes) do
-		if not seen[nodeId] and not allocNodes[nodeId] and isConnectionlessCandidateNode(node, options.keystoneOnly) then
+		if not seen[nodeId] and not allocNodes[nodeId] and isConnectionlessCandidateNode(node, options.keystoneOnly, options.notableOrKeystoneOnly) then
 			t_insert(candidates, node)
 			seen[nodeId] = true
 		end
@@ -338,15 +341,21 @@ function Class:computeConnectionlessSimulatedPlan(calcFunc, baseOutput, baseValu
 	return result
 end
 
-function Class:computeConnectionlessFastPlan(calcFunc, baseOutput, baseValue, socketNode, slotName, item, impactStat, candidates, variantLabel, deltaCache, progressLabel, progress, maxAdditionalNodes, skipPlanSteps)
+function Class:computeConnectionlessFastPlan(calcFunc, baseOutput, baseValue, socketNode, slotName, item, impactStat, candidates, variantLabel, deltaCache, progressLabel, progress, maxAdditionalNodes, skipPlanSteps, earlyPruneThreshold)
 	impactStat = normalizeImpactStat(impactStat)
-	local jewelOnlyOutput = calcFunc({
-		addNodes = { [socketNode] = true },
-		repSlotName = slotName,
-		repItem = item,
-	})
-	local jewelOnlyValue = self:getImpactValue(impactStat, jewelOnlyOutput)
+	local jewelOnlyOutput, jewelOnlyValue
+	local function ensureJewelOnly()
+		if not jewelOnlyOutput then
+			jewelOnlyOutput = calcFunc({
+				addNodes = { [socketNode] = true },
+				repSlotName = slotName,
+				repItem = item,
+			})
+			jewelOnlyValue = self:getImpactValue(impactStat, jewelOnlyOutput)
+		end
+	end
 	if maxAdditionalNodes and maxAdditionalNodes <= 0 then
+		ensureJewelOnly()
 		local chosenNodes = { }
 		return buildConnectionlessPlanStep(baseOutput, baseValue, jewelOnlyValue, jewelOnlyOutput, chosenNodes, variantLabel)
 	end
@@ -355,6 +364,7 @@ function Class:computeConnectionlessFastPlan(calcFunc, baseOutput, baseValue, so
 		progressTick(progress, candidateIndex, #candidates, progressLabel)
 		local delta = deltaCache[node.id]
 		if delta == nil then
+			ensureJewelOnly()
 			local output = calcFunc({
 				addNodes = { [socketNode] = true, [node] = true },
 				repSlotName = slotName,
@@ -378,11 +388,18 @@ function Class:computeConnectionlessFastPlan(calcFunc, baseOutput, baseValue, so
 	end)
 
 	local chosenNodes = { }
+	local estimatedDelta = 0
 	for i, entry in ipairs(scoredCandidates) do
 		if maxAdditionalNodes and i > maxAdditionalNodes then
 			break
 		end
 		t_insert(chosenNodes, entry.node)
+		estimatedDelta = estimatedDelta + entry.delta
+	end
+
+	-- Early pruning: if the sum of individual deltas can't beat the current best, skip the expensive final calcFunc
+	if earlyPruneThreshold and estimatedDelta <= earlyPruneThreshold then
+		return { delta = estimatedDelta, pruned = true }
 	end
 
 	local addNodes = { [socketNode] = true }
@@ -403,25 +420,25 @@ function Class:computeConnectionlessFastPlan(calcFunc, baseOutput, baseValue, so
 	local planSteps = { }
 	local prefixNodes = { }
 	local prefixAddNodes = { [socketNode] = true }
+	local lastOutput, lastValue
 	for _, node in ipairs(chosenNodes) do
 		t_insert(prefixNodes, node)
 		prefixAddNodes[node] = true
-		local prefixOutput = calcFunc({
+		lastOutput = calcFunc({
 			addNodes = prefixAddNodes,
 			repSlotName = slotName,
 			repItem = item,
 		})
-		local prefixValue = self:getImpactValue(impactStat, prefixOutput)
-		t_insert(planSteps, buildConnectionlessPlanStep(baseOutput, baseValue, prefixValue, prefixOutput, prefixNodes, variantLabel))
+		lastValue = self:getImpactValue(impactStat, lastOutput)
+		t_insert(planSteps, buildConnectionlessPlanStep(baseOutput, baseValue, lastValue, lastOutput, prefixNodes, variantLabel))
 	end
-	local finalOutput = calcFunc({
-		addNodes = addNodes,
-		repSlotName = slotName,
-		repItem = item,
-	})
-	local finalValue = self:getImpactValue(impactStat, finalOutput)
+	if not lastOutput then
+		ensureJewelOnly()
+		lastOutput = jewelOnlyOutput
+		lastValue = jewelOnlyValue
+	end
 
-	local result = buildConnectionlessPlanStep(baseOutput, baseValue, finalValue, finalOutput, chosenNodes, variantLabel)
+	local result = buildConnectionlessPlanStep(baseOutput, baseValue, lastValue, lastOutput, chosenNodes, variantLabel)
 	result.planSteps = planSteps
 	return result
 end
@@ -572,7 +589,7 @@ function Class:computeIntuitiveLeapSocketImpact(sockets, impactStat, variant, me
 				local socketBaseline = self:getImpactValue(impactStat, replacementContext.baselineOutput)
 				local result
 				if methodId == "fast" then
-					local cacheKey = s_format("IL|%s|%s|%d", statField, variantKey, socket.id)
+					local cacheKey = s_format("IL|%s|%s", statField, variantKey)
 					planCache[cacheKey] = planCache[cacheKey] or { }
 					result = self:computeConnectionlessFastPlan(calcFunc, replacementContext.baselineOutput, socketBaseline, socketNode, slotName, item, impactStat, candidates, nil, planCache[cacheKey], socket.label, socketProgress, maxAdditionalNodes, skipPlanSteps)
 				else
@@ -607,6 +624,8 @@ function Class:computeThreadOfHopeSocketImpact(sockets, impactStat, threadVarian
 		threadItems[variantIndex] = item
 	end
 
+	-- Pass 1: find best ring variant per socket (skip plan steps, with early pruning)
+	local pendingPlanSteps = { }
 	for socketIndex, socket in ipairs(sockets) do
 		progressTick(progress, socketIndex - 1, #sockets, socket.label)
 		local socketProgress = progressChild(progress, (socketIndex - 1) / #sockets, 1 / #sockets)
@@ -618,28 +637,35 @@ function Class:computeThreadOfHopeSocketImpact(sockets, impactStat, threadVarian
 			local slotName = replacementContext.slotName
 			local socketBaseline = self:getImpactValue(impactStat, replacementContext.baselineOutput)
 			local bestResult
+			local bestVariantIndex, bestCandidates
 			for variantIndex, threadVariant in ipairs(threadVariants) do
 				local variantProgress = progressChild(socketProgress, (variantIndex - 1) / #threadVariants, 1 / #threadVariants)
 				local item = threadItems[variantIndex]
 				local candidates = self:collectConnectionlessCandidates(socketNode, {
 					radiusIndex = threadVariant.radiusIndex,
+					notableOrKeystoneOnly = skipPlanSteps or methodId == "fast",
 				})
 				if #candidates > 0 then
 					local maxAdditionalNodes = maxTotalPoints and math.max(maxTotalPoints - accessCost, 0) or nil
+					local earlyPruneThreshold = bestResult and bestResult.delta or nil
 					local result
 					if methodId == "fast" then
-						local cacheKey = s_format("TOH|%s|%d|%d", statField, socket.id, variantIndex)
+						local cacheKey = s_format("TOH|%s", statField)
 						planCache[cacheKey] = planCache[cacheKey] or { }
-						result = self:computeConnectionlessFastPlan(calcFunc, replacementContext.baselineOutput, socketBaseline, socketNode, slotName, item, impactStat, candidates, threadVariant.name .. " Ring", planCache[cacheKey], socket.label .. " | " .. threadVariant.name .. " Ring", variantProgress, maxAdditionalNodes, skipPlanSteps)
+						result = self:computeConnectionlessFastPlan(calcFunc, replacementContext.baselineOutput, socketBaseline, socketNode, slotName, item, impactStat, candidates, threadVariant.name .. " Ring", planCache[cacheKey], socket.label .. " | " .. threadVariant.name .. " Ring", variantProgress, maxAdditionalNodes, true, earlyPruneThreshold)
 					else
 						result = self:computeConnectionlessSimulatedPlan(calcFunc, replacementContext.baselineOutput, socketBaseline, socketNode, slotName, item, impactStat, candidates, threadVariant.name .. " Ring", socket.label .. " | " .. threadVariant.name .. " Ring", variantProgress, maxAdditionalNodes)
 					end
-					result.variant = threadVariant
-					if not bestResult
-					or result.delta > bestResult.delta
-					or (result.delta == bestResult.delta and result.addedNodeCount < bestResult.addedNodeCount)
-					or (result.delta == bestResult.delta and result.addedNodeCount == bestResult.addedNodeCount and threadVariant.radiusIndex < bestResult.variant.radiusIndex) then
-						bestResult = result
+					if not result.pruned then
+						result.variant = threadVariant
+						if not bestResult
+						or result.delta > bestResult.delta
+						or (result.delta == bestResult.delta and result.addedNodeCount < bestResult.addedNodeCount)
+						or (result.delta == bestResult.delta and result.addedNodeCount == bestResult.addedNodeCount and threadVariant.radiusIndex < bestResult.variant.radiusIndex) then
+							bestResult = result
+							bestVariantIndex = variantIndex
+							bestCandidates = candidates
+						end
 					end
 				end
 			end
@@ -647,6 +673,16 @@ function Class:computeThreadOfHopeSocketImpact(sockets, impactStat, threadVarian
 				bestResult.socket = socket
 				bestResult.replacedItemLabel = occupancy and occupancy.isOccupied and occupancy.itemLabel or nil
 				t_insert(results, bestResult)
+				if not skipPlanSteps and methodId == "fast" and bestVariantIndex then
+					t_insert(pendingPlanSteps, {
+						replacementContext = replacementContext,
+						socketBaseline = socketBaseline,
+						bestVariantIndex = bestVariantIndex,
+						bestCandidates = bestCandidates,
+						accessCost = accessCost,
+						resultIndex = #results,
+					})
+				end
 			end
 			progressTick(socketProgress, 1, 1, socket.label)
 		end
@@ -658,6 +694,38 @@ function Class:computeThreadOfHopeSocketImpact(sockets, impactStat, threadVarian
 		end
 		return a.variant.radiusIndex < b.variant.radiusIndex
 	end)
+
+	-- Pass 2: recompute plan steps only for top results (single-jewel mode)
+	if #pendingPlanSteps > 0 then
+		-- Build lookup: which result indices need plan steps (top 5 by delta)
+		local topResultIndices = { }
+		for i = 1, math.min(5, #results) do
+			topResultIndices[results[i]] = true
+		end
+		for _, pending in ipairs(pendingPlanSteps) do
+			local result = results[pending.resultIndex]
+			-- resultIndex may have shifted after sort; check by reference
+			if not topResultIndices[result] then
+				goto continuePending
+			end
+			local ctx = pending.replacementContext
+			local maxAdditionalNodes = maxTotalPoints and math.max(maxTotalPoints - pending.accessCost, 0) or nil
+			local cacheKey = s_format("TOH|%s", statField)
+			local fullResult = self:computeConnectionlessFastPlan(calcFunc, ctx.baselineOutput, pending.socketBaseline, ctx.socketNode, ctx.slotName, threadItems[pending.bestVariantIndex], impactStat, pending.bestCandidates, threadVariants[pending.bestVariantIndex].name .. " Ring", planCache[cacheKey], nil, nil, maxAdditionalNodes, false, nil)
+			fullResult.variant = threadVariants[pending.bestVariantIndex]
+			fullResult.socket = result.socket
+			fullResult.replacedItemLabel = result.replacedItemLabel
+			-- Replace in-place in results
+			for i, r in ipairs(results) do
+				if r == result then
+					results[i] = fullResult
+					break
+				end
+			end
+			::continuePending::
+		end
+	end
+
 	return results, realBaseline
 end
 
@@ -745,6 +813,7 @@ function Class:computeImpossibleEscapeSocketImpact(sockets, impactStat, variants
 		end
 	end
 
+	local notableOrKeystoneOnly = skipPlanSteps or methodId == "fast"
 	local variantContexts = { }
 	for _, variant in ipairs(variants) do
 		local keystoneNode = self.build.spec.tree.keystoneMap[variant.keystoneName]
@@ -753,6 +822,7 @@ function Class:computeImpossibleEscapeSocketImpact(sockets, impactStat, variants
 				collectNodes = function()
 					return keystoneNode.nodesInRadius[smallRadiusIndex]
 				end,
+				notableOrKeystoneOnly = notableOrKeystoneOnly,
 			})
 			if #candidates > 0 then
 				local item = new("Item", "Rarity: Unique\n" .. variant.rawText)
@@ -802,7 +872,22 @@ function Class:computeImpossibleEscapeSocketImpact(sockets, impactStat, variants
 	local totalPlanCount = #groupedOrder * #variants
 	local currentPlanIndex = 0
 
+	-- Track max candidate count across all variants to detect when budget is sufficient for all
+	local maxCandidateCount = 0
+	for _, vc in pairs(variantContexts) do
+		if #vc.candidates > maxCandidateCount then
+			maxCandidateCount = #vc.candidates
+		end
+	end
+	local previousFreeResult
 	for _, groupEntry in ipairs(groupedOrder) do
+		-- Skip free groups whose budget can cover all candidates: reuse the first free group's result
+		local isFreeGroup = not groupEntry.groupKey:match("^occupied:")
+		if isFreeGroup and previousFreeResult and groupEntry.remainingBudget >= maxCandidateCount then
+			bestResultByGroupKey[groupEntry.groupKey] = previousFreeResult
+			currentPlanIndex = currentPlanIndex + #variants
+			goto continueGroup
+		end
 		local representativeSocket = groupEntry.representativeSocket
 		local replacementContext = self:buildSocketReplacementContext(calcFunc, representativeSocket.id)
 		local representativeSocketNode = replacementContext.socketNode
@@ -815,11 +900,10 @@ function Class:computeImpossibleEscapeSocketImpact(sockets, impactStat, variants
 			local variantContext = variantContexts[variant.name]
 			if variantContext then
 				local maxAdditionalNodes = groupEntry.remainingBudget >= 0 and groupEntry.remainingBudget or nil
+				local earlyPruneThreshold = bestResult and bestResult.delta or nil
 				local result
 				if methodId == "fast" then
-					local cacheKey = groupEntry.occupancy and groupEntry.occupancy.isOccupied
-						and s_format("IE|%s|%s|%d", statField, variant.name, representativeSocket.id)
-						or s_format("IE|%s|%s|free", statField, variant.name)
+					local cacheKey = s_format("IE|%s|%s", statField, variant.name)
 					planCache[cacheKey] = planCache[cacheKey] or { }
 					result = self:computeConnectionlessFastPlan(
 						calcFunc,
@@ -835,7 +919,8 @@ function Class:computeImpossibleEscapeSocketImpact(sockets, impactStat, variants
 						variant.name,
 						planProgress,
 						maxAdditionalNodes,
-						skipPlanSteps
+						true,
+						earlyPruneThreshold
 					)
 				else
 					result = self:computeConnectionlessSimulatedPlan(
@@ -853,17 +938,23 @@ function Class:computeImpossibleEscapeSocketImpact(sockets, impactStat, variants
 						maxAdditionalNodes
 					)
 				end
-				result.variant = variant
-				if not bestResult
-				or result.delta > bestResult.delta
-				or (result.delta == bestResult.delta and result.addedNodeCount < bestResult.addedNodeCount)
-				or (result.delta == bestResult.delta and result.addedNodeCount == bestResult.addedNodeCount and variant.name < bestResult.variant.name) then
-					bestResult = result
+				if not result.pruned then
+					result.variant = variant
+					if not bestResult
+					or result.delta > bestResult.delta
+					or (result.delta == bestResult.delta and result.addedNodeCount < bestResult.addedNodeCount)
+					or (result.delta == bestResult.delta and result.addedNodeCount == bestResult.addedNodeCount and variant.name < bestResult.variant.name) then
+						bestResult = result
+					end
 				end
 			end
 			progressTick(planProgress, 1, 1, variant.name)
 		end
 		bestResultByGroupKey[groupEntry.groupKey] = bestResult
+		if isFreeGroup and not previousFreeResult then
+			previousFreeResult = bestResult
+		end
+		::continueGroup::
 	end
 
 	for _, groupEntry in ipairs(groupedOrder) do
@@ -884,6 +975,41 @@ function Class:computeImpossibleEscapeSocketImpact(sockets, impactStat, variants
 		end
 		return a.variant.name < b.variant.name
 	end)
+
+	-- Pass 2: recompute plan steps for the best variant (single-jewel mode only)
+	if not skipPlanSteps and methodId == "fast" and #results > 0 then
+		local topResult = results[1]
+		local variantContext = variantContexts[topResult.variant.name]
+		if variantContext then
+			-- Find the group entry for this result to get replacement context
+			for _, groupEntry in ipairs(groupedOrder) do
+				local bestResult = bestResultByGroupKey[groupEntry.groupKey]
+				if bestResult and bestResult.variant.name == topResult.variant.name then
+					local ctx = self:buildSocketReplacementContext(calcFunc, groupEntry.representativeSocket.id)
+					local socketBaseline = self:getImpactValue(impactStat, ctx.baselineOutput)
+					local maxAdditionalNodes = groupEntry.remainingBudget >= 0 and groupEntry.remainingBudget or nil
+					local cacheKey = s_format("IE|%s|%s", statField, topResult.variant.name)
+					local fullResult = self:computeConnectionlessFastPlan(
+						calcFunc, ctx.baselineOutput, socketBaseline, ctx.socketNode, ctx.slotName,
+						variantContext.item, impactStat, variantContext.candidates, topResult.variant.name,
+						planCache[cacheKey], nil, nil, maxAdditionalNodes, false, nil
+					)
+					fullResult.variant = topResult.variant
+					-- Apply plan steps to all projected results for this variant
+					for i, r in ipairs(results) do
+						if r.variant.name == topResult.variant.name then
+							local updated = copyTableSafe(fullResult, false, true)
+							updated.socket = r.socket
+							updated.replacedItemLabel = r.replacedItemLabel
+							results[i] = updated
+						end
+					end
+					break
+				end
+			end
+		end
+	end
+
 	return results, realBaseline
 end
 

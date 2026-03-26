@@ -96,7 +96,7 @@ local function getUniqueVariantRawText(name, variantSelector, fallbackRawText, b
 		return fallbackRawText or rawText
 	end
 	item.variant = selectedVariant
-	local builtRaw = item:BuildRaw():gsub("^Rarity: Unique\n", "")
+	local builtRaw = item:BuildRaw():gsub("^Rarity: %w+\n", "")
 	uniqueVariantRawTextCache[cacheKey] = builtRaw
 	return builtRaw
 end
@@ -978,6 +978,7 @@ function M.buildJewelTypes(radiusIndexByLabel)
 	local jewelTypes = { }
 	t_insert(jewelTypes, {
 		name = "The Light of Meaning",
+		limit = 1,
 		radiusIndex = radiusIndexByLabel["Large"],
 		scoreLabel = "alloc passives",
 		hasCompute = true,
@@ -1011,6 +1012,7 @@ function M.buildJewelTypes(radiusIndexByLabel)
 	t_insert(jewelTypes, {
 		name = "Impossible Escape",
 		isImpossibleEscape = true,
+		isSocketIndependent = true,
 		scoreLabel = "unalloc notable/keystone near keystone",
 		hasCompute = true,
 		computeMethods = M.CONNECTIONLESS_COMPUTE_METHODS,
