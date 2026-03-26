@@ -902,7 +902,8 @@ Highest Weight - Displays the order retrieved from trade]]
 	end
 
 	-- Anchor rows below the header controls (3 rows on right side now)
-	self.controls.sectionAnchor = new("LabelControl", {"TOPLEFT", self.controls.setSelect, "BOTTOMLEFT"}, {0, (row_height + row_vertical_padding) * 3 - row_vertical_padding * 2, 0, 0}, "")
+	local sectionAnchorBaseY = (row_height + row_vertical_padding) * 3 - row_vertical_padding * 2
+	self.controls.sectionAnchor = new("LabelControl", {"TOPLEFT", self.controls.setSelect, "BOTTOMLEFT"}, {0, sectionAnchorBaseY, 0, 0}, "")
 	top_pane_alignment_ref = {"TOPLEFT", self.controls.sectionAnchor, "TOPLEFT"}
 	local scrollBarShown = #slotTables > 21 -- clipping starts beyond this
 	-- dynamically hide rows that are above or below the scrollBar
@@ -989,7 +990,7 @@ Highest Weight - Displays the order retrieved from trade]]
 	local function scrollBarFunc()
 		self.controls.scrollBar.height = self.pane_height-100
 		self.controls.scrollBar:SetContentDimension(self.pane_height-100, self.effective_rows_height)
-		self.controls.sectionAnchor.y = -self.controls.scrollBar.offset
+		self.controls.sectionAnchor.y = sectionAnchorBaseY - self.controls.scrollBar.offset
 	end
 	main:OpenPopup(pane_width, self.pane_height + 50, "Trader", self.controls, nil, nil, "close", (scrollBarShown and scrollBarFunc or nil))
 end
