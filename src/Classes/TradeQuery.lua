@@ -797,8 +797,10 @@ function TradeQueryClass:UpdateControlsWithItems(row_idx)
 	if not sortedItems or #sortedItems == 0 then
 		self:SetNotice(self.controls.pbNotice, "No usable results (attribute requirements)")
 		self.sortedResultTbl[row_idx] = {}
-		self.controls["resultDropdown".. row_idx]:SetList({})
-		self.controls["resultDropdown".. row_idx].selIndex = 1
+		if self.controls["resultDropdown".. row_idx] then
+			self.controls["resultDropdown".. row_idx]:SetList({})
+			self.controls["resultDropdown".. row_idx].selIndex = 1
+		end
 		self.itemIndexTbl[row_idx] = nil
 		self.totalPrice[row_idx] = nil
 		self.controls.fullPrice.label = "Total Price: " .. self:GetTotalPriceString()
