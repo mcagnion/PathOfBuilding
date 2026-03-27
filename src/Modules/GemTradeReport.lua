@@ -107,7 +107,10 @@ local function getDisplayStat(build, currentStat)
 	return { fmt = ".1f" }
 end
 
-local function getStatValue(output, currentStat)
+local function getStatValue(output, currentStat, build)
+	if currentStat.getValue then
+		return currentStat.getValue(output, build) or 0
+	end
 	local statValue = output[currentStat.stat]
 	if statValue == nil and output.Minion then
 		statValue = output.Minion[currentStat.stat]
@@ -207,10 +210,11 @@ function gemTradeReport.Build(skillsTab, currentStat, filters, buildState)
 	local displayStat = getDisplayStat(skillsTab.build, currentStat)
 	local lowerIsBetter = displayStat.lowerIsBetter or currentStat.lowerIsBetter
 	local useFullDPS = currentStat.stat == "FullDPS"
-	local baseValue = getStatValue(calcBase, currentStat)
+	local build = skillsTab.build
+	local baseValue = getStatValue(calcBase, currentStat, build)
 
 	local function addTradeRow(gemType, gemCategory, upgradeLabel, name, groupLabel, currentValue, nextValue, curSort, nextSort, output, socketGroup, gemIndex, targetLevel, targetQuality, tradeGemNameSpec, tradeQualityId, tradeNaturalMaxLevel, targetImbuedSupport)
-		local upgradedValue = getStatValue(output, currentStat)
+		local upgradedValue = getStatValue(output, currentStat, build)
 		local delta = upgradedValue - baseValue
 		local score = lowerIsBetter and -delta or delta
 		local currentGem = socketGroup and socketGroup.gemList and socketGroup.gemList[gemIndex]
