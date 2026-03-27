@@ -584,17 +584,19 @@ function TradeQueryGeneratorClass:InitMods()
 	queryModsFile:close()
 end
 
--- Build a lookup table from normalized trade stat text to trade stat ID.
+-- Build a lookup table from normalized trade stat text to trade stat ID, keyed by mod type.
+-- Structure: modTradeIdByText[modType][normalizedText] = tradeStatId
 -- Used by ResolveRequiredModFilters to convert item mod lines to trade API IDs.
 function TradeQueryGeneratorClass:BuildModTradeIdLookup()
 	self.modTradeIdByText = {}
-	for _, entries in pairs(self.modData) do
+	for modType, entries in pairs(self.modData) do
 		if type(entries) == "table" then
+			self.modTradeIdByText[modType] = self.modTradeIdByText[modType] or {}
 			for _, entry in pairs(entries) do
 				if type(entry) == "table" and entry.tradeMod and entry.tradeMod.text and entry.tradeMod.id then
 					local normalized = entry.tradeMod.text:gsub("[#()0-9%-%+%.]", "")
-					if not self.modTradeIdByText[normalized] then
-						self.modTradeIdByText[normalized] = entry.tradeMod.id
+					if not self.modTradeIdByText[modType][normalized] then
+						self.modTradeIdByText[modType][normalized] = entry.tradeMod.id
 					end
 				end
 			end
@@ -604,6 +606,7 @@ end
 
 -- Resolve a list of mod line texts (from the current item) to trade API stat filters.
 -- Returns a list of {id = tradeStatId} entries suitable for an "and" stat group.
+-- Pinned mods are always implicits, so only implicit-category mod types are searched.
 -- Mods that cannot be mapped to a trade stat are silently skipped (logged via ConPrintf).
 function TradeQueryGeneratorClass:ResolveRequiredModFilters(pinnedModLines)
 	if not pinnedModLines or #pinnedModLines == 0 then
@@ -612,7 +615,16 @@ function TradeQueryGeneratorClass:ResolveRequiredModFilters(pinnedModLines)
 	local filters = {}
 	for _, modLine in ipairs(pinnedModLines) do
 		local normalized = modLine:gsub("[#()0-9%-%+%.]", "")
-		local tradeId = self.modTradeIdByText and self.modTradeIdByText[normalized]
+		local tradeId
+		if self.modTradeIdByText then
+			-- Search only in implicit-category mod types (trade stat category index 3)
+			for modType, catIndex in pairs(tradeStatCategoryIndices) do
+				if catIndex == 3 and self.modTradeIdByText[modType] then
+					tradeId = self.modTradeIdByText[modType][normalized]
+					if tradeId then break end
+				end
+			end
+		end
 		if tradeId then
 			t_insert(filters, { id = tradeId })
 		else

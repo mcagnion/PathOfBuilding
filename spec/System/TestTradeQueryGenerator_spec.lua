@@ -63,14 +63,18 @@ describe("TradeQueryGenerator", function()
     describe("Required mod filters", function()
         -- Synthetic trade IDs used to isolate tests from the live trade stats lookup.
         local CORRUPTED_BLOOD_ID = "corrupted.stat_3299347024"
-        local MAX_LIFE_ID        = "explicit.stat_3299347025"
+        local MAX_LIFE_ID        = "implicit.stat_3299347025"
 
         local function makeQueryGen()
             local qg = new("TradeQueryGenerator", { itemsTab = { items = {} } })
-            -- Inject known trade ID mappings; avoids dependency on live API data.
+            -- Inject known trade ID mappings keyed by mod type; avoids dependency on live API data.
             qg.modTradeIdByText = {
-                ["Corrupted Blood cannot be inflicted on you"] = CORRUPTED_BLOOD_ID,
-                [" to maximum Life"] = MAX_LIFE_ID,  -- normalized form of "+# to maximum Life"
+                Corrupted = {
+                    ["Corrupted Blood cannot be inflicted on you"] = CORRUPTED_BLOOD_ID,
+                },
+                Implicit = {
+                    [" to maximum Life"] = MAX_LIFE_ID,  -- normalized form of "+# to maximum Life"
+                },
             }
             qg.requesterContext = {}
             return qg
@@ -151,6 +155,24 @@ describe("TradeQueryGenerator", function()
                 assert.are.equal(2, #result)
                 assert.are.equal(CORRUPTED_BLOOD_ID, result[1].id)
                 assert.are.equal(MAX_LIFE_ID,        result[2].id)
+            end)
+
+            -- Pass: Implicit mod resolves to implicit trade ID, not explicit.
+            -- Fail: Returns explicit ID, causing trade API to search wrong mod category.
+            it("resolves implicit mod to implicit trade ID, not explicit", function()
+                local qg = new("TradeQueryGenerator", { itemsTab = { items = {} } })
+                qg.modTradeIdByText = {
+                    Explicit = {
+                        [" to maximum Life"] = "explicit.stat_3299347025",
+                    },
+                    Implicit = {
+                        [" to maximum Life"] = "implicit.stat_3299347025",
+                    },
+                }
+                qg.requesterContext = {}
+                local result = qg:ResolveRequiredModFilters({ "+42 to maximum Life" })
+                assert.are.equal(1, #result)
+                assert.are.equal("implicit.stat_3299347025", result[1].id)
             end)
 
             -- Pass: Unknown mod is skipped; function returns empty without crashing.
