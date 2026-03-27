@@ -86,6 +86,45 @@ function TimelessJewelListControlClass:AddValueTooltip(tooltip, index, data)
 		if data.total > 0 then
 			tooltip:AddLine(16, "^7Combined Node Weight: " .. data.total)
 		end
+		-- Stat comparison for the hovered seed (only for allocated replacement nodes)
+		if self.build.treeTab.viewer.showStatDifferences and self.build.calcsTab then
+			local calcFunc, calcBase = self.build.calcsTab:GetMiscCalculator(self.build)
+			local spec = self.build.spec
+			local removeNodes = { }
+			local addNodes = { }
+			local hasChanges = false
+
+			for legionId, desiredNode in pairs(self.sharedList.desiredNodes or { }) do
+				local resultData = self.list[index][legionId]
+				if resultData and resultData.targetNodeIds and resultData.legionNode
+				and resultData.legionNode.modList then
+					for _, nodeId in ipairs(resultData.targetNodeIds) do
+						if spec.allocNodes[nodeId] then
+							local specNode = spec.nodes[nodeId]
+							if specNode and not removeNodes[specNode] then
+								removeNodes[specNode] = true
+								local tempNode = {
+									id = nodeId,
+									type = resultData.legionNode.type or specNode.type,
+									modList = resultData.legionNode.modList,
+									keystoneMod = resultData.legionNode.keystoneMod,
+									grantedSkills = { },
+								}
+								addNodes[tempNode] = true
+								hasChanges = true
+							end
+						end
+					end
+				end
+			end
+
+			if hasChanges then
+				tooltip:AddSeparator(14)
+				local output = calcFunc({ removeNodes = removeNodes, addNodes = addNodes })
+				self.build:AddStatComparesToTooltip(tooltip, calcBase, output,
+					"^7This seed on allocated nodes gives you:")
+			end
+		end
 	end
 end
 

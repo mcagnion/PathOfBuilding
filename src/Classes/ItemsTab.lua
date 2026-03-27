@@ -4026,7 +4026,54 @@ function ItemsTabClass:AddItemTooltip(tooltip, item, slot, dbMode)
 		for _, compareSlot in pairs(compareSlots) do
 			if not main.slotOnlyTooltips or (slot and (slot.nodeId == compareSlot.nodeId or slot.slotName == compareSlot.slotName)) or not slot or slot == compareSlot then
 				local selItem = self.items[compareSlot.selItemId]
-				local output = calcFunc({ repSlotName = compareSlot.slotName, repItem = item ~= selItem and item or nil})
+				local override = { repSlotName = compareSlot.slotName, repItem = item ~= selItem and item or nil }
+				-- When removing a timeless jewel, also revert conquered nodes to originals
+				if compareSlot.nodeId and item == selItem and selItem
+				and selItem.jewelData and selItem.jewelData.conqueredBy then
+					override.removeNodes = { }
+					override.addNodes = { }
+					local socketNode = self.build.spec.nodes[compareSlot.nodeId]
+					if socketNode and socketNode.nodesInRadius then
+						for nodeId in pairs(socketNode.nodesInRadius[3]) do
+							local specNode = self.build.spec.nodes[nodeId]
+							local origNode = self.build.spec.tree.nodes[nodeId]
+							if specNode and origNode and specNode.conqueredBy
+							and self.build.spec.allocNodes[nodeId] then
+								override.removeNodes[specNode] = true
+								override.addNodes[origNode] = true
+							end
+						end
+					end
+				end
+				-- When removing an intuitiveLeapLike jewel, also remove nodes only reachable through it
+				if compareSlot.nodeId and item == selItem and selItem and selItem.jewelData
+				and (selItem.jewelData.intuitiveLeapLike or selItem.jewelData.impossibleEscapeKeystone) then
+					override.removeNodes = override.removeNodes or { }
+					local spec = self.build.spec
+					local nodesToRemove = spec:NodesInIntuitiveLeapLikeRadius(spec.nodes[compareSlot.nodeId])
+					for _, node in ipairs(nodesToRemove) do
+						if not node.connectedToStart then
+							override.removeNodes[node] = true
+						end
+					end
+					-- Also remove transitive dependents
+					local queue = { }
+					for node in pairs(override.removeNodes) do
+						t_insert(queue, node)
+					end
+					local i = 1
+					while i <= #queue do
+						local node = queue[i]
+						for _, dep in ipairs(node.depends or { }) do
+							if not override.removeNodes[dep] then
+								override.removeNodes[dep] = true
+								t_insert(queue, dep)
+							end
+						end
+						i = i + 1
+					end
+				end
+				local output = calcFunc(override)
 				local header
 				if item == selItem then
 					header = "^7Removing this item from "..compareSlot.label.." will give you:"
