@@ -122,7 +122,10 @@ local function getDisplayStat(build, currentStat)
 	return { fmt = ".1f" }
 end
 
-local function getStatValue(output, currentStat)
+local function getStatValue(output, currentStat, build)
+	if currentStat.getValue then
+		return currentStat.getValue(output, build) or 0
+	end
 	local statValue = output[currentStat.stat]
 	if statValue == nil and output.Minion then
 		statValue = output.Minion[currentStat.stat]
@@ -262,11 +265,12 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters, buildState)
 	local displayStat = getDisplayStat(skillsTab.build, currentStat)
 	local lowerIsBetter = displayStat.lowerIsBetter or currentStat.lowerIsBetter
 	local useFullDPS = currentStat.stat == "FullDPS"
-	local baseValue = getStatValue(calcBase, currentStat)
+	local build = skillsTab.build
+	local baseValue = getStatValue(calcBase, currentStat, build)
 	local maxQuality = 23
 
 	local function addUpgradeRow(gemType, gemCategory, sourceType, upgradeLabel, name, groupLabel, currentValue, nextValue, curSort, nextSort, output, socketGroup, gemIndex, targetLevel, targetQuality, targetImbuedSupport)
-		local upgradedValue = getStatValue(output, currentStat)
+		local upgradedValue = getStatValue(output, currentStat, build)
 		local delta = upgradedValue - baseValue
 		local score = lowerIsBetter and -delta or delta
 		local currentGem = socketGroup and socketGroup.gemList and socketGroup.gemList[gemIndex]
@@ -373,7 +377,7 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters, buildState)
 									nextQuality = candidateQuality
 									nextOutput = output
 								end
-								local delta = getStatValue(output, currentStat) - baseValue
+								local delta = getStatValue(output, currentStat, build) - baseValue
 								if delta ~= 0 then
 									nextQuality = candidateQuality
 									nextOutput = output
@@ -490,7 +494,7 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters, buildState)
 									local errMsg, output = PCall(calcFunc, nil, useFullDPS)
 									gemInstance.imbuedSupport = ""
 									if not errMsg then
-										local score = lowerIsBetter and -(getStatValue(output, currentStat) - baseValue) or (getStatValue(output, currentStat) - baseValue)
+										local score = lowerIsBetter and -(getStatValue(output, currentStat, build) - baseValue) or (getStatValue(output, currentStat, build) - baseValue)
 										t_insert(imbuedSupportEntries, {
 											coinLabel = coinLabel,
 											gemData = supportGemData,
