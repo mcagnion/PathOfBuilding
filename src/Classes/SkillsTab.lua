@@ -1636,15 +1636,22 @@ function SkillsTabClass:PrimeGemTradePrices(report, controls, refreshReport, sel
 	local issuedRequests = 0
 	local rateLimitRetrySeconds = nil
 	self.gemTradeQueryToPriceKey = self.gemTradeQueryToPriceKey or { }
+
+	-- Single pass: resolve each entry once, check rate limits, and collect rows needing work.
+	local pendingRows = { }
 	for _, reportRow in ipairs(report or { }) do
 		if canPriceGemTradeRow(reportRow) then
-			local existingEntry = resolveGemTradeCacheEntry(self.gemTradePriceCache, getGemTradePriceKey(reportRow, queryContext.league))
-			if existingEntry and existingEntry.fetchAttempted then
+			local priceKey = getGemTradePriceKey(reportRow, queryContext.league)
+			local resolvedEntry = resolveGemTradeCacheEntry(self.gemTradePriceCache, priceKey)
+			if resolvedEntry and resolvedEntry.fetchAttempted then
 				requestedCount = requestedCount + 1
 			end
-			local retrySeconds = existingEntry and getTradeRateLimitRetrySeconds(existingEntry.errorText)
+			local retrySeconds = resolvedEntry and getTradeRateLimitRetrySeconds(resolvedEntry.errorText)
 			if retrySeconds and (not rateLimitRetrySeconds or retrySeconds > rateLimitRetrySeconds) then
 				rateLimitRetrySeconds = retrySeconds
+			end
+			if not resolvedEntry or resolvedEntry.state == "queued" then
+				pendingRows[#pendingRows + 1] = { reportRow = reportRow, priceKey = priceKey }
 			end
 		end
 	end
@@ -1653,90 +1660,83 @@ function SkillsTabClass:PrimeGemTradePrices(report, controls, refreshReport, sel
 		return
 	end
 	local queued = 0
-	for _, reportRow in ipairs(report or { }) do
-		if canPriceGemTradeRow(reportRow) then
-			local priceKey = getGemTradePriceKey(reportRow, queryContext.league)
-			local existingEntry = self.gemTradePriceCache[priceKey]
-			if existingEntry and existingEntry.state == "alias" then
-				existingEntry = resolveGemTradeCacheEntry(self.gemTradePriceCache, priceKey)
+	for _, pending in ipairs(pendingRows) do
+		local reportRow = pending.reportRow
+		local priceKey = pending.priceKey
+		local query, queryErr = self:BuildGemTradePriceQuery(reportRow, queryContext)
+		if not query then
+			self.gemTradePriceCache[priceKey] = {
+				state = queryErr == "Alt quality pricing is not supported yet." and "skipped" or "error",
+				errorText = queryErr,
+			}
+		else
+			local queryFingerprint = getGemTradeQueryFingerprint(queryContext, query)
+			local canonicalPriceKey = self.gemTradeQueryToPriceKey[queryFingerprint]
+			local canonicalEntry = canonicalPriceKey and resolveGemTradeCacheEntry(self.gemTradePriceCache, canonicalPriceKey) or nil
+			if canonicalPriceKey == priceKey then
+				self.gemTradeQueryToPriceKey[queryFingerprint] = nil
+				canonicalPriceKey = nil
+				canonicalEntry = nil
 			end
-			if not existingEntry or existingEntry.state == "queued" then
-				local query, queryErr = self:BuildGemTradePriceQuery(reportRow, queryContext)
-				if not query then
-					self.gemTradePriceCache[priceKey] = {
-						state = queryErr == "Alt quality pricing is not supported yet." and "skipped" or "error",
-						errorText = queryErr,
-					}
-				else
-					local queryFingerprint = getGemTradeQueryFingerprint(queryContext, query)
-					local canonicalPriceKey = self.gemTradeQueryToPriceKey[queryFingerprint]
-					local canonicalEntry = canonicalPriceKey and resolveGemTradeCacheEntry(self.gemTradePriceCache, canonicalPriceKey) or nil
-					if canonicalPriceKey == priceKey then
-						self.gemTradeQueryToPriceKey[queryFingerprint] = nil
-						canonicalPriceKey = nil
-						canonicalEntry = nil
-					end
-					if canonicalPriceKey and canonicalEntry then
-						self.gemTradePriceCache[priceKey] = {
-							state = "alias",
-							aliasKey = canonicalPriceKey,
-						}
-					elseif canonicalPriceKey and not canonicalEntry then
-						self.gemTradeQueryToPriceKey[queryFingerprint] = nil
-					end
-					local cacheEntry = self.gemTradePriceCache[priceKey]
-					if cacheEntry and cacheEntry.state == "queued" and not cacheEntry.fetchAttempted then
-						self.gemTradeQueryToPriceKey[queryFingerprint] = priceKey
-						cacheEntry.queryFingerprint = queryFingerprint
-						if (requestedCount + queued) < fetchLimit then
-							queued = queued + 1
-							issuedRequests = issuedRequests + 1
-							cacheEntry.fetchAttempted = true
-							queryContext.tradeQuery.tradeQueryRequests:SearchWithQuery(
-								queryContext.realm,
-								queryContext.league,
-								query,
-								function(items, callbackErrMsg)
-									local retrySeconds = getTradeRateLimitRetrySeconds(callbackErrMsg)
-									if retrySeconds then
-										cacheEntry.state = "rate_limited"
-										cacheEntry.errorText = callbackErrMsg
-									elseif callbackErrMsg then
-										cacheEntry.state = "error"
-										cacheEntry.errorText = callbackErrMsg
-								elseif not items or not items[1] then
-									cacheEntry.state = "not_found"
-									cacheEntry.errorText = "No trade result found."
-								else
-									local bestItem = items[1]
-									cacheEntry.state = "done"
-									cacheEntry.priceAmount = bestItem.amount
-									cacheEntry.priceCurrency = bestItem.currency
-									cacheEntry.priceText = formatTradePrice(bestItem.amount, bestItem.currency)
-									cacheEntry.priceChaos = tryConvertTradePriceToChaos(queryContext.tradeQuery, queryContext.league, bestItem.currency, bestItem.amount)
-								end
+			if canonicalPriceKey and canonicalEntry then
+				self.gemTradePriceCache[priceKey] = {
+					state = "alias",
+					aliasKey = canonicalPriceKey,
+				}
+			elseif canonicalPriceKey and not canonicalEntry then
+				self.gemTradeQueryToPriceKey[queryFingerprint] = nil
+			end
+			local cacheEntry = self.gemTradePriceCache[priceKey]
+			if cacheEntry and cacheEntry.state == "queued" and not cacheEntry.fetchAttempted then
+				self.gemTradeQueryToPriceKey[queryFingerprint] = priceKey
+				cacheEntry.queryFingerprint = queryFingerprint
+				if (requestedCount + queued) < fetchLimit then
+					queued = queued + 1
+					issuedRequests = issuedRequests + 1
+					cacheEntry.fetchAttempted = true
+					queryContext.tradeQuery.tradeQueryRequests:SearchWithQuery(
+						queryContext.realm,
+						queryContext.league,
+						query,
+						function(items, callbackErrMsg)
+							local retrySeconds = getTradeRateLimitRetrySeconds(callbackErrMsg)
+							if retrySeconds then
+								cacheEntry.state = "rate_limited"
+								cacheEntry.errorText = callbackErrMsg
+							elseif callbackErrMsg then
+								cacheEntry.state = "error"
+								cacheEntry.errorText = callbackErrMsg
+						elseif not items or not items[1] then
+							cacheEntry.state = "not_found"
+							cacheEntry.errorText = "No trade result found."
+						else
+							local bestItem = items[1]
+							cacheEntry.state = "done"
+							cacheEntry.priceAmount = bestItem.amount
+							cacheEntry.priceCurrency = bestItem.currency
+							cacheEntry.priceText = formatTradePrice(bestItem.amount, bestItem.currency)
+							cacheEntry.priceChaos = tryConvertTradePriceToChaos(queryContext.tradeQuery, queryContext.league, bestItem.currency, bestItem.amount)
+						end
+							if self.gemTradePopupSession == popupSession and refreshReport then
+								refreshReport(false, false)
+							end
+						end,
+						{
+							onDispatch = function()
+								if cacheEntry.state == "queued" then
+									cacheEntry.state = "pending"
 									if self.gemTradePopupSession == popupSession and refreshReport then
 										refreshReport(false, false)
 									end
-								end,
-								{
-									onDispatch = function()
-										if cacheEntry.state == "queued" then
-											cacheEntry.state = "pending"
-											if self.gemTradePopupSession == popupSession and refreshReport then
-												refreshReport(false, false)
-											end
-										end
-									end,
-									callbackQueryId = function(queryId)
-										cacheEntry.tradeUrl = queryContext.tradeQuery.tradeQueryRequests:buildUrl(queryContext.tradeQuery.hostName .. "trade/search", queryContext.realm, queryContext.league, queryId)
-									end,
-								}
-							)
-						else
-							cacheEntry.errorText = "Price not fetched yet. Click Fetch Prices to continue."
-						end
-					end
+								end
+							end,
+							callbackQueryId = function(queryId)
+								cacheEntry.tradeUrl = queryContext.tradeQuery.tradeQueryRequests:buildUrl(queryContext.tradeQuery.hostName .. "trade/search", queryContext.realm, queryContext.league, queryId)
+							end,
+						}
+					)
+				else
+					cacheEntry.errorText = "Price not fetched yet. Click Fetch Prices to continue."
 				end
 			end
 		end

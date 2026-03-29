@@ -213,6 +213,14 @@ function gemTradeReport.Build(skillsTab, currentStat, filters, buildState)
 	local build = skillsTab.build
 	local baseValue = getStatValue(calcBase, currentStat, build)
 
+	-- Pre-filter imbued support gems once instead of scanning data.gems per active gem.
+	local reportableImbuedSupports = { }
+	for _, gemData in pairs(build.data.gems) do
+		if isReportableImbuedSupportGem(gemData) then
+			t_insert(reportableImbuedSupports, gemData)
+		end
+	end
+
 	local function addTradeRow(gemType, gemCategory, upgradeLabel, name, groupLabel, currentValue, nextValue, curSort, nextSort, output, socketGroup, gemIndex, targetLevel, targetQuality, tradeGemNameSpec, tradeQualityId, tradeNaturalMaxLevel, targetImbuedSupport)
 		local upgradedValue = getStatValue(output, currentStat, build)
 		local delta = upgradedValue - baseValue
@@ -342,44 +350,47 @@ function gemTradeReport.Build(skillsTab, currentStat, filters, buildState)
 						addDistinctValue(imbuedQualities, seenImbuedQualities, 0)
 						addDistinctValue(imbuedQualities, seenImbuedQualities, m_max(0, m_min(currentQuality, 20)))
 						addDistinctValue(imbuedQualities, seenImbuedQualities, 20)
+						local imbuedCalcCount = 0
 						for _, targetQuality in ipairs(imbuedQualities) do
 							gemInstance.level = 20
 							gemInstance.quality = targetQuality
-							for _, supportGemData in pairs(skillsTab.build.data.gems) do
+							for _, supportGemData in ipairs(reportableImbuedSupports) do
 								local supportGrantedEffect = supportGemData.grantedEffect
-								if isReportableImbuedSupportGem(supportGemData) then
-									local canSupportGem = false
-									for _, activeSkill in ipairs(activeSkills) do
-										if calcLib.canGrantedEffectSupportActiveSkill(supportGrantedEffect, activeSkill) then
-											canSupportGem = true
-											break
-										end
+								local canSupportGem = false
+								for _, activeSkill in ipairs(activeSkills) do
+									if calcLib.canGrantedEffectSupportActiveSkill(supportGrantedEffect, activeSkill) then
+										canSupportGem = true
+										break
 									end
-									if canSupportGem then
-										gemInstance.imbuedSupport = supportGemData.grantedEffectId
-										local errMsg, output = PCall(calcFunc, nil, useFullDPS)
-										if not errMsg and isLevelUsable(skillsTab, gemInstance, grantedEffect, 20, output) then
-											addTradeRow(
-												gemType,
-												gemCategory,
-												"Trade",
-												gemName,
-												groupLabel,
-												s_format("%d/%d", currentLevel, currentQuality),
-												s_format("20/%d + %s", targetQuality, supportGemData.name),
-												currentLevel * 100 + currentQuality,
-												s_format("20/%02d|%s", targetQuality, supportGemData.name),
-												output,
-												socketGroup,
-												gemIndex,
-												20,
-												targetQuality,
-												getTradeGemNameSpec(gemInstance.gemData, gemInstance.nameSpec),
-												gemInstance.qualityId or "Default",
-												naturalMaxLevel,
-												supportGemData.grantedEffectId
-											)
-										end
+								end
+								if canSupportGem then
+									imbuedCalcCount = imbuedCalcCount + 1
+									if imbuedCalcCount % 10 == 0 and co_running() then
+										co_yield()
+									end
+									gemInstance.imbuedSupport = supportGemData.grantedEffectId
+									local errMsg, output = PCall(calcFunc, nil, useFullDPS)
+									if not errMsg and isLevelUsable(skillsTab, gemInstance, grantedEffect, 20, output) then
+										addTradeRow(
+											gemType,
+											gemCategory,
+											"Trade",
+											gemName,
+											groupLabel,
+											s_format("%d/%d", currentLevel, currentQuality),
+											s_format("20/%d + %s", targetQuality, supportGemData.name),
+											currentLevel * 100 + currentQuality,
+											s_format("20/%02d|%s", targetQuality, supportGemData.name),
+											output,
+											socketGroup,
+											gemIndex,
+											20,
+											targetQuality,
+											getTradeGemNameSpec(gemInstance.gemData, gemInstance.nameSpec),
+											gemInstance.qualityId or "Default",
+											naturalMaxLevel,
+											supportGemData.grantedEffectId
+										)
 									end
 								end
 							end

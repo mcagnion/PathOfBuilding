@@ -187,6 +187,15 @@ function supportReplacementReport.Build(skillsTab, currentStat, filters, buildSt
 	local build = skillsTab.build
 	local baseValue = getStatValue(calcBase, currentStat, build)
 
+	-- Pre-filter candidate support gems once instead of scanning data.gems per support slot.
+	local candidateSupportGems = { }
+	for _, gemData in pairs(build.data.gems) do
+		local ge = gemData.grantedEffect
+		if ge and ge.support and not ge.unsupported and not isRemovedLegacySupportGem(gemData) then
+			t_insert(candidateSupportGems, gemData)
+		end
+	end
+
 	for groupIndex, socketGroup in ipairs(skillsTab.socketGroupList) do
 		skillsTab:ProcessSocketGroup(socketGroup)
 		local groupEnabled = socketGroup.enabled and socketGroup.slotEnabled ~= false
@@ -223,13 +232,10 @@ function supportReplacementReport.Build(skillsTab, currentStat, filters, buildSt
 					local currentImbuedSupport = gemInstance.imbuedSupport
 					local currentCorrupted = gemInstance.corrupted
 
-					for _, candidateGemData in pairs(skillsTab.build.data.gems) do
+					local replacementCalcCount = 0
+					for _, candidateGemData in ipairs(candidateSupportGems) do
 						local candidateGrantedEffect = candidateGemData.grantedEffect
 						if candidateGemData.id ~= currentGemId
-							and candidateGrantedEffect
-							and candidateGrantedEffect.support
-							and not candidateGrantedEffect.unsupported
-							and not isRemovedLegacySupportGem(candidateGemData)
 							and not existingSupportIds[candidateGemData.grantedEffectId]
 							and calcLib.canGrantedEffectSupportActiveSkill(candidateGrantedEffect, activeSkill) then
 							local candidateMaxLevel = candidateGemData.naturalMaxLevel or 0
@@ -251,6 +257,10 @@ function supportReplacementReport.Build(skillsTab, currentStat, filters, buildSt
 								local candidateLevel = candidateState.level
 								local candidateQuality = candidateState.quality
 								if candidateGrantedEffect.levels[candidateLevel] then
+									replacementCalcCount = replacementCalcCount + 1
+									if replacementCalcCount % 10 == 0 and co_running() then
+										co_yield()
+									end
 									gemInstance.gemId = candidateGemData.id
 									gemInstance.nameSpec = candidateGemData.name
 									gemInstance.skillId = candidateGemData.grantedEffectId

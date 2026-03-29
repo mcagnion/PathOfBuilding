@@ -269,6 +269,14 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters, buildState)
 	local baseValue = getStatValue(calcBase, currentStat, build)
 	local maxQuality = 23
 
+	-- Pre-filter imbued support gems once instead of scanning data.gems per active gem.
+	local reportableImbuedSupports = { }
+	for _, gemData in pairs(build.data.gems) do
+		if isReportableImbuedSupportGem(gemData) then
+			t_insert(reportableImbuedSupports, gemData)
+		end
+	end
+
 	local function addUpgradeRow(gemType, gemCategory, sourceType, upgradeLabel, name, groupLabel, currentValue, nextValue, curSort, nextSort, output, socketGroup, gemIndex, targetLevel, targetQuality, targetImbuedSupport)
 		local upgradedValue = getStatValue(output, currentStat, build)
 		local delta = upgradedValue - baseValue
@@ -478,30 +486,33 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters, buildState)
 					local activeSkills = getGemActiveSkills(socketGroup, gemInstance)
 					if #activeSkills > 0 then
 						local imbuedSupportEntries = { }
-						for _, supportGemData in pairs(skillsTab.build.data.gems) do
+						local imbuedCalcCount = 0
+						for _, supportGemData in ipairs(reportableImbuedSupports) do
 							local supportGrantedEffect = supportGemData.grantedEffect
-							if isReportableImbuedSupportGem(supportGemData) then
-								local coinLabel = getImbuedCoinLabel(supportGemData)
-								local canSupportGem = false
-								for _, activeSkill in ipairs(activeSkills) do
-									if calcLib.canGrantedEffectSupportActiveSkill(supportGrantedEffect, activeSkill) then
-										canSupportGem = true
-										break
-									end
+							local coinLabel = getImbuedCoinLabel(supportGemData)
+							local canSupportGem = false
+							for _, activeSkill in ipairs(activeSkills) do
+								if calcLib.canGrantedEffectSupportActiveSkill(supportGrantedEffect, activeSkill) then
+									canSupportGem = true
+									break
 								end
-								if coinLabel and canSupportGem then
-									gemInstance.imbuedSupport = supportGemData.grantedEffectId
-									local errMsg, output = PCall(calcFunc, nil, useFullDPS)
-									gemInstance.imbuedSupport = ""
-									if not errMsg then
-										local score = lowerIsBetter and -(getStatValue(output, currentStat, build) - baseValue) or (getStatValue(output, currentStat, build) - baseValue)
-										t_insert(imbuedSupportEntries, {
-											coinLabel = coinLabel,
-											gemData = supportGemData,
-											output = output,
-											score = score,
-										})
-									end
+							end
+							if coinLabel and canSupportGem then
+								imbuedCalcCount = imbuedCalcCount + 1
+								if imbuedCalcCount % 10 == 0 and co_running() then
+									co_yield()
+								end
+								gemInstance.imbuedSupport = supportGemData.grantedEffectId
+								local errMsg, output = PCall(calcFunc, nil, useFullDPS)
+								gemInstance.imbuedSupport = ""
+								if not errMsg then
+									local score = lowerIsBetter and -(getStatValue(output, currentStat, build) - baseValue) or (getStatValue(output, currentStat, build) - baseValue)
+									t_insert(imbuedSupportEntries, {
+										coinLabel = coinLabel,
+										gemData = supportGemData,
+										output = output,
+										score = score,
+									})
 								end
 							end
 						end
