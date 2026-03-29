@@ -178,6 +178,7 @@ local configVarChargeMap = {
 }
 
 local getEffectiveAttemptsPerSecond
+local getConditionApplyChanceInOneSecond
 
 local function forEachIfOption(ifOption, ifFunc)
 	if type(ifOption) == "table" then
@@ -571,7 +572,7 @@ getEffectiveAttemptsPerSecond = function(output, skillData)
 	return attempts
 end
 
-local function getConditionApplyChanceInOneSecond(build, enemyCondition)
+getConditionApplyChanceInOneSecond = function(build, enemyCondition)
 	local output = build.calcsTab.mainOutput
 	local mainEnv = build.calcsTab.mainEnv
 	if not output or not mainEnv then
