@@ -53,7 +53,7 @@ function GemTradeReportListClass:SetReport(stat, report)
 	local selectedRow = self.selValue
 	self.deltaColumn.label = stat and (stat.label .. " Delta") or "Delta"
 	self.list = report or { }
-	self.label = #self.list > 0 and "Hover columns for details, double-click to jump to gem" or "No trade gem upgrade candidate found."
+	self.label = #self.list > 0 and "^8Hover columns for details, double-click to jump to gem" or "No trade gem upgrade candidate found."
 	self:ReSort(self.sortColumn or 3)
 	if selectedRow then
 		for index, row in ipairs(self.list) do

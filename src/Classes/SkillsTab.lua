@@ -96,6 +96,27 @@ local gemUpgradeSourceFilterList = {
 	{ label = "GCP Recipe", value = "RECIPE" },
 }
 
+local gemReportCommon = LoadModule("Modules/GemReportCommon")
+
+local function buildGemFilterList(skillsTab)
+	local list = { { label = "All", gemName = nil } }
+	local seen = { }
+	for _, socketGroup in ipairs(skillsTab.socketGroupList) do
+		local groupEnabled = socketGroup.enabled and socketGroup.slotEnabled ~= false
+		for _, gemInstance in ipairs(socketGroup.gemList) do
+			local grantedEffect = gemInstance.grantedEffect or (gemInstance.gemData and gemInstance.gemData.grantedEffect)
+			if gemInstance.gemData and grantedEffect and gemInstance.enabled and groupEnabled then
+				local gemName = gemInstance.nameSpec
+				if gemName and not seen[gemName] then
+					seen[gemName] = true
+					t_insert(list, { label = gemName, gemName = gemName })
+				end
+			end
+		end
+	end
+	return list
+end
+
 local SkillsTabClass = newClass("SkillsTab", "UndoHandler", "ControlHost", "Control", function(self, build)
 	self.UndoHandler()
 	self.ControlHost()
@@ -113,6 +134,7 @@ local SkillsTabClass = newClass("SkillsTab", "UndoHandler", "ControlHost", "Cont
 	self.defaultGemQuality = main.defaultGemQuality
 	self.gemUpgradeImpactFilter = "POSITIVE"
 	self.gemUpgradeSourceFilter = "ALL"
+	self.gemReportGemFilter = nil
 
 	-- Set selector
 	self.controls.setSelect = new("DropDownControl", { "TOPLEFT", self, "TOPLEFT" }, { 76, 8, 210, 20 }, nil, function(index, value)
@@ -2374,8 +2396,17 @@ function SkillsTabClass:OpenGemUpgradePopup()
 			refreshReport(false)
 		end
 	end)
-	controls.reportStatus = new("LabelControl", { "LEFT", controls.sourceSelect, "RIGHT" }, { 16, 0, 0, 16 }, "^7Loading report...")
-	controls.reportList = new("GemUpgradeReportListControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 100, 860, 376 }, function(reportRow, doubleClick)
+	local gemFilterList = buildGemFilterList(self)
+	controls.gemLabel = new("LabelControl", { "LEFT", controls.sourceSelect, "RIGHT" }, { 20, 0, 0, 16 }, "^7Gem:")
+	controls.gemSelect = new("DropDownControl", { "LEFT", controls.gemLabel, "RIGHT" }, { 8, 0, 220, 20 }, gemFilterList, function(index, selected)
+		self.gemReportGemFilter = selected and selected.gemName or nil
+		if refreshReport and not deferInitialLoad then
+			refreshReport(false)
+		end
+	end)
+	controls.gemSelect.enableDroppedWidth = true
+	controls.reportStatus = new("LabelControl", { "LEFT", controls.gemSelect, "RIGHT" }, { 16, 0, 0, 16 }, "^7Loading report...")
+	controls.reportList = new("GemUpgradeReportListControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 84, 860, 392 }, function(reportRow, doubleClick)
 		if doubleClick then
 			self:SelectGemFromUpgradeReport(reportRow, 1)
 		end
@@ -2462,11 +2493,20 @@ function SkillsTabClass:OpenGemUpgradePopup()
 			impact = self.gemUpgradeImpactFilter,
 			source = self.gemUpgradeSourceFilter,
 		})
+		if self.gemReportGemFilter then
+			local gemFiltered = { }
+			for _, row in ipairs(filteredReport) do
+				if row.name == self.gemReportGemFilter then
+					t_insert(gemFiltered, row)
+				end
+			end
+			filteredReport = gemFiltered
+		end
 		controls.reportList:SetReport(selectedStat, filteredReport)
 		if buildEntry.loading then
 			controls.reportStatus.label = getReportBuildStatusText("Loading report", buildEntry)
 		else
-			controls.reportStatus.label = "^7Hover for details, double-click to jump to gem"
+			controls.reportStatus.label = ""
 		end
 	end
 
@@ -2477,6 +2517,9 @@ function SkillsTabClass:OpenGemUpgradePopup()
 	self.gemUpgradeImpactFilter = (controls.impactSelect.list[controls.impactSelect.selIndex] or controls.impactSelect.list[1]).value
 	controls.sourceSelect:SelByValue(self.gemUpgradeSourceFilter, "value")
 	self.gemUpgradeSourceFilter = (controls.sourceSelect.list[controls.sourceSelect.selIndex] or controls.sourceSelect.list[1]).value
+	if self.gemReportGemFilter then
+		controls.gemSelect:SelByValue(self.gemReportGemFilter, "gemName")
+	end
 	self:DeferGemReportInit(popupSession, function()
 		deferInitialLoad = false
 		refreshReport(true)
@@ -2519,9 +2562,19 @@ function SkillsTabClass:OpenGemTradePopup()
 			refreshReport(false, false)
 		end
 	end)
-	controls.priceStatus = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 52, 0, 16 }, "^7Prices: click Fetch Prices to begin.")
-	controls.reportStatus = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 68, 0, 16 }, "^7Loading report...")
-	controls.reportList = new("GemTradeReportListControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 100, 860, 376 }, function(reportRow, doubleClick)
+	local gemFilterList = buildGemFilterList(self)
+	controls.gemLabel = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 52, 0, 16 }, "^7Gem:")
+	controls.gemSelect = new("DropDownControl", { "LEFT", controls.gemLabel, "RIGHT" }, { 8, 0, 220, 20 }, gemFilterList, function(index, selected)
+		self.gemReportGemFilter = selected and selected.gemName or nil
+		if refreshReport and not deferInitialLoad then
+			self.gemTradePricePendingPrime = false
+			refreshReport(false, false)
+		end
+	end)
+	controls.gemSelect.enableDroppedWidth = true
+	controls.priceStatus = new("LabelControl", { "LEFT", controls.gemSelect, "RIGHT" }, { 20, 0, 0, 16 }, "^7Prices: click Fetch Prices to begin.")
+	controls.reportStatus = new("LabelControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 84, 0, 16 }, "^7Loading report...")
+	controls.reportList = new("GemTradeReportListControl", { "TOPLEFT", nil, "TOPLEFT" }, { 20, 116, 860, 344 }, function(reportRow, doubleClick)
 		if doubleClick then
 			self:SelectGemFromUpgradeReport(reportRow, 1)
 		end
@@ -2658,6 +2711,15 @@ Without it, price fetching may fail or return limited results.]]
 		local filteredReport = gemTradeReport.Filter(buildEntry.report, {
 			impact = self.gemUpgradeImpactFilter,
 		})
+		if self.gemReportGemFilter then
+			local gemFiltered = { }
+			for _, row in ipairs(filteredReport) do
+				if row.name == self.gemReportGemFilter then
+					t_insert(gemFiltered, row)
+				end
+			end
+			filteredReport = gemFiltered
+		end
 		local imbuedSupportStatIds = self:GetGemTradeImbuedSupportStats()
 		if imbuedSupportStatIds then
 			local supportedReport = { }
@@ -2681,7 +2743,7 @@ Without it, price fetching may fail or return limited results.]]
 			controls.priceStatus.label = "^7Prices: report is still loading..."
 			controls.fetchMore.hasQueued = false
 		else
-			controls.reportStatus.label = "^7Hover for details, double-click to jump to gem"
+			controls.reportStatus.label = ""
 			self:UpdateGemTradePriceStatus(controls, displayReport)
 		end
 		self:UpdateGemTradeCurrencyConversionButton(controls)
@@ -2697,6 +2759,9 @@ Without it, price fetching may fail or return limited results.]]
 	self.gemUpgradeSortStat = controls.sortSelect.list[controls.sortSelect.selIndex] or self.gemUpgradeSortStatList[1]
 	controls.impactSelect:SelByValue(self.gemUpgradeImpactFilter, "value")
 	self.gemUpgradeImpactFilter = (controls.impactSelect.list[controls.impactSelect.selIndex] or controls.impactSelect.list[1]).value
+	if self.gemReportGemFilter then
+		controls.gemSelect:SelByValue(self.gemReportGemFilter, "gemName")
+	end
 	syncGemTradeLeagueSelection(self, controls, tradeQuery, self.gemTradeLeague)
 	self:EnsureGemTradeLeagueList(controls, refreshReport)
 	self:UpdateGemTradeCurrencyConversionButton(controls)
@@ -2896,7 +2961,7 @@ Without it, price fetching may fail or return limited results.]]
 			controls.priceStatus.label = "^7Prices: report is still loading..."
 			controls.fetchMore.hasQueued = false
 		else
-			controls.reportStatus.label = "^7Hover for details, double-click to jump to gem"
+			controls.reportStatus.label = ""
 			self:UpdateGemTradePriceStatus(controls, displayReport)
 		end
 		self:UpdateGemTradeCurrencyConversionButton(controls)

@@ -37,7 +37,7 @@ end)
 function GemUpgradeReportListClass:SetReport(stat, report)
 	self.deltaColumn.label = stat and (stat.label .. " Delta") or "Delta"
 	self.list = report or { }
-	self.label = #self.list > 0 and "Hover columns for details, double-click to jump to gem" or "No gem can be upgraded for this report."
+	self.label = #self.list > 0 and "^8Hover columns for details, double-click to jump to gem" or "No gem can be upgraded for this report."
 	self:ReSort(4)
 	self:SelectIndex(1)
 end

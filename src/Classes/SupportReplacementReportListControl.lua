@@ -53,7 +53,7 @@ end)
 function SupportReplacementReportListClass:SetReport(stat, report)
 	self.deltaColumn.label = stat and (stat.label .. " Delta") or "Delta"
 	self.list = report or { }
-	self.label = #self.list > 0 and "Hover columns for details, double-click to jump to gem" or "No support replacement candidate found."
+	self.label = #self.list > 0 and "^8Hover columns for details, double-click to jump to gem" or "No support replacement candidate found."
 	self:ReSort(self.sortColumn or 4)
 	self:SelectIndex(1)
 end
