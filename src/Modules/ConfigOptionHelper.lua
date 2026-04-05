@@ -537,8 +537,9 @@ end
 
 local function getConditionChancePerHit(output, enemyCondition, skillFlags)
 	if (enemyCondition == "ChilledByYourHits" or enemyCondition == "ChilledByYou")
-		and skillFlags and skillFlags.inflictChill then
-		-- Chill from hits is effectively guaranteed per successful hit.
+		and skillFlags and skillFlags.chill then
+		-- skillFlags.chill (lowercase) is only set when actual cold damage > 0,
+		-- unlike skillFlags.inflictChill which is set for any hit skill.
 		return 1
 	end
 	local chanceStats = enemyConditionChanceStatMap[enemyCondition]
