@@ -1,6 +1,5 @@
 return {
     _all = {
-        coverage = false,
         verbose = true,
     },
     default = {
@@ -9,6 +8,14 @@ return {
         helper = "HeadlessWrapper.lua",
         ROOT = { "../spec" },
        	["exclude-tags"] = "builds,benchmark",
+        coverage = true,
+    },
+    quick = {
+        directory = "src",
+        lpath = "../runtime/lua/?.lua;../runtime/lua/?/init.lua",
+        helper = "HeadlessWrapper.lua",
+        ROOT = { "../spec" },
+        ["exclude-tags"] = "builds,benchmark",
     },
     benchmark = {
         directory = "src",
