@@ -676,6 +676,9 @@ local ConfigTabClass = newClass("ConfigTab", "UndoHandler", "ControlHost", "Cont
 								if recommendation.level == "medium" then
 									return 0.7, 0.6, 0.25
 								end
+								if recommendation.canApply == false then
+									return 0.55, 0.55, 0.55
+								end
 								return 0.6, 0.6, 0.4
 							end
 						end

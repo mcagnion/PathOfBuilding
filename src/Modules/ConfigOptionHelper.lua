@@ -816,7 +816,7 @@ function helper.getEnemyConditionRecommendationData(build, configInput, ifEnemyC
 	if not mainEnv then
 		return
 	end
-	local hasSource = helper.hasEnemyConditionSource(build, ifEnemyCond)
+	local hasBenefitMods = helper.collectEnemyConditionMods(build, ifEnemyCond) ~= nil
 	local bestChance
 	forEachIfOption(ifEnemyCond, function(enemyCondition)
 		local chanceData = getConditionApplyChanceInOneSecond(build, enemyCondition)
@@ -824,18 +824,22 @@ function helper.getEnemyConditionRecommendationData(build, configInput, ifEnemyC
 			bestChance = m_max(bestChance or 0, chanceData.combined)
 		end
 	end)
-	if not hasSource then
+	local canApply = bestChance ~= nil
+	if not hasBenefitMods and not canApply then
 		return
 	end
 	local level = "soft"
-	if bestChance and bestChance >= 0.75 then
-		level = "strong"
-	elseif bestChance and bestChance >= 0.35 then
-		level = "medium"
+	if canApply then
+		if bestChance >= 0.75 then
+			level = "strong"
+		elseif bestChance >= 0.35 then
+			level = "medium"
+		end
 	end
 	return {
 		level = level,
 		chance = bestChance,
+		canApply = canApply,
 	}
 end
 
@@ -848,6 +852,9 @@ function helper.formatConditionRecommendationTooltip(build, configInput, ifEnemy
 	)
 	if not recommendation then
 		return
+	end
+	if not recommendation.canApply then
+		return "^8Your build benefits from this condition but cannot apply it.\nEnable if an external source provides it."
 	end
 	if recommendation.level == "strong" and recommendation.chance then
 		return "^2Suggestion: enable this option (" ..
