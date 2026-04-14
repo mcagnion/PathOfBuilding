@@ -131,6 +131,7 @@ data.powerStatList = {
 	{ stat="EnergyShieldRegen", label="Energy Shield regen" },
 	{ stat="EnergyShieldLeechRate", label="Energy Shield leech" },
 	{ stat="Mana", label="Mana" },
+	{ stat="ManaUnreserved", label="Unreserved Mana" },
 	{ stat="ManaRegen", label="Mana regen" },
 	{ stat="ManaLeechRate", label="Mana leech" },
 	{ stat="Ward", label="Ward" },
