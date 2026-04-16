@@ -967,6 +967,29 @@ holding Shift will put it in the second.]])
 			end
 		end
 		drop.slider = slider
+		local swapResistBtn = new("ButtonControl", {"TOPLEFT",drop,"TOPRIGHT"}, {4, 0, 58, 20}, "", function()
+			local affix = self.displayItem[drop.outputTable][drop.outputIndex]
+			if affix and affix.modId then
+				local resistType, tier = affix.modId:match("^(Fire|Cold|Lightning)Resist(%d+)$")
+				if resistType and tier then
+					local nextType = resistType == "Fire" and "Cold" or resistType == "Cold" and "Lightning" or "Fire"
+					affix.modId = nextType .. "Resist" .. tier
+					self.displayItem:Craft()
+					self:UpdateDisplayItemTooltip()
+					self:UpdateAffixControls()
+				end
+			end
+		end)
+		swapResistBtn.shown = false
+		swapResistBtn.tooltipFunc = function(tooltip, mode)
+			if mode == "OUT" then
+				tooltip:Clear()
+			elseif tooltip:CheckForUpdate(swapResistBtn.label) then
+				tooltip:AddLine(14, "^7Click to cycle the resistance type (Fire / Cold / Lightning).")
+				tooltip:AddLine(14, "^7Same tier and roll quality are preserved.")
+			end
+		end
+		drop.swapResistBtn = swapResistBtn
 		self.controls["displayItemAffix"..i] = drop
 		self.controls["displayItemAffixLabel"..i] = new("LabelControl", {"RIGHT",drop,"LEFT"}, {-4, 0, 0, 14}, function()
 			local ignoreModType = self.displayItem.rareLikeUnique and self.displayItem.rareLikeUnique.ignoreModType
@@ -974,6 +997,7 @@ holding Shift will put it in the second.]])
 				or drop.outputTable == "prefixes" and "^7Prefix:"
 				or "^7Suffix:"
 		end)
+		self.controls["displayItemAffixSwapResist"..i] = swapResistBtn
 		self.controls["displayItemAffixRange"..i] = slider
 		self.controls["displayItemAffixRangeLabel"..i] = new("LabelControl", {"RIGHT",slider,"LEFT"}, {-4, 0, 0, 14}, function()
 			return drop.selIndex > 1 and "^7Roll:" or "^x7F7F7FRoll:"
@@ -1003,9 +1027,16 @@ holding Shift will put it in the second.]])
 		return self.displayItem and (self.displayItem:GetPrimarySlot() == "Weapon 1" or self.displayItem.type == "Shield" or self.displayItem.canHaveShieldCrucibleTree)
 	end
 
+	-- Section: Resistance Swap (for imported/non-crafted items)
+	self.controls.displayItemSectionResistSwap = new("Control", {"TOPLEFT",self.controls.displayItemSectionCustom,"BOTTOMLEFT"}, {0, 0, 0, function()
+		if not self.displayItem then return 0 end
+		local count = self.displayItem.resistSwapCount or 0
+		return count > 0 and (count * 22 + 4) or 0
+	end})
+
 	-- Section: Modifier Range
 	local labelFontSize = 14
-	self.controls.displayItemSectionRange = new("Control", { "TOPLEFT", self.controls.displayItemSectionCustom, "BOTTOMLEFT" }, { 0, 0, 0, function()
+	self.controls.displayItemSectionRange = new("Control", {"TOPLEFT",self.controls.displayItemSectionResistSwap,"BOTTOMLEFT"}, {0, 0, 0, function()
 		if not self.displayItem or not self.displayItem.rangeLineList[1] then
 			return 0
 		end
@@ -2329,6 +2360,20 @@ function ItemsTabClass:UpdateAffixControl(control, item, affixType, outputTable,
 		end
 		control.slider.shown = true
 	end
+	if control.swapResistBtn then
+		local affix = item[outputTable][outputIndex]
+		local modId = affix and affix.modId
+		local resistType = modId and modId:match("^(Fire|Cold|Lightning)Resist%d+$")
+		if resistType then
+			local nextType = resistType == "Fire" and "Cold" or resistType == "Cold" and "Lightning" or "Fire"
+			local nextNext = nextType == "Fire" and "Cold" or nextType == "Cold" and "Lightning" or "Fire"
+			local colors = { Fire = "^1", Cold = "^3", Lightning = "^8" }
+			control.swapResistBtn.label = colors[resistType]..resistType:sub(1,1).."^7/"..colors[nextType]..nextType:sub(1,1).."^7/"..colors[nextNext]..nextNext:sub(1,1)
+			control.swapResistBtn.shown = true
+		else
+			control.swapResistBtn.shown = false
+		end
+	end
 end
 
 -- Create/update custom modifier controls
@@ -2377,6 +2422,124 @@ function ItemsTabClass:UpdateCustomControls()
 	item.customCount = i - 1
 	while self.controls["displayItemCustomModifierRemove"..i] do
 		self.controls["displayItemCustomModifierRemove"..i].shown = false
+		i = i + 1
+	end
+	self:UpdateResistSwapControls()
+end
+
+-- Updates the element swap buttons for elemental resistance and damage mods on imported/non-crafted items
+function ItemsTabClass:UpdateResistSwapControls()
+	local item = self.displayItem
+	local i = 1
+	if item and item.explicitModLines and not item.corrupted and not item.mirrored
+	   and (item.rarity == "MAGIC" or item.rarity == "RARE") then
+		for index, modLine in ipairs(item.explicitModLines) do
+			if not modLine.crafted and not modLine.fractured and modLine.line then
+				-- Detect swappable elemental resistance or damage mod
+				local swapKind, elemType
+				local resistType = modLine.line:match("to (%a+) Resistance$")
+				if resistType == "Fire" or resistType == "Cold" or resistType == "Lightning" then
+					swapKind = "resist"
+					elemType = resistType
+				else
+					local damageType = modLine.line:match("(%a+) Damage")
+					if damageType == "Fire" or damageType == "Cold" or damageType == "Lightning" then
+						swapKind = "damage"
+						elemType = damageType
+					end
+				end
+				if elemType then
+					if not self.controls["displayItemResistSwap"..i] then
+						local btn = new("ButtonControl", {"TOPLEFT",self.controls.displayItemSectionResistSwap,"TOPLEFT"}, {0, (i-1) * 22, 58, 20}, "", function() end)
+						self.controls["displayItemResistSwap"..i] = btn
+						self.controls["displayItemResistSwapLabel"..i] = new("LabelControl", {"LEFT",btn,"RIGHT"}, {4, 0, 0, 16})
+						btn.tooltipFunc = function(tooltip, mode)
+							if mode == "OUT" then
+								tooltip:Clear()
+							elseif tooltip:CheckForUpdate(btn.label) then
+								tooltip:AddLine(14, "^7Click to cycle the element type (Fire / Cold / Lightning).")
+								tooltip:AddLine(14, "^7The roll value is preserved.")
+							end
+						end
+					end
+					local nextType = elemType == "Fire" and "Cold" or elemType == "Cold" and "Lightning" or "Fire"
+					local nextNext = nextType == "Fire" and "Cold" or nextType == "Cold" and "Lightning" or "Fire"
+					local colors = { Fire = colorCodes.FIRE, Cold = colorCodes.COLD, Lightning = colorCodes.LIGHTNING }
+					self.controls["displayItemResistSwap"..i].label = colors[elemType]..elemType:sub(1,1).."^7/"..colors[nextType]..nextType:sub(1,1).."^7/"..colors[nextNext]..nextNext:sub(1,1)
+					self.controls["displayItemResistSwap"..i].shown = true
+					self.controls["displayItemResistSwapLabel"..i].label = "^7" .. modLine.line
+					self.controls["displayItemResistSwapLabel"..i].shown = true
+					local capturedIndex = index
+					local capturedKind = swapKind
+					self.controls["displayItemResistSwap"..i].onClick = function()
+						local ml = item.explicitModLines[capturedIndex]
+						if ml then
+							local curType
+							if capturedKind == "resist" then
+								curType = ml.line:match("to (%a+) Resistance$")
+							else
+								curType = ml.line:match("(%a+) Damage")
+							end
+							if curType == "Fire" or curType == "Cold" or curType == "Lightning" then
+								-- Find elements already used by other mods in the same swap group
+								local myGroup
+								if capturedKind == "resist" then
+									myGroup = "resist"
+								else
+									myGroup = ml.line:gsub(curType .. " Damage", "ELEM Damage", 1):gsub("%d+", "#")
+								end
+								local usedElems = {}
+								for otherIdx, otherMl in ipairs(item.explicitModLines) do
+									if otherIdx ~= capturedIndex and otherMl.line and not otherMl.crafted and not otherMl.fractured then
+										local otherType, otherGroup
+										if capturedKind == "resist" then
+											otherType = otherMl.line:match("to (%a+) Resistance$")
+											if otherType then otherGroup = "resist" end
+										else
+											otherType = otherMl.line:match("(%a+) Damage")
+											if otherType and (otherType == "Fire" or otherType == "Cold" or otherType == "Lightning") then
+												otherGroup = otherMl.line:gsub(otherType .. " Damage", "ELEM Damage", 1):gsub("%d+", "#")
+											end
+										end
+										if otherGroup == myGroup and otherType then
+											usedElems[otherType] = true
+										end
+									end
+								end
+								-- Cycle to next element not already used in this group
+								local order = { "Fire", "Cold", "Lightning" }
+								local startIdx = curType == "Fire" and 1 or curType == "Cold" and 2 or 3
+								local nxt
+								for offset = 1, 3 do
+									local candidate = order[((startIdx - 1 + offset) % 3) + 1]
+									if not usedElems[candidate] then
+										nxt = candidate
+										break
+									end
+								end
+								if nxt and nxt ~= curType then
+									if capturedKind == "resist" then
+										ml.line = ml.line:gsub("to " .. curType .. " Resistance", "to " .. nxt .. " Resistance")
+									else
+										ml.line = ml.line:gsub(curType .. " Damage", nxt .. " Damage", 1)
+									end
+									item:BuildAndParseRaw()
+									local id = item.id
+									self:CreateDisplayItemFromRaw(item:BuildRaw())
+									self.displayItem.id = id
+								end
+							end
+						end
+					end
+					i = i + 1
+				end
+			end
+		end
+	end
+	if item then item.resistSwapCount = i - 1 end
+	while self.controls["displayItemResistSwap"..i] do
+		self.controls["displayItemResistSwap"..i].shown = false
+		self.controls["displayItemResistSwapLabel"..i].shown = false
 		i = i + 1
 	end
 end

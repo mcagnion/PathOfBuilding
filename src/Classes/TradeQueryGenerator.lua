@@ -569,7 +569,66 @@ function TradeQueryGeneratorClass:GenerateModWeights(modsToTest)
 			local output = self.calcContext.calcFunc({ repSlotName = self.calcContext.slot.slotName, repItem = self.calcContext.testItem })
 			local meanStatDiff = TradeQueryGeneratorClass.WeightedRatioOutputs(self.calcContext.baseOutput, output, self.calcContext.options.statWeights) * 1000 - (self.calcContext.baseStatValue or 0)
 			if meanStatDiff > 0.01 then
-				t_insert(self.modWeights, { tradeModId = entry.tradeMod.id, weight = meanStatDiff / modValue, meanStatDiff = meanStatDiff, invert = entry.sign == "-" and true or false })
+				local resistTag
+				local resistFactor = 1  -- number of elemental types contributed (used to normalise pseudo_total weight)
+				local modText = entry.tradeMod.text
+				local elemType = modText:match("to (%a+) Resistance$")
+				if elemType == "Fire" or elemType == "Cold" or elemType == "Lightning" then
+					resistTag = { elem = true }
+				elseif elemType == "Chaos" then
+					resistTag = { chaos = true }
+				else
+					local hybridElem = modText:match("to (%a+) and Chaos Resistances$")
+					if hybridElem == "Fire" or hybridElem == "Cold" or hybridElem == "Lightning" then
+						-- element+Chaos hybrid: each pseudo stat on the trade site only sees its own
+						-- component (elem sees fire, chaos sees chaos), so no need to split the weight.
+						resistTag = { elem = true, chaos = true }
+					elseif modText:match("^%+#%% to all Elemental Resistances$") then
+						-- all-elemental mod: contributes 3x (Fire+Cold+Lightning) to pseudo_total_elemental
+						resistTag = { elem = true }
+						resistFactor = 3
+					else
+						-- dual-elemental mod (e.g. Fire and Lightning, Fire and Cold, Cold and Lightning)
+						local dualA, dualB = modText:match("^%+#%% to (%a+) and (%a+) Resistances$")
+						if dualA and dualB then
+							local aElem = dualA == "Fire" or dualA == "Cold" or dualA == "Lightning"
+							local bElem = dualB == "Fire" or dualB == "Cold" or dualB == "Lightning"
+							if aElem and bElem then
+								-- contributes 2x to pseudo_total_elemental
+								resistTag = { elem = true }
+								resistFactor = 2
+							end
+						end
+					end
+				end
+				-- Tag elemental damage mods for groupDamage merging.
+				-- "Adds" pseudo stats cover Fire/Cold/Lightning individually,
+				-- but "increased" pseudo stats only cover generic "Elemental".
+				local damageTag
+				if not resistTag then
+					local damageElem = modText:match("(%a+) Damage")
+					if damageElem == "Fire" or damageElem == "Cold" or damageElem == "Lightning" or damageElem == "Elemental" then
+						if modText:match("Adds") then
+							if modText:match("to Spells and Attacks") then
+								damageTag = { adds_attacks = true, adds_spells = true }
+							elseif modText:match("to Attacks") then
+								damageTag = { adds_attacks = true }
+							elseif modText:match("to Spells") then
+								damageTag = { adds_spells = true }
+							else
+								damageTag = { adds = true }
+							end
+						elseif damageElem == "Elemental" and modText:match("increased") then
+							if modText:match("with Attack Skills") then
+								damageTag = { increased_attacks = true }
+							else
+								damageTag = { increased = true }
+							end
+						end
+					end
+				end
+				local weight = meanStatDiff / modValue
+				t_insert(self.modWeights, { tradeModId = entry.tradeMod.id, weight = weight, normalizedWeight = weight / resistFactor, meanStatDiff = meanStatDiff, invert = entry.sign == "-" and true or false, resistTag = resistTag, damageTag = damageTag })
 			end
 			self.alreadyWeightedMods[entry.tradeMod.id] = true
 
@@ -953,6 +1012,110 @@ function TradeQueryGeneratorClass:FinishQuery()
 
 	local effective_max = MAX_FILTERS - num_extra
 
+	-- Merge resistance mods into pseudo stats if option enabled.
+	-- Elemental and chaos pseudo stats are independent; hybrid elem+chaos mods
+	-- contribute to both (no double-counting because each trade pseudo stat
+	-- only counts its own component on the item).
+	if self.calcContext.options.groupResists then
+		local elemMax, chaosMax = 0, 0
+		local elemMeanStatDiff, chaosMeanStatDiff = 0, 0
+		local filtered = { }
+		for _, entry in ipairs(self.modWeights) do
+			if entry.resistTag then
+				-- Use normalizedWeight (weight / resistFactor) so that dual/all-elem mods don't
+				-- inflate the pseudo_total filter threshold relative to single-element mods.
+				local nw = entry.normalizedWeight or entry.weight
+				if entry.resistTag.elem then
+					elemMax = math.max(elemMax, nw)
+					elemMeanStatDiff = math.max(elemMeanStatDiff, entry.meanStatDiff or nw)
+				end
+				if entry.resistTag.chaos then
+					chaosMax = math.max(chaosMax, nw)
+					chaosMeanStatDiff = math.max(chaosMeanStatDiff, entry.meanStatDiff or nw)
+				end
+			else
+				t_insert(filtered, entry)
+			end
+		end
+		if elemMax > 0 then
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_total_elemental_resistance", weight = elemMax, meanStatDiff = elemMeanStatDiff, invert = false })
+		end
+		if chaosMax > 0 then
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_total_chaos_resistance", weight = chaosMax, meanStatDiff = chaosMeanStatDiff, invert = false })
+		end
+		self.modWeights = filtered
+	end
+
+	-- Merge elemental damage mods into pseudo stats if option enabled.
+	-- Uses the most specific pseudo stat when only one subcategory is present;
+	-- falls back to the generic pseudo stat when multiple subcategories overlap.
+	if self.calcContext.options.groupDamage then
+		local categoryMax = {}
+		local categoryMeanStatDiff = {}
+		local filtered = { }
+		for _, entry in ipairs(self.modWeights) do
+			if entry.damageTag then
+				local nw = entry.normalizedWeight or entry.weight
+				for cat, _ in pairs(entry.damageTag) do
+					if not categoryMax[cat] or nw > categoryMax[cat] then
+						categoryMax[cat] = nw
+					end
+					categoryMeanStatDiff[cat] = math.max(categoryMeanStatDiff[cat] or 0, entry.meanStatDiff or nw)
+				end
+			else
+				t_insert(filtered, entry)
+			end
+		end
+		-- Resolve overlap for the "adds" family:
+		-- pseudo_adds_elemental_damage >= _to_attacks and _to_spells
+		local addsMax = categoryMax.adds or 0
+		local addsAtkMax = categoryMax.adds_attacks or 0
+		local addsSplMax = categoryMax.adds_spells or 0
+		local addsMeanStatDiff = categoryMeanStatDiff.adds or 0
+		local addsAtkMeanStatDiff = categoryMeanStatDiff.adds_attacks or 0
+		local addsSplMeanStatDiff = categoryMeanStatDiff.adds_spells or 0
+		local addsCount = (addsMax > 0 and 1 or 0) + (addsAtkMax > 0 and 1 or 0) + (addsSplMax > 0 and 1 or 0)
+		if addsCount > 1 then
+			local maxW = math.max(addsMax, addsAtkMax, addsSplMax)
+			local maxMeanStatDiff = math.max(addsMeanStatDiff, addsAtkMeanStatDiff, addsSplMeanStatDiff)
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_adds_elemental_damage", weight = maxW, meanStatDiff = maxMeanStatDiff, invert = false })
+		elseif addsMax > 0 then
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_adds_elemental_damage", weight = addsMax, meanStatDiff = addsMeanStatDiff, invert = false })
+		elseif addsAtkMax > 0 then
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_adds_elemental_damage_to_attacks", weight = addsAtkMax, meanStatDiff = addsAtkMeanStatDiff, invert = false })
+		elseif addsSplMax > 0 then
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_adds_elemental_damage_to_spells", weight = addsSplMax, meanStatDiff = addsSplMeanStatDiff, invert = false })
+		end
+		-- Resolve overlap for the "increased" family:
+		-- pseudo_increased_elemental_damage >= _with_attack_skills
+		local incMax = categoryMax.increased or 0
+		local incAtkMax = categoryMax.increased_attacks or 0
+		local incMeanStatDiff = categoryMeanStatDiff.increased or 0
+		local incAtkMeanStatDiff = categoryMeanStatDiff.increased_attacks or 0
+		local incCount = (incMax > 0 and 1 or 0) + (incAtkMax > 0 and 1 or 0)
+		if incCount > 1 then
+			local maxW = math.max(incMax, incAtkMax)
+			local maxMeanStatDiff = math.max(incMeanStatDiff, incAtkMeanStatDiff)
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_increased_elemental_damage", weight = maxW, meanStatDiff = maxMeanStatDiff, invert = false })
+		elseif incMax > 0 then
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_increased_elemental_damage", weight = incMax, meanStatDiff = incMeanStatDiff, invert = false })
+		elseif incAtkMax > 0 then
+			t_insert(filtered, { tradeModId = "pseudo.pseudo_increased_elemental_damage_with_attack_skills", weight = incAtkMax, meanStatDiff = incAtkMeanStatDiff, invert = false })
+		end
+		self.modWeights = filtered
+	end
+
+	-- The swap grouping above appends new pseudo entries after the weights were
+	-- originally sorted, so restore the upstream priority order when grouping.
+	if self.calcContext.options.groupResists or self.calcContext.options.groupDamage then
+		table.sort(self.modWeights, function(a, b)
+			if a.meanStatDiff == b.meanStatDiff then
+				return math.abs(a.weight) > math.abs(b.weight)
+			end
+			return a.meanStatDiff > b.meanStatDiff
+		end)
+	end
+
 	local pseudoMap = {
 		["3372524247"] = "pseudo.pseudo_total_fire_resistance",
 		["4220027924"] = "pseudo.pseudo_total_cold_resistance",
@@ -1112,6 +1275,12 @@ function TradeQueryGeneratorClass:FinishQuery()
 	if #queryTable.query.stats[1].filters == 0 then
 		-- No mods to filter
 		errMsg = "Could not generate search, found no mods to search for"
+	end
+
+	-- Propagate group options to the slot table so result evaluation can use them
+	if self.requesterContext and self.requesterContext.slotTbl then
+		self.requesterContext.slotTbl.groupResists = options.groupResists
+		self.requesterContext.slotTbl.groupDamage = options.groupDamage
 	end
 
 	local queryJson = dkjson.encode(queryTable)
@@ -1290,6 +1459,20 @@ Remove: %s will be removed from the search results.]], term, term, term)
 	controls.maxLevelLabel = new("LabelControl", { "RIGHT", controls.maxLevel, "LEFT" }, { -5, 0, 0, 16 }, "^7Max Level:")
 	updateLastAnchor(controls.maxLevel)
 
+	-- When enabled, resistance mods are merged into pseudo stats (reflects swappable nature, saves filter slots)
+	controls.groupResists = new("CheckBoxControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 18}, "Pseudo Resistances:", function(state) end)
+	controls.groupResists.state = (self.lastGroupResists == true)
+	controls.groupResists.tooltipText = "Merges Fire/Cold/Lightning resistance mods into pseudo.pseudo_total_elemental_resistance\nand Chaos resistance mods into pseudo.pseudo_total_chaos_resistance.\nHybrid Elemental+Chaos mods contribute their full weight to each.\nSaves filter slots and reflects the interchangeable nature of elemental resistance suffixes."
+	updateLastAnchor(controls.groupResists)
+	popupHeight = popupHeight + 28
+
+	-- When enabled, elemental damage mods are merged into pseudo stats
+	controls.groupDamage = new("CheckBoxControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 18}, "Pseudo Damage:", function(state) end)
+	controls.groupDamage.state = (self.lastGroupDamage == true)
+	controls.groupDamage.tooltipText = "Merges Fire/Cold/Lightning damage mods into elemental damage pseudo stats\n(added to attacks, added to spells, increased, etc.).\nSaves filter slots and reflects the interchangeable nature of elemental damage prefixes."
+	updateLastAnchor(controls.groupDamage)
+	popupHeight = popupHeight + 28
+
 	-- basic filtering by slot for sockets and links, Megalomaniac does not have slot and Sockets use "Jewel nodeId"
 	if slot and not isJewelSlot and not isAbyssalJewelSlot and not slot.slotName:find("Flask") then
 		controls.sockets = new("EditControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT"}, {0, 5, 70, 18}, nil, nil, "%D")
@@ -1394,6 +1577,12 @@ Remove: %s will be removed from the search results.]], term, term, term)
 		end
 		if #selectedMods > 0 then
 			options.requiredMods = copyTable(selectedMods)
+		end
+		if controls.groupResists then
+			self.lastGroupResists, options.groupResists = controls.groupResists.state, controls.groupResists.state
+		end
+		if controls.groupDamage then
+			self.lastGroupDamage, options.groupDamage = controls.groupDamage.state, controls.groupDamage.state
 		end
 		options.statWeights = statWeights
 		if controls.jewelSlot then
