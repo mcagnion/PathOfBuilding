@@ -1949,6 +1949,7 @@ function calcs.perform(env, skipEHP)
 				}
 			end
 			local out = {val = 0, source = nil}
+			local failList = omniRequirements and nil or { }
 			for _, reqSource in ipairs(env.requirementsTable) do
 				if reqSource[attr] and reqSource[attr] > 0 then
 					local req = m_floor(reqSource[attr] * reqMult)
@@ -1960,6 +1961,9 @@ function calcs.perform(env, skipEHP)
 					if req > out.val then
 						out.val = req
 						out.source = reqSource
+					end
+					if failList and not ignoreAttrReq and req > (output[breakdownAttr] or 0) then
+						t_insert(failList, { source = reqSource, req = req })
 					end
 					if breakdown then
 						local row = {
@@ -1991,6 +1995,9 @@ function calcs.perform(env, skipEHP)
 				if breakdown then
 					output["Req"..breakdownAttr.."String"] = out.val > (output[breakdownAttr] or 0) and colorCodes.NEGATIVE..(out.val) or out.val
 				end
+			end
+			if failList then
+				output["Req"..attr.."FailList"] = #failList > 0 and failList or nil
 			end
 		end
 	end

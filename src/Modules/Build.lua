@@ -56,6 +56,71 @@ local function matchFlags(reqFlags, notFlags, flags)
 	return true
 end
 
+local function getRequirementWarningSourceKey(source)
+	if not source then
+		return nil, nil
+	end
+	if source.source == "Item" and source.sourceItem then
+		local itemName = source.sourceItem.name
+		return "Item:"..(source.sourceSlot or "")..":"..itemName, itemName
+	elseif source.source == "Gem" and source.sourceGem then
+		local gem = source.sourceGem
+		return "Gem:"..(gem.nameSpec or "")..":"..(gem.level or 0).."/"..(gem.quality or 0), gem.nameSpec
+	end
+	return nil, nil
+end
+
+local function getRequirementWarningEntries(baseOutput, compareOutput)
+	local warnings = { }
+	local entries
+	if compareOutput.ReqOmni or baseOutput.ReqOmni then
+		entries = { { attr = "Omni", req = "ReqOmni", label = "Omniscience" } }
+	else
+		entries = {
+			{ attr = "Str", req = "ReqStr", label = "Strength" },
+			{ attr = "Dex", req = "ReqDex", label = "Dexterity" },
+			{ attr = "Int", req = "ReqInt", label = "Intelligence" },
+		}
+	end
+
+	for _, entry in ipairs(entries) do
+		local baseRequirement = baseOutput[entry.req] or 0
+		local compareRequirement = compareOutput[entry.req] or 0
+		local baseAttribute = baseOutput[entry.attr] or 0
+		local compareAttribute = compareOutput[entry.attr] or 0
+
+		if compareRequirement > compareAttribute and baseRequirement <= baseAttribute then
+			local baseFailSet = { }
+			for _, fail in ipairs(baseOutput[entry.req.."FailList"] or { }) do
+				local key = getRequirementWarningSourceKey(fail.source)
+				if key then
+					baseFailSet[key] = true
+				end
+			end
+
+			local addedWarning = false
+			for _, fail in ipairs(compareOutput[entry.req.."FailList"] or { }) do
+				local key, sourceName = getRequirementWarningSourceKey(fail.source)
+				if key and sourceName and not baseFailSet[key] then
+					t_insert(warnings, colorCodes.NEGATIVE..s_format("%s requires %d %s", sourceName, fail.req or compareRequirement, entry.label))
+					addedWarning = true
+				end
+			end
+
+			if not addedWarning then
+				local _, sourceName = getRequirementWarningSourceKey(compareOutput[entry.req.."Item"])
+				if sourceName then
+					t_insert(warnings, colorCodes.NEGATIVE..s_format("Would not meet %s requirement of %s (%d required)", entry.label, sourceName, compareRequirement))
+				else
+					t_insert(warnings, colorCodes.NEGATIVE..s_format("Would not meet %s requirement", entry.label))
+				end
+			end
+		end
+	end
+
+	return warnings
+end
+
 function buildMode:Init(dbFileName, buildName, buildXML, convertBuild, importLink)
 	self.dbFileName = dbFileName
 	self.buildName = buildName
@@ -1823,6 +1888,27 @@ function buildMode:CompareStatList(tooltip, statList, actor, baseOutput, compare
 	return count
 end
 
+function buildMode:GetRequirementComparisonWarnings(baseOutput, compareOutput)
+	if not baseOutput or not compareOutput then
+		return { }
+	end
+	return getRequirementWarningEntries(baseOutput, compareOutput)
+end
+
+function buildMode:AddRequirementWarningsToTooltip(tooltip, baseOutput, compareOutput, header, existingCount)
+	local warnings = self:GetRequirementComparisonWarnings(baseOutput, compareOutput)
+	if not warnings[1] then
+		return 0
+	end
+	if existingCount == 0 then
+		tooltip:AddLine(14, header)
+	end
+	for _, warning in ipairs(warnings) do
+		tooltip:AddLine(14, warning)
+	end
+	return #warnings
+end
+
 -- Compare values of all display stats between the two output tables, and add any changed stats to the tooltip
 -- Adds the provided header line before the first stat line, if any are added
 -- Returns the number of stat lines added
@@ -1837,6 +1923,7 @@ function buildMode:AddStatComparesToTooltip(tooltip, baseOutput, compareOutput, 
 		end
 	end
 	count = count + self:CompareStatList(tooltip, self.displayStats, self.calcsTab.mainEnv.player, baseOutput, compareOutput, header, nodeCount)
+	count = count + self:AddRequirementWarningsToTooltip(tooltip, baseOutput, compareOutput, header, count)
 	return count
 end
 
