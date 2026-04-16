@@ -108,6 +108,7 @@ end
 
 local TradeQueryGeneratorClass = newClass("TradeQueryGenerator", function(self, queryTab)
 	self:InitMods()
+	self:BuildModTradeIdLookup()
 	self.queryTab = queryTab
 	self.itemsTab = queryTab.itemsTab
 	self.calcContext = { }
@@ -597,6 +598,56 @@ function TradeQueryGeneratorClass:InitMods()
 	queryModsFile:close()
 end
 
+-- Build a lookup table from normalized trade stat text to trade stat ID, keyed by mod type.
+-- Structure: modTradeIdByText[modType][normalizedText] = tradeStatId
+-- Used by ResolveRequiredModFilters to convert item mod lines to trade API IDs.
+function TradeQueryGeneratorClass:BuildModTradeIdLookup()
+	self.modTradeIdByText = {}
+	for modType, entries in pairs(self.modData) do
+		if type(entries) == "table" then
+			self.modTradeIdByText[modType] = self.modTradeIdByText[modType] or {}
+			for _, entry in pairs(entries) do
+				if type(entry) == "table" and entry.tradeMod and entry.tradeMod.text and entry.tradeMod.id then
+					local normalized = entry.tradeMod.text:gsub("[#()0-9%-%+%.]", "")
+					if not self.modTradeIdByText[modType][normalized] then
+						self.modTradeIdByText[modType][normalized] = entry.tradeMod.id
+					end
+				end
+			end
+		end
+	end
+end
+
+-- Resolve a list of mod line texts (from the current item) to trade API stat filters.
+-- Returns a list of {id = tradeStatId} entries suitable for an "and" stat group.
+-- Pinned mods are always implicits, so only implicit-category mod types are searched.
+-- Mods that cannot be mapped to a trade stat are silently skipped (logged via ConPrintf).
+function TradeQueryGeneratorClass:ResolveRequiredModFilters(pinnedModLines)
+	if not pinnedModLines or #pinnedModLines == 0 then
+		return {}
+	end
+	local filters = {}
+	for _, modLine in ipairs(pinnedModLines) do
+		local normalized = modLine:gsub("[#()0-9%-%+%.]", "")
+		local tradeId
+		if self.modTradeIdByText then
+			-- Search only in implicit-category mod types (trade stat category index 3)
+			for modType, catIndex in pairs(tradeStatCategoryIndices) do
+				if catIndex == 3 and self.modTradeIdByText[modType] then
+					tradeId = self.modTradeIdByText[modType][normalized]
+					if tradeId then break end
+				end
+			end
+		end
+		if tradeId then
+			t_insert(filters, { id = tradeId })
+		else
+			logToFile("Required mod has no trade mapping, skipping: %s", modLine)
+		end
+	end
+	return filters
+end
+
 function TradeQueryGeneratorClass:GenerateModWeights(modsToTest)
 	local start = GetTime()
 	for _, entry in pairs(modsToTest) do
@@ -986,7 +1037,8 @@ function TradeQueryGeneratorClass:FinishQuery()
 
 	local options = self.calcContext.options
 
-	local num_extra = 2
+	local requiredModFilters = self:ResolveRequiredModFilters(options.pinnedModLines)
+	local num_extra = 2 + #requiredModFilters
 	if not options.includeMirrored then
 		num_extra = num_extra + 1
 	end
@@ -1025,6 +1077,11 @@ function TradeQueryGeneratorClass:FinishQuery()
 	end
 	if options.influence2 > 1 then
 		t_insert(andFilters.filters, { id = hasInfluenceModIds[options.influence2 - 1] })
+		filters = filters + 1
+	end
+
+	for _, filter in ipairs(requiredModFilters) do
+		t_insert(andFilters.filters, filter)
 		filters = filters + 1
 	end
 
@@ -1132,6 +1189,7 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 	local isBeltSlot = slot and slot.slotName == "Belt"
 	local isWeaponSlot = slot and (slot.slotName == "Weapon 1" or slot.slotName == "Weapon 2")
 	local isEldritchModSlot = slot and eldritchModSlots[slot.slotName] == true
+	local existingItem = slot and self.itemsTab.items and self.itemsTab.items[slot.selItemId]
 
 	controls.includeCorrupted = new("CheckBoxControl", {"TOP",nil,"TOP"}, {-40, 30, 18}, "Corrupted Mods:", function(state) end, "Includes corruption implicit modifiers in the weighted sum.\nNote that there is a maximum search filter count which means this might cause other weights to not be included.")
 	controls.includeCorrupted.state = not context.slotTbl.alreadyCorrupted and (self.lastIncludeCorrupted == nil or self.lastIncludeCorrupted == true)
@@ -1305,6 +1363,32 @@ Remove: %s will be removed from the search results.]], term, term, term)
 		popupHeight = popupHeight + 23
 	end
 
+	-- Required mods: checkboxes for each implicit mod of the existing item.
+	-- Checked mods are added as mandatory AND filters in the generated query.
+	local pinnedModCheckboxes = {}
+	if existingItem then
+		local pinnableLines = {}
+		for _, modLine in ipairs(existingItem.implicitModLines or {}) do
+			if modLine.line and modLine.line ~= "" then
+				t_insert(pinnableLines, modLine.line)
+			end
+		end
+		if #pinnableLines > 0 then
+			controls.requiredModsLabel = new("LabelControl", {"TOPLEFT", lastItemAnchor, "BOTTOMLEFT"}, {0, 5, 0, 16}, "^7Required Mods:")
+			updateLastAnchor(controls.requiredModsLabel, 21)
+			for i, modLine in ipairs(pinnableLines) do
+				local checkKey = "pinnedMod_" .. i
+				local displayLabel = #modLine > 36 and modLine:sub(1, 33) .. "..." or modLine
+				local isPinned = self.lastPinnedModLines and self.lastPinnedModLines[modLine] or false
+				controls[checkKey] = new("CheckBoxControl", {"TOPLEFT", lastItemAnchor, "BOTTOMLEFT"}, {0, 3, 18}, "", function(state) end, modLine)
+				controls[checkKey].state = isPinned
+				controls[checkKey.."_text"] = new("LabelControl", {"LEFT", controls[checkKey], "RIGHT"}, {5, 2, 0, 14}, displayLabel)
+				t_insert(pinnedModCheckboxes, { checkKey = checkKey, modLine = modLine })
+				updateLastAnchor(controls[checkKey], 21)
+			end
+		end
+	end
+
 	controls.generateQuery = new("ButtonControl", { "BOTTOM", nil, "BOTTOM" }, {-45, -10, 80, 20}, "Execute", function()
 		main:ClosePopup()
 
@@ -1368,6 +1452,17 @@ Remove: %s will be removed from the search results.]], term, term, term)
 		end
 		options.statWeights = statWeights
 
+		local pinnedModLines = {}
+		self.lastPinnedModLines = self.lastPinnedModLines or {}
+		for _, entry in ipairs(pinnedModCheckboxes) do
+			local isPinned = controls[entry.checkKey] and controls[entry.checkKey].state or false
+			self.lastPinnedModLines[entry.modLine] = isPinned
+			if isPinned then
+				t_insert(pinnedModLines, entry.modLine)
+			end
+		end
+		options.pinnedModLines = pinnedModLines
+
 		self:StartQuery(slot, options)
 	end)
 	controls.cancel = new("ButtonControl", { "BOTTOM", nil, "BOTTOM" }, {45, -10, 80, 20}, "Cancel", function()
@@ -1375,3 +1470,6 @@ Remove: %s will be removed from the search results.]], term, term, term)
 	end)
 	main:OpenPopup(400, popupHeight, "Query Options", controls)
 end
+
+-- Test accessor for ResolveRequiredModFilters
+TradeQueryGeneratorClass._resolveRequiredModFilters = TradeQueryGeneratorClass.ResolveRequiredModFilters
