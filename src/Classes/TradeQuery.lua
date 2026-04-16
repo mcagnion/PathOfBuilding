@@ -626,7 +626,7 @@ function TradeQueryClass:SetStatWeights(previousSelectionList)
 		for row_idx in pairs(self.resultTbl) do
 			self:UpdateControlsWithItems(row_idx)
 		end
-    end)
+	end)
 	controls.cancel = new("ButtonControl", { "BOTTOM", nil, "BOTTOM" }, { 0, -10, 80, 20 }, "Cancel", function()
 		if previousSelectionList and #previousSelectionList > 0 then
 			self.statSortSelectionList = copyTable(previousSelectionList, true)
@@ -913,6 +913,50 @@ function TradeQueryClass:addChaosEquivalentPriceToItems(items)
 	return outputItems
 end
 
+function TradeQueryClass:SearchWithQueryPlan(queryPlan, callback, params)
+	if not queryPlan or #queryPlan == 0 then
+		callback(nil, "Missing trade query plan")
+		return
+	end
+
+	local mergedItems = { }
+	local mergedIds = { }
+	local function mergeItems(items)
+		for _, item in ipairs(items or { }) do
+			if not mergedIds[item.id] then
+				mergedIds[item.id] = true
+				t_insert(mergedItems, item)
+			end
+		end
+	end
+
+	local function searchNext(index)
+		local planEntry = queryPlan[index]
+		if not planEntry then
+			callback(mergedItems)
+			return
+		end
+
+		local localParams = { }
+		for key, value in pairs(params or { }) do
+			if index == 1 or key ~= "callbackQueryId" then
+				localParams[key] = value
+			end
+		end
+
+		self.tradeQueryRequests:SearchWithQueryWeightAdjusted(self.pbRealm, self.pbLeague, planEntry.query, function(items, errMsg)
+			if errMsg and errMsg ~= "No Matching Results Found" then
+				callback(nil, errMsg)
+				return
+			end
+			mergeItems(items)
+			searchNext(index + 1)
+		end, localParams)
+	end
+
+	searchNext(1)
+end
+
 -- return valid slot for Watcher's Eye
 -- Tries to first return an existing watcher's eye slot if possible
 function TradeQueryClass:findValidSlotForWatchersEye()
@@ -963,45 +1007,48 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 			end
 			context.controls["priceButton"..context.row_idx].label = "Searching..."
 			self.lastQueries[row_idx] = query
-			self.tradeQueryRequests:SearchWithQueryWeightAdjusted(self.pbRealm, self.pbLeague, query,
-				function(items, errMsg)
-					if errMsg then
-						self:SetNotice(context.controls.pbNotice, colorCodes.NEGATIVE .. errMsg)
-						context.controls["priceButton"..context.row_idx].label =  "Price Item"
-						return
-					else
-						self:SetNotice(context.controls.pbNotice, "")
-					end
-
-					-- replace eldritch mods or enchants if the user requested
-					-- so in TradeQueryGenerator
-					if self.tradeQueryGenerator.lastCopyEldritch or
-						self.tradeQueryGenerator.lastCopyEnchantMode == "Copy Current" then
-						for i, _ in ipairs(items) do
-							local item = new("Item", items[i].item_string)
-							self.itemsTab:CopyAnointsAndEldritchImplicits(item, true, true, context.slotTbl.slotName)
-							items[i].item_string = item:BuildRaw()
-						end
-					elseif self.tradeQueryGenerator.lastCopyEnchantMode == "Remove" then
-						for i, _ in ipairs(items) do
-							local item = new("Item", items[i].item_string)
-							item.enchantModLines = {}
-							items[i].item_string = item:BuildRaw()
-						end
-					end
-
-
-					self.resultTbl[context.row_idx] = items
-					self:UpdateControlsWithItems(context.row_idx)
+			local onSearchResults = function(items, errMsg)
+				if errMsg then
+					self:SetNotice(context.controls.pbNotice, colorCodes.NEGATIVE .. errMsg)
 					context.controls["priceButton"..context.row_idx].label =  "Price Item"
-				end,
-				{
-					callbackQueryId = function(queryId)
-						local url = self.tradeQueryRequests:buildUrl(self.hostName .. "trade/search", self.pbRealm, self.pbLeague, queryId)
-						controls["uri"..context.row_idx]:SetText(url, true)
+					return
+				else
+					self:SetNotice(context.controls.pbNotice, "")
+				end
+
+				-- replace eldritch mods or enchants if the user requested
+				-- so in TradeQueryGenerator
+				if self.tradeQueryGenerator.lastCopyEldritch or
+					self.tradeQueryGenerator.lastCopyEnchantMode == "Copy Current" then
+					for i, _ in ipairs(items) do
+						local item = new("Item", items[i].item_string)
+						self.itemsTab:CopyAnointsAndEldritchImplicits(item, true, true, context.slotTbl.slotName)
+						items[i].item_string = item:BuildRaw()
 					end
-				}
-			)
+				elseif self.tradeQueryGenerator.lastCopyEnchantMode == "Remove" then
+					for i, _ in ipairs(items) do
+						local item = new("Item", items[i].item_string)
+						item.enchantModLines = {}
+						items[i].item_string = item:BuildRaw()
+					end
+				end
+
+
+				self.resultTbl[context.row_idx] = items
+				self:UpdateControlsWithItems(context.row_idx)
+				context.controls["priceButton"..context.row_idx].label =  "Price Item"
+			end
+			local searchParams = {
+				callbackQueryId = function(queryId)
+					local url = self.tradeQueryRequests:buildUrl(self.hostName .. "trade/search", self.pbRealm, self.pbLeague, queryId)
+					controls["uri"..context.row_idx]:SetText(url, true)
+				end
+			}
+			if context.tradeQueryPlan and #context.tradeQueryPlan > 0 then
+				self:SearchWithQueryPlan(context.tradeQueryPlan, onSearchResults, searchParams)
+			else
+				self.tradeQueryRequests:SearchWithQueryWeightAdjusted(self.pbRealm, self.pbLeague, query, onSearchResults, searchParams)
+			end
 		end)
 	end)
 	controls["bestButton"..row_idx].shown = function() return not self.resultTbl[row_idx] end
