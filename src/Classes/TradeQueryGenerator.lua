@@ -7,6 +7,7 @@
 local dkjson = require "dkjson"
 local curl = require("lcurl.safe")
 local m_max = math.max
+local m_min = math.min
 local s_format = string.format
 local t_insert = table.insert
 local tradeHelpers = LoadModule("Classes/CompareTradeHelpers")
@@ -635,10 +636,11 @@ function TradeQueryGeneratorClass:GenerateModWeights(modsToTest)
 				t_insert(self.modWeights, { tradeModId = entry.tradeMod.id, weight = meanStatDiff / modValue, meanStatDiff = meanStatDiff, invert = entry.sign == "-" and true or false })
 			end
 			self.alreadyWeightedMods[entry.tradeMod.id] = true
+			self.calcContext.progress.current = self.calcContext.progress.current + 1
 
 			local now = GetTime()
 			if now - start > 50 then
-				-- Would be nice to update x/y progress on the popup here, but getting y ahead of time has a cost, and the visual seems to update on a significant delay anyways so it's not very useful
+				self:UpdateProgressPopup()
 				coroutine.yield()
 				start = now
 			end
@@ -667,15 +669,102 @@ function TradeQueryGeneratorClass:GeneratePassiveNodeWeights(nodesToTest)
 			t_insert(self.modWeights, { tradeModId = entry.tradeMod.id, weight = meanStatDiff, meanStatDiff = meanStatDiff, invert = false })
 		end
 		self.alreadyWeightedMods[entry.tradeMod.id] = true
-		
+		self.calcContext.progress.current = self.calcContext.progress.current + 1
+
 		local now = GetTime()
 		if now - start > 50 then
-			-- Would be nice to update x/y progress on the popup here, but getting y ahead of time has a cost, and the visual seems to update on a significant delay anyways so it's not very useful
+			self:UpdateProgressPopup()
 			coroutine.yield()
 			start = now
 		end
 		::continue::
 	end
+end
+
+function TradeQueryGeneratorClass:GetProgressSlotLabel(context, slot)
+	return (context and context.slotTbl and (context.slotTbl.fullName or context.slotTbl.slotName))
+		or (slot and slot.slotName)
+		or "Unknown Slot"
+end
+
+function TradeQueryGeneratorClass:CountPendingModWeights(modsToTest, seen)
+	local count = 0
+	for _, entry in pairs(modsToTest or {}) do
+		if entry[self.calcContext.itemCategory] ~= nil then
+			local tradeModId = entry.tradeMod.id
+			if not seen[tradeModId] and not (self.calcContext.options.includeTalisman == false and entry[self.calcContext.itemCategory].subType == "Talisman") then
+				seen[tradeModId] = true
+				count = count + 1
+			end
+		end
+	end
+	return count
+end
+
+function TradeQueryGeneratorClass:CountPendingPassiveNodeWeights(nodesToTest)
+	local seen = { }
+	local count = 0
+	for _, entry in pairs(nodesToTest or {}) do
+		local tradeModId = entry.tradeMod.id
+		if not seen[tradeModId] then
+			seen[tradeModId] = true
+			count = count + 1
+		end
+	end
+	return count
+end
+
+function TradeQueryGeneratorClass:GetProgressTotal()
+	if self.calcContext.special.calcNodesInsteadOfMods then
+		return self:CountPendingPassiveNodeWeights(self.modData.PassiveNode)
+	end
+	if self.calcContext.special.watchersEye then
+		local seen = { }
+		local total = self:CountPendingModWeights(self.modData.WatchersEye, seen)
+		if self.calcContext.options.includeCorrupted then
+			total = total + self:CountPendingModWeights(self.modData["Corrupted"], seen)
+		end
+		return total
+	end
+
+	local seen = { }
+	local total = 0
+	total = total + self:CountPendingModWeights(self.modData["Explicit"], seen)
+	total = total + self:CountPendingModWeights(self.modData["Implicit"], seen)
+	if self.calcContext.options.includeCorrupted then
+		total = total + self:CountPendingModWeights(self.modData["Corrupted"], seen)
+	end
+	if self.calcContext.options.includeScourge then
+		total = total + self:CountPendingModWeights(self.modData["Scourge"], seen)
+	end
+	if self.calcContext.options.includeEldritch ~= "None" then
+		total = total + self:CountPendingModWeights(self.modData["Eater"], seen)
+		total = total + self:CountPendingModWeights(self.modData["Exarch"], seen)
+	end
+	return total
+end
+
+function TradeQueryGeneratorClass:UpdateProgressPopup(force)
+	local progress = self.calcContext and self.calcContext.progress
+	if not progress or not progress.controls then
+		return
+	end
+
+	local now = GetTime()
+	if not force and now - (progress.lastUiUpdate or 0) < 50 then
+		return
+	end
+	progress.lastUiUpdate = now
+
+	local current = progress.current or 0
+	local total = progress.total or 0
+	local percent = total > 0 and m_min(100, math.floor((current / total) * 100 + 0.5)) or 0
+
+	progress.controls.actionText.label = progress.actionText
+	progress.controls.slotText.label = "Slot: " .. progress.slotLabel
+	progress.controls.progressText.label = total > 0
+		and s_format("Progress: %d / %d (%d%%)", current, total, percent)
+		or "Progress: preparing..."
 end
 
 function TradeQueryGeneratorClass:OnFrame()
@@ -818,18 +907,31 @@ function TradeQueryGeneratorClass:StartQuery(slot, options)
 		slot = slot,
 	}
 
+	self.calcContext.progress = {
+		actionText = self.calcContext.special.calcNodesInsteadOfMods and "Calculating Passive Node Weights..." or "Calculating Mod Weights...",
+		slotLabel = self:GetProgressSlotLabel(nil, slot),
+		current = 0,
+		total = self:GetProgressTotal(),
+		lastUiUpdate = 0,
+	}
+
 	-- OnFrame will pick this up and begin the work
 	self.calcContext.co = coroutine.create(self.ExecuteQuery)
 
 	-- Open progress tracking blocker popup
 	local controls = { }
-	controls.progressText = new("LabelControl", {"TOP",nil,"TOP"}, {0, 30, 0, 16}, string.format("Calculating Mod Weights..."))
-	self.calcContext.popup = main:OpenPopup(280, 65, "Please Wait", controls)
+	controls.actionText = new("LabelControl", {"TOP",nil,"TOP"}, {0, 18, 0, 16}, "")
+	controls.slotText = new("LabelControl", {"TOP",nil,"TOP"}, {0, 40, 0, 16}, "")
+	controls.progressText = new("LabelControl", {"TOP",nil,"TOP"}, {0, 62, 0, 16}, "")
+	self.calcContext.progress.controls = controls
+	self:UpdateProgressPopup(true)
+	self.calcContext.popup = main:OpenPopup(360, 95, "Please Wait", controls)
 end
 
 function TradeQueryGeneratorClass:ExecuteQuery()
 	if self.calcContext.special.calcNodesInsteadOfMods then
 		self:GeneratePassiveNodeWeights(self.modData.PassiveNode)
+		self:UpdateProgressPopup(true)
 		return
 	end
 	if self.calcContext.special.watchersEye then
@@ -837,6 +939,7 @@ function TradeQueryGeneratorClass:ExecuteQuery()
 		if self.calcContext.options.includeCorrupted then
 			self:GenerateModWeights(self.modData["Corrupted"])
 		end
+		self:UpdateProgressPopup(true)
 		return
 	end
 	self:GenerateModWeights(self.modData["Explicit"])
@@ -877,6 +980,7 @@ function TradeQueryGeneratorClass:ExecuteQuery()
 	-- if self.calcContext.options.includeSynthesis then
 	-- 	self:GenerateModWeights(self.modData["Synthesis"])
 	-- end
+	self:UpdateProgressPopup(true)
 end
 
 function TradeQueryGeneratorClass:addMoreWEMods()
