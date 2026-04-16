@@ -26,6 +26,29 @@ local function newFakeTooltip()
 	}
 end
 
+local function createComparisonItem(raw)
+	build.itemsTab:CreateDisplayItemFromRaw(raw)
+	return build.itemsTab.displayItem
+end
+
+local function rebuildWithCustomMods(customMods)
+	build.configTab.input.customMods = customMods
+	build.configTab:BuildModList()
+	build.modFlag = true
+	build.buildFlag = true
+	runCallback("OnFrame")
+end
+
+local function collectTooltipLines(tooltip)
+	local lines = { }
+	for _, line in ipairs(tooltip.lines) do
+		if line.text then
+			table.insert(lines, line.text)
+		end
+	end
+	return lines
+end
+
 describe("TestComparisonWarnings", function()
 	before_each(function()
 		newBuild()
@@ -114,5 +137,47 @@ describe("TestComparisonWarnings", function()
 		assert.are.same({
 			colorCodes.NEGATIVE .. "Increased Critical Damage requires 110 Intelligence",
 		}, tooltip.lines)
+	end)
+
+	it("exposes gem fail lists from real calculator output", function()
+		rebuildWithCustomMods("+200 to Intelligence")
+		build.skillsTab:PasteSocketGroup("Fireball 20/0  1\n")
+		runCallback("OnFrame")
+
+		local compareItem = createComparisonItem("New Item\nAmber Amulet\n-150 to Intelligence")
+		local calcFunc, baseOutput = build.calcsTab:GetMiscCalculator()
+		local compareOutput = calcFunc({ repSlotName = "Amulet", repItem = compareItem })
+
+		assert.is_nil(baseOutput.ReqIntFailList)
+		assert.are.equal("Gem", compareOutput.ReqIntFailList[1].source.source)
+		assert.are.equal("Fireball", compareOutput.ReqIntFailList[1].source.sourceGem.nameSpec)
+		assert.are.equal("Fireball requires " .. compareOutput.ReqIntFailList[1].req .. " Intelligence", build:GetRequirementComparisonWarnings(baseOutput, compareOutput)[1]:gsub("^" .. colorCodes.NEGATIVE, ""))
+	end)
+
+	it("writes requirement warnings through AddStatComparesToTooltip with a real tooltip", function()
+		build.skillsTab:PasteSocketGroup("Fireball 1/0  1\n")
+		rebuildWithCustomMods("+90 to Strength")
+
+		local compareItem = createComparisonItem("New Item\nTitan Greaves")
+		local calcFunc, baseOutput = build.calcsTab:GetMiscCalculator()
+		local compareOutput = calcFunc({ repSlotName = "Boots", repItem = compareItem })
+		local tooltip = new("Tooltip")
+
+		build:AddStatComparesToTooltip(tooltip, baseOutput, compareOutput, "^7Comparison")
+
+		local lines = collectTooltipLines(tooltip)
+		local headerCount = 0
+		local foundWarning = false
+		for _, line in ipairs(lines) do
+			if line == "^7Comparison" then
+				headerCount = headerCount + 1
+			end
+			if line:find("Titan Greaves requires", 1, true) then
+				foundWarning = true
+			end
+		end
+
+		assert.are.equal(1, headerCount)
+		assert.is_true(foundWarning)
 	end)
 end)
