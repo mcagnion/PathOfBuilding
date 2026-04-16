@@ -243,7 +243,7 @@ end
 
 -- Import passive spec from the provided class IDs and node hash list
 function PassiveSpecClass:ImportFromNodeList(classId, ascendClassId, secondaryAscendClassId, hashList, hashOverrides, masteryEffects, treeVersion)
-  if hashOverrides == nil then hashOverrides = {} end
+	if hashOverrides == nil then hashOverrides = {} end
 	if treeVersion and treeVersion ~= self.treeVersion then
 		self:Init(treeVersion)
 		self.build.treeTab.showConvert = self.treeVersion ~= latestTreeVersion
@@ -2336,6 +2336,206 @@ function PassiveSpecClass:NodeAdditionOrReplacementFromString(node,sd,replacemen
 		modList:AddList(node.modList)
 	end
 	node.modList = modList
+end
+
+-- Compute what nodes would look like after being conquered by a timeless jewel
+-- placed in the given socket.  Returns { [nodeId] = conqueredNodeCopy, ... }.
+-- Each returned node is a minimal copy with the conquered modList applied,
+-- suitable for use in addNodes/removeNodes calc overrides.
+function PassiveSpecClass:ComputeConqueredNodes(socketId, conqueredBy, radiusIndex)
+	local result = { }
+	local socketNode = self.nodes[socketId]
+	if not socketNode or not socketNode.nodesInRadius or not socketNode.nodesInRadius[radiusIndex] then
+		return result
+	end
+
+	local attributes = { "Dexterity", "Intelligence", "Strength" }
+	local legionNodes = self.tree.legion.nodes
+	local legionAdditions = self.tree.legion.additions
+
+	local jewelType = 5
+	if conqueredBy.conqueror.type == "vaal" then
+		jewelType = 1
+	elseif conqueredBy.conqueror.type == "karui" then
+		jewelType = 2
+	elseif conqueredBy.conqueror.type == "maraketh" then
+		jewelType = 3
+	elseif conqueredBy.conqueror.type == "templar" then
+		jewelType = 4
+	elseif conqueredBy.conqueror.type == "kalguur" then
+		jewelType = 6
+	end
+	local seed = conqueredBy.id
+	if jewelType == 5 then
+		seed = seed / 20
+	end
+
+	local replaceHelperFunc = function(statToFix, statKey, statMod, value)
+		if statMod.fmt == "g" then
+			if statKey:find("per_minute") then
+				value = round(value / 60, 1)
+			elseif statKey:find("permyriad") then
+				value = value / 100
+			elseif statKey:find("_ms") then
+				value = value / 1000
+			end
+		end
+		if statMod.min ~= statMod.max then
+			return statToFix:gsub("%(" .. statMod.min .. "%-" .. statMod.max .. "%)", value)
+		elseif statMod.min ~= value then
+			return statToFix:gsub(statMod.min, value)
+		end
+		return statToFix
+	end
+
+	for nodeId in pairs(socketNode.nodesInRadius[radiusIndex]) do
+		local origNode = self.tree.nodes[nodeId]
+		local specNode = self.nodes[nodeId]
+		if origNode and specNode and specNode.type ~= "Socket" and specNode.type ~= "ClassStart"
+		and specNode.type ~= "AscendClassStart" and not specNode.ascendancyName then
+			local baseNode = origNode
+			if self.hashOverrides[nodeId] then
+				baseNode = self.hashOverrides[nodeId]
+			end
+			local copy = {
+				id = baseNode.id,
+				type = baseNode.type,
+				dn = baseNode.dn,
+				name = baseNode.name,
+				sd = baseNode.sd,
+				mods = baseNode.mods,
+				modKey = baseNode.modKey or "",
+				modList = new("ModList"),
+				sprites = baseNode.sprites,
+				effectSprites = baseNode.effectSprites,
+				isTattoo = baseNode.isTattoo,
+				overrideType = baseNode.overrideType,
+				keystoneMod = baseNode.keystoneMod,
+				icon = baseNode.icon,
+				spriteId = baseNode.spriteId,
+				activeEffectImage = baseNode.activeEffectImage,
+				reminderText = baseNode.reminderText,
+				linkedId = baseNode.linkedId or { },
+				conqueredBy = conqueredBy,
+			}
+			copy.modList:AddList(baseNode.modList)
+
+			if copy.type == "Notable" then
+				local jewelDataTbl = { }
+				if seed == m_max(m_min(seed, data.timelessJewelSeedMax[jewelType]), data.timelessJewelSeedMin[jewelType]) then
+					jewelDataTbl = data.readLUT(conqueredBy.id, copy.id, jewelType)
+				end
+				if next(jewelDataTbl) then
+					if jewelType == 1 then
+						local headerSize = #jewelDataTbl
+						if headerSize == 2 or headerSize == 3 then
+							self:ReplaceNode(copy, legionNodes[jewelDataTbl[1] + 1 - data.timelessJewelAdditions])
+							for i, repStat in ipairs(legionNodes[jewelDataTbl[1] + 1 - data.timelessJewelAdditions].sd) do
+								local statKey = legionNodes[jewelDataTbl[1] + 1 - data.timelessJewelAdditions].sortedStats[i]
+								local statMod = legionNodes[jewelDataTbl[1] + 1 - data.timelessJewelAdditions].stats[statKey]
+								repStat = replaceHelperFunc(repStat, statKey, statMod, jewelDataTbl[statMod.index + 1])
+								self:NodeAdditionOrReplacementFromString(copy, repStat, i == 1)
+							end
+						elseif headerSize == 6 or headerSize == 8 then
+							local bias = 0
+							for i, val in ipairs(jewelDataTbl) do
+								if i > (headerSize / 2) then break
+								elseif val <= 21 then bias = bias + 1
+								else bias = bias - 1
+								end
+							end
+							if bias >= 0 then
+								self:ReplaceNode(copy, legionNodes[77])
+							else
+								self:ReplaceNode(copy, legionNodes[78])
+							end
+							local additions = {}
+							for i, val in ipairs(jewelDataTbl) do
+								if i <= (headerSize / 2) then
+									local roll = jewelDataTbl[i + headerSize / 2]
+									if not additions[val] then additions[val] = roll
+									else additions[val] = additions[val] + roll
+									end
+								else break
+								end
+							end
+							for add, val in pairs(additions) do
+								local addition = legionAdditions[add + 1]
+								for _, addStat in ipairs(addition.sd) do
+									for k, statMod in pairs(addition.stats) do
+										addStat = replaceHelperFunc(addStat, k, statMod, val)
+									end
+									self:NodeAdditionOrReplacementFromString(copy, addStat)
+								end
+							end
+						end
+					else
+						for _, jd in ipairs(jewelDataTbl) do
+							if jd >= data.timelessJewelAdditions then
+								jd = jd + 1 - data.timelessJewelAdditions
+								local legionNode = legionNodes[jd]
+								if legionNode then
+									self:ReplaceNode(copy, legionNode)
+								end
+							elseif jd then
+								local addition = legionAdditions[jd + 1]
+								for _, addStat in ipairs(addition.sd) do
+									self:NodeAdditionOrReplacementFromString(copy, " \n" .. addStat)
+								end
+							end
+						end
+					end
+				end
+			elseif copy.type == "Keystone" then
+				local matchStr = conqueredBy.conqueror.type .. "_keystone_" .. conqueredBy.conqueror.id
+				for _, legionNode in ipairs(legionNodes) do
+					if legionNode.id == matchStr then
+						self:ReplaceNode(copy, legionNode)
+						break
+					end
+				end
+			elseif copy.type == "Normal" then
+				if conqueredBy.conqueror.type == "vaal" then
+					local jewelDataTbl = { }
+					if seed == m_max(m_min(seed, data.timelessJewelSeedMax[jewelType]), data.timelessJewelSeedMin[jewelType]) then
+						jewelDataTbl = data.readLUT(conqueredBy.id, copy.id, jewelType)
+					end
+					if next(jewelDataTbl) then
+						self:ReplaceNode(copy, legionNodes[jewelDataTbl[1] + 1 - data.timelessJewelAdditions])
+						for i, repStat in ipairs(copy.sd) do
+							local statKey = legionNodes[jewelDataTbl[1] + 1 - data.timelessJewelAdditions].sortedStats[i]
+							local statMod = legionNodes[jewelDataTbl[1] + 1 - data.timelessJewelAdditions].stats[statKey]
+							repStat = replaceHelperFunc(repStat, statKey, statMod, jewelDataTbl[2])
+							self:NodeAdditionOrReplacementFromString(copy, repStat, true)
+						end
+					end
+				elseif conqueredBy.conqueror.type == "karui" then
+					local str = (isValueInArray(attributes, copy.dn) or copy.isTattoo) and "2" or "4"
+					self:NodeAdditionOrReplacementFromString(copy, " \n+" .. str .. " to Strength")
+				elseif conqueredBy.conqueror.type == "maraketh" then
+					local dex = (isValueInArray(attributes, copy.dn) or copy.isTattoo) and "2" or "4"
+					self:NodeAdditionOrReplacementFromString(copy, " \n+" .. dex .. " to Dexterity")
+				elseif conqueredBy.conqueror.type == "kalguur" then
+					local ward = (isValueInArray(attributes, copy.dn) or copy.isTattoo) and "1" or "2"
+					self:NodeAdditionOrReplacementFromString(copy, " \n" .. ward .. "% increased Ward")
+				elseif conqueredBy.conqueror.type == "templar" then
+					if (isValueInArray(attributes, copy.dn) or copy.isTattoo) then
+						self:ReplaceNode(copy, legionNodes[91])
+					else
+						self:NodeAdditionOrReplacementFromString(copy, " \n+5 to Devotion")
+					end
+				elseif conqueredBy.conqueror.type == "eternal" then
+					self:ReplaceNode(copy, legionNodes[110])
+				end
+			end
+
+			self:ReconnectNodeToClassStart(copy)
+
+			result[nodeId] = copy
+		end
+	end
+
+	return result
 end
 
 function PassiveSpecClass:NodeInKeystoneRadius(keystoneNames, nodeId, radiusIndex)

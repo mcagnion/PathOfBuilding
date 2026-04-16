@@ -4069,6 +4069,21 @@ function ItemsTabClass:AddItemTooltip(tooltip, item, slot, dbMode)
 					i = i + 1
 				end
 			end
+			-- When equipping a timeless jewel, compute conquered node overrides
+			if compareSlot.nodeId and item ~= selItem and item
+			and item.jewelData and item.jewelData.conqueredBy then
+				override.removeNodes = override.removeNodes or { }
+				override.addNodes = override.addNodes or { }
+				local conqueredNodes = self.build.spec:ComputeConqueredNodes(
+					compareSlot.nodeId, item.jewelData.conqueredBy, item.jewelRadiusIndex)
+				for nodeId, conqueredNode in pairs(conqueredNodes) do
+					local specNode = self.build.spec.nodes[nodeId]
+					if specNode and self.build.spec.allocNodes[nodeId] then
+						override.removeNodes[specNode] = true
+						override.addNodes[conqueredNode] = true
+					end
+				end
+			end
 			local output = calcFunc(override)
 			return selItem, output
 		end
