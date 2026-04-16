@@ -2462,7 +2462,7 @@ function TreeTabClass:FindTimelessJewel()
 						local headerSize = #jewelDataTbl
 						if headerSize == 2 or headerSize == 3 then
 							if desiredNodes[curNodeId] then
-								resultNodes[curSeed][curNodeId] = resultNodes[curSeed][curNodeId] or { targetNodeNames = { }, totalWeight = 0 }
+								resultNodes[curSeed][curNodeId] = resultNodes[curSeed][curNodeId] or { targetNodeNames = { }, totalWeight = 0, legionNode = curNode }
 								local statMod1 = curNode.stats[curNode.sortedStats[1]]
 								local weight = desiredNodes[curNodeId].nodeWeight * jewelDataTbl[statMod1.index + 1]
 								local statMod2 = curNode.stats[curNode.sortedStats[2]]
@@ -2480,7 +2480,7 @@ function TreeTabClass:FindTimelessJewel()
 								curNodeId = curNode and legionAdditions[jewelDataTbl[i] + 1].id or nil
 								if i <= (headerSize / 2) then
 									if desiredNodes[curNodeId] then
-										resultNodes[curSeed][curNodeId] = resultNodes[curSeed][curNodeId] or { targetNodeNames = { }, totalWeight = 0 }
+										resultNodes[curSeed][curNodeId] = resultNodes[curSeed][curNodeId] or { targetNodeNames = { }, totalWeight = 0, legionNode = curNode }
 										local weight = desiredNodes[curNodeId].nodeWeight * jewelDataTbl[i + (headerSize / 2)]
 										resultNodes[curSeed][curNodeId].totalWeight = resultNodes[curSeed][curNodeId].totalWeight + weight
 										t_insert(resultNodes[curSeed][curNodeId], targetNode)
@@ -2493,7 +2493,7 @@ function TreeTabClass:FindTimelessJewel()
 							end
 						end
 					elseif desiredNodes[curNodeId] then
-						resultNodes[curSeed][curNodeId] = resultNodes[curSeed][curNodeId] or { targetNodeNames = { }, totalWeight = 0 }
+						resultNodes[curSeed][curNodeId] = resultNodes[curSeed][curNodeId] or { targetNodeNames = { }, totalWeight = 0, legionNode = curNode }
 						resultNodes[curSeed][curNodeId].totalWeight = resultNodes[curSeed][curNodeId].totalWeight + desiredNodes[curNodeId].nodeWeight
 						t_insert(resultNodes[curSeed][curNodeId], targetNode)
 						t_insert(resultNodes[curSeed][curNodeId].targetNodeNames, treeData.nodes[targetNode].name)
@@ -2594,6 +2594,13 @@ function TreeTabClass:FindTimelessJewel()
 						end
 						result[legionId] = result[legionId] or { }
 						result[legionId].targetNodeNames = seedData[legionId].targetNodeNames
+						result[legionId].targetNodeIds = { }
+						for i = 1, #seedData[legionId] do
+							if type(seedData[legionId][i]) == "number" then
+								result[legionId].targetNodeIds[i] = seedData[legionId][i]
+							end
+						end
+						result[legionId].legionNode = seedData[legionId].legionNode
 					elseif desiredNode.desiredIdx < 8 then
 						sortedNodeArray[desiredNode.desiredIdx] = "     0     "
 					end
