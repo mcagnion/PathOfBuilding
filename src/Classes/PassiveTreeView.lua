@@ -1556,6 +1556,24 @@ function PassiveTreeViewClass:AddNodeTooltip(tooltip, node, build)
 				tooltip:AddLine(14, string.format("^7No changes from %s this node%s.", node.alloc and "unallocating" or "allocating", node.intuitiveLeapLikesAffecting == 0 and pathLength > 1 and " or the nodes leading to it" or ""))
 			end
 		end
+		-- Timeless jewel delta: show the difference between original and conquered node
+		if node.conqueredBy then
+			local origNode = build.spec.hashOverrides[node.id] or build.spec.tree.nodes[node.id]
+			if origNode then
+				if node.alloc then
+					local outputWithOriginal = calcFunc({
+						removeNodes = { [node] = true },
+						addNodes = { [origNode] = true }
+					})
+					build:AddStatComparesToTooltip(tooltip, outputWithOriginal, calcBase,
+						"^7Timeless jewel on this node gives you:")
+				else
+					local outputWithOriginal = calcFunc({ addNodes = { [origNode] = true } })
+					build:AddStatComparesToTooltip(tooltip, calcBase, outputWithOriginal,
+						"^7Without timeless jewel, allocating would give you:")
+				end
+			end
+		end
 		tooltip:AddLine(14, colorCodes.TIP.."Tip: Press Ctrl+D to disable the display of stat differences.")
 	else
 		tooltip:AddSeparator(14)
