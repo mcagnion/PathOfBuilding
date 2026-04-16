@@ -5,6 +5,7 @@
 --
 
 local dkjson = require "dkjson"
+local m_min = math.min
 
 ---@class TradeQueryRequests
 local TradeQueryRequestsClass = newClass("TradeQueryRequests", function(self, rateLimiter)
@@ -71,10 +72,13 @@ end
 ---@param league string
 ---@param query string
 ---@param callback fun(items:table, errMsg:string)
----@param params table @ params = { callbackQueryId = fun(queryId:string) }
+---@param params table @ params = { callbackQueryId = fun(queryId:string), onFetchProgress = fun(fetched:number, total:number), onSearchStart = fun(step:number) }
 function TradeQueryRequestsClass:SearchWithQuery(realm, league, query, callback, params)
 	params = params or {}
 	--ConPrintf("Query json: %s", query)
+	if params.onSearchStart then
+		params.onSearchStart(1)
+	end
 	self:PerformSearch(realm, league, query, function(response, errMsg)
 		if params.callbackQueryId and response and response.id then
 			params.callbackQueryId(response.id)
@@ -82,7 +86,7 @@ function TradeQueryRequestsClass:SearchWithQuery(realm, league, query, callback,
 		if errMsg then
 			return callback(nil, errMsg)
 		end
-		self:FetchResults(response.result, response.id, callback)
+		self:FetchResults(response.result, response.id, callback, params.onFetchProgress)
 	end)
 end
 
@@ -91,7 +95,7 @@ end
 ---@param league string
 ---@param query string
 ---@param callback fun(items:table, errMsg:string)
----@param params table @ params = { callbackQueryId = fun(queryId:string) }
+---@param params table @ params = { callbackQueryId = fun(queryId:string), onFetchProgress = fun(fetched:number, total:number), onSearchStart = fun(step:number) }
 function TradeQueryRequestsClass:SearchWithQueryWeightAdjusted(realm, league, query, callback, params)
 	params = params or {}
 	local previousSearchId = nil
@@ -152,20 +156,23 @@ function TradeQueryRequestsClass:SearchWithQueryWeightAdjusted(realm, league, qu
 							end
 							items = tableConcat(items, newItems)
 							callback(items, errMsg)
-						end)
+						end, params.onFetchProgress)
 					else
 						callback(items, errMsg)
 					end
-				end)
+				end, params.onFetchProgress)
 			else
 				-- Search not clipped and result count satisfy maxFetchPerSearch, proceed normally
-				self:FetchResults(response.result, response.id,  callback)
+				self:FetchResults(response.result, response.id, callback, params.onFetchProgress)
 			end
 		else
 			if response.total < self.maxFetchPerSearch then -- Less than maximum items retrieved lower weight to try and get more.
 				local queryJson = dkjson.decode(query)
 				queryJson.query.stats[1].value.min = queryJson.query.stats[1].value.min / 2
 				query = dkjson.encode(queryJson)
+				if params.onSearchStart then
+					params.onSearchStart(currentRecursion + 1)
+				end
 				self:PerformSearch(realm, league, query, performSearchCallback)
 			else -- Search clipped, fetch highest weight item, update query weight and repeat search
 				previousSearchItemIds = response.result
@@ -180,10 +187,16 @@ function TradeQueryRequestsClass:SearchWithQueryWeightAdjusted(realm, league, qu
 					local queryJson = dkjson.decode(query)
 					queryJson.query.stats[1].value.min = (tonumber(highestWeight) + queryJson.query.stats[1].value.min) / 2
 					query = dkjson.encode(queryJson)
+					if params.onSearchStart then
+						params.onSearchStart(currentRecursion + 1)
+					end
 					self:PerformSearch(realm, league, query, performSearchCallback)
 				end)
 			end
 		end
+	end
+	if params.onSearchStart then
+		params.onSearchStart(1)
 	end
 	self:PerformSearch(realm, league, query, performSearchCallback)
 end
@@ -238,7 +251,8 @@ end
 ---@param itemHashes string[]
 ---@param queryId string
 ---@param callback fun(items:table, errMsg:string)
-function TradeQueryRequestsClass:FetchResults(itemHashes, queryId, callback)
+---@param onProgress? fun(fetched:number, total:number) @ called after each block completes
+function TradeQueryRequestsClass:FetchResults(itemHashes, queryId, callback, onProgress)
 	local quantity_found = math.min(#itemHashes, self.maxFetchPerSearch)
 	local max_block_size = 10
 	local items = {}
@@ -252,6 +266,9 @@ function TradeQueryRequestsClass:FetchResults(itemHashes, queryId, callback)
 			end
 			for _, item in pairs(itemBlock) do
 				table.insert(items, item)
+			end
+			if onProgress then
+				onProgress(#items, quantity_found)
 			end
 			-- finished fetching item blocks
 			if #items >= quantity_found then
@@ -303,7 +320,8 @@ function TradeQueryRequestsClass:FetchResultBlock(url, callback)
 end
 
 ---@param callback fun(items:table, errMsg:string, query:string)
-function TradeQueryRequestsClass:SearchWithURL(url, callback)
+---@param params? table @ params = { onFetchProgress = fun(fetched:number, total:number), onSearchStart = fun(step:number) }
+function TradeQueryRequestsClass:SearchWithURL(url, callback, params)
 	local subpath = url:match(self.hostName .. "trade/search/(.+)$")
 	local paths = {}
 	for path in subpath:gmatch("[^/]+") do
@@ -324,7 +342,7 @@ function TradeQueryRequestsClass:SearchWithURL(url, callback)
 		end
 		self:SearchWithQuery(realm, league, query, function(items, searchErrMsg)
 			callback(items, searchErrMsg, query)
-		end)
+		end, params)
 	end)
 end
 

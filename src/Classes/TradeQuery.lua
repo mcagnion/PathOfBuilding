@@ -626,7 +626,7 @@ function TradeQueryClass:SetStatWeights(previousSelectionList)
 		for row_idx in pairs(self.resultTbl) do
 			self:UpdateControlsWithItems(row_idx)
 		end
-    end)
+	end)
 	controls.cancel = new("ButtonControl", { "BOTTOM", nil, "BOTTOM" }, { 0, -10, 80, 20 }, "Cancel", function()
 		if previousSelectionList and #previousSelectionList > 0 then
 			self.statSortSelectionList = copyTable(previousSelectionList, true)
@@ -961,13 +961,14 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 				controls["uri"..context.row_idx]:SetText(url, true)
 				return
 			end
-			context.controls["priceButton"..context.row_idx].label = "Searching..."
+			local bestBtn = context.controls["bestButton"..context.row_idx]
+			bestBtn.label = "Search..."
 			self.lastQueries[row_idx] = query
 			self.tradeQueryRequests:SearchWithQueryWeightAdjusted(self.pbRealm, self.pbLeague, query,
 				function(items, errMsg)
 					if errMsg then
 						self:SetNotice(context.controls.pbNotice, colorCodes.NEGATIVE .. errMsg)
-						context.controls["priceButton"..context.row_idx].label =  "Price Item"
+						bestBtn.label = "Find best"
 						return
 					else
 						self:SetNotice(context.controls.pbNotice, "")
@@ -993,19 +994,27 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 
 					self.resultTbl[context.row_idx] = items
 					self:UpdateControlsWithItems(context.row_idx)
-					context.controls["priceButton"..context.row_idx].label =  "Price Item"
+					bestBtn.label = "Find best"
 				end,
 				{
 					callbackQueryId = function(queryId)
 						local url = self.tradeQueryRequests:buildUrl(self.hostName .. "trade/search", self.pbRealm, self.pbLeague, queryId)
 						controls["uri"..context.row_idx]:SetText(url, true)
-					end
+					end,
+					onSearchStart = function(step)
+						bestBtn.label = step > 1 and ("Search " .. step .. "...") or "Search..."
+					end,
+					onFetchProgress = function(fetched, total)
+						bestBtn.label = fetched .. "/" .. total .. "..."
+					end,
 				}
 			)
 		end)
 	end)
 	controls["bestButton"..row_idx].shown = function() return not self.resultTbl[row_idx] end
-	controls["bestButton"..row_idx].enabled = function() return self.pbLeague end
+	controls["bestButton"..row_idx].enabled = function()
+		return self.pbLeague and controls["bestButton"..row_idx].label == "Find best"
+	end
 	controls["bestButton"..row_idx].tooltipText = "Creates a weighted search to find the highest Stat Value items for this slot."
 	local pbURL
 	controls["uri"..row_idx] = new("EditControl", { "TOPLEFT", controls["bestButton"..row_idx], "TOPRIGHT"}, {8, 0, 514, row_height}, nil, nil, "^%C\t\n", nil, function(buf)
@@ -1037,7 +1046,8 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 	end
 	controls["priceButton"..row_idx] = new("ButtonControl", { "TOPLEFT", controls["uri"..row_idx], "TOPRIGHT"}, {8, 0, 100, row_height}, "Price Item",
 		function()
-			controls["priceButton"..row_idx].label = "Searching..."
+			local priceBtn = controls["priceButton"..row_idx]
+			priceBtn.label = "Search..."
 			self.tradeQueryRequests:SearchWithURL(controls["uri"..row_idx].buf, function(items, errMsg, query)
 				if errMsg then
 					self:SetNotice(controls.pbNotice, "Error: " .. errMsg)
@@ -1047,13 +1057,20 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 					self.resultTbl[row_idx] = items
 					self:UpdateControlsWithItems(row_idx)
 				end
-				controls["priceButton"..row_idx].label = "Price Item"
-			end)
+				priceBtn.label = "Price Item"
+			end, {
+				onSearchStart = function(step)
+					priceBtn.label = step > 1 and ("Search " .. step .. "...") or "Search..."
+				end,
+				onFetchProgress = function(fetched, total)
+					priceBtn.label = fetched .. "/" .. total .. "..."
+				end,
+			})
 		end)
 	controls["priceButton"..row_idx].enabled = function()
 		local poesessidAvailable = main.POESESSID and main.POESESSID ~= ""
 		local validURL = controls["uri"..row_idx].validURL
-		local isSearching = controls["priceButton"..row_idx].label == "Searching..."
+		local isSearching = controls["priceButton"..row_idx].label ~= "Price Item"
 		return poesessidAvailable and validURL and not isSearching
 	end
 	controls["priceButton"..row_idx].tooltipFunc = function(tooltip)
