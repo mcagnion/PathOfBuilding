@@ -89,7 +89,7 @@ local function getRequirementWarningEntries(baseOutput, compareOutput)
 		local baseAttribute = baseOutput[entry.attr] or 0
 		local compareAttribute = compareOutput[entry.attr] or 0
 
-		if compareRequirement > compareAttribute and baseRequirement <= baseAttribute then
+		if compareRequirement > compareAttribute then
 			local baseFailSet = { }
 			for _, fail in ipairs(baseOutput[entry.req.."FailList"] or { }) do
 				local key = getRequirementWarningSourceKey(fail.source)
@@ -110,7 +110,7 @@ local function getRequirementWarningEntries(baseOutput, compareOutput)
 			if not addedWarning then
 				local _, sourceName = getRequirementWarningSourceKey(compareOutput[entry.req.."Item"])
 				if sourceName then
-					t_insert(warnings, colorCodes.NEGATIVE..s_format("Would not meet %s requirement of %s (%d required)", entry.label, sourceName, compareRequirement))
+					t_insert(warnings, colorCodes.NEGATIVE..s_format("%s requires %d %s", sourceName, compareRequirement, entry.label))
 				else
 					t_insert(warnings, colorCodes.NEGATIVE..s_format("Would not meet %s requirement", entry.label))
 				end

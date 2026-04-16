@@ -78,7 +78,29 @@ describe("TestComparisonWarnings", function()
 		}, build:GetRequirementComparisonWarnings(baseOutput, compareOutput))
 	end)
 
-	it("falls back to the highest failing source when no fail list is available", function()
+	it("still lists newly failing sources when the base state already fails the attribute", function()
+		local baseOutput = {
+			Dex = 90,
+			ReqDex = 110,
+			ReqDexFailList = {
+				{ source = newGemSource("Existing Gem"), req = 110 },
+			},
+		}
+		local compareOutput = {
+			Dex = 80,
+			ReqDex = 110,
+			ReqDexFailList = {
+				{ source = newGemSource("Existing Gem"), req = 110 },
+				{ source = newItemSource("Slink Boots", "Boots"), req = 100 },
+			},
+		}
+
+		assert.are.same({
+			colorCodes.NEGATIVE .. "Slink Boots requires 100 Dexterity",
+		}, build:GetRequirementComparisonWarnings(baseOutput, compareOutput))
+	end)
+
+	it("falls back to item requirement wording when no fail list is available", function()
 		local baseOutput = {
 			Dex = 120,
 			ReqDex = 100,
@@ -90,7 +112,7 @@ describe("TestComparisonWarnings", function()
 		}
 
 		assert.are.same({
-			colorCodes.NEGATIVE .. "Would not meet Dexterity requirement of Slink Boots (120 required)",
+			colorCodes.NEGATIVE .. "Slink Boots requires 120 Dexterity",
 		}, build:GetRequirementComparisonWarnings(baseOutput, compareOutput))
 	end)
 
