@@ -1111,6 +1111,11 @@ function TradeQueryGeneratorClass:FinishQuery()
 		errMsg = "Could not generate search, found no mods to search for"
 	end
 
+	-- Propagate considerBenchCraft to the slot table so result evaluation can use it
+	if self.requesterContext and self.requesterContext.slotTbl then
+		self.requesterContext.slotTbl.considerBenchCraft = options.considerBenchCraft
+	end
+
 	local queryJson = dkjson.encode(queryTable)
 	self.requesterCallback(self.requesterContext, queryJson, errMsg)
 
@@ -1158,6 +1163,13 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		controls.includeMirrored = new("CheckBoxControl", {"TOPRIGHT",lastItemAnchor,"BOTTOMRIGHT"}, {0, 5, 18}, "Mirrored Items:", function(state) end)
 		controls.includeMirrored.state = (self.lastIncludeMirrored == nil or self.lastIncludeMirrored == true)
 		updateLastAnchor(controls.includeMirrored)
+	end
+
+	if not isJewelSlot and not isAbyssalJewelSlot and not context.slotTbl.unique then
+		controls.considerBenchCraft = new("CheckBoxControl", {"TOPRIGHT",lastItemAnchor,"BOTTOMRIGHT"}, {0, 5, 18}, "Bench Craft:", function(state) end)
+		controls.considerBenchCraft.state = (self.lastConsiderBenchCraft == true)
+		controls.considerBenchCraft.tooltipText = "Simulates adding the best available bench craft to a free affix slot when evaluating results."
+		updateLastAnchor(controls.considerBenchCraft)
 	end
 
 	if not isJewelSlot and not isAbyssalJewelSlot and includeScourge then
@@ -1365,6 +1377,9 @@ Remove: %s will be removed from the search results.]], term, term, term)
 		end
 		if controls.includeAllWEMods then
 			options.includeAllWEMods = controls.includeAllWEMods.state
+		end
+		if controls.considerBenchCraft then
+			self.lastConsiderBenchCraft, options.considerBenchCraft = controls.considerBenchCraft.state, controls.considerBenchCraft.state
 		end
 		options.statWeights = statWeights
 

@@ -626,7 +626,7 @@ function TradeQueryClass:SetStatWeights(previousSelectionList)
 		for row_idx in pairs(self.resultTbl) do
 			self:UpdateControlsWithItems(row_idx)
 		end
-    end)
+		end)
 	controls.cancel = new("ButtonControl", { "BOTTOM", nil, "BOTTOM" }, { 0, -10, 80, 20 }, "Cancel", function()
 		if previousSelectionList and #previousSelectionList > 0 then
 			self.statSortSelectionList = copyTable(previousSelectionList, true)
@@ -765,7 +765,38 @@ function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, ba
 
 		local output = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = item }))
 		local weight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, output, self.statSortSelectionList)
-		result.evaluation = {{ output = output, weight = weight }}
+		local benchCraft = nil
+		if self.slotTables[row_idx].considerBenchCraft and not item.corrupted and not item.mirrored then
+			local affixMax = 0
+			if item.rarity == "RARE" then
+				local defaultHalf = (item.type == "Jewel") and 2 or 3
+				affixMax = (item.prefixes.limit or 0) + defaultHalf + (item.suffixes.limit or 0) + defaultHalf
+			elseif item.rarity == "MAGIC" then
+				affixMax = (item.prefixes.limit or 0) + 1 + (item.suffixes.limit or 0) + 1
+			end
+			if affixMax > 0 then
+				local explicitCount = #(item.explicitModLines or {})
+				if explicitCount < affixMax then
+					for _, craft in ipairs(self.itemsTab.build.data.masterMods or {}) do
+						if craft.types[item.type] then
+							local craftedItem = new("Item", result.item_string)
+							for _, line in ipairs(craft) do
+								t_insert(craftedItem.explicitModLines, { line = line, modTags = craft.modTags, crafted = true })
+							end
+							craftedItem:BuildAndParseRaw()
+							local craftOutput = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = craftedItem }))
+							local craftWeight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, craftOutput, self.statSortSelectionList)
+							if craftWeight > weight then
+								weight = craftWeight
+								output = craftOutput
+								benchCraft = table.concat(craft, "/") .. " ^8(" .. craft.type .. ")"
+							end
+						end
+					end
+				end
+			end
+		end
+		result.evaluation = {{ output = output, weight = weight, benchCraft = benchCraft }}
 	end
 	return result.evaluation
 end
@@ -1116,6 +1147,13 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 		addMegalomaniacCompareToTooltipIfApplicable(tooltip, pb_index)
 		tooltip:AddSeparator(10)
 		tooltip:AddLine(16, string.format("^7Price: %s %s", result.amount, result.currency))
+		if result.evaluation then
+			local eval = result.evaluation[1]
+			if eval and eval.benchCraft then
+				tooltip:AddSeparator(6)
+				tooltip:AddLine(16, "^8Bench: ^7" .. eval.benchCraft)
+			end
+		end
 	end
 	controls["importButton"..row_idx] = new("ButtonControl", { "TOPLEFT", controls["resultDropdown"..row_idx], "TOPRIGHT"}, {8, 0, 100, row_height}, "Import Item", function()
 		self.itemsTab:CreateDisplayItemFromRaw(self.resultTbl[row_idx][self.itemIndexTbl[row_idx]].item_string)
