@@ -368,6 +368,40 @@ Highest Weight - Displays the order retrieved from trade]]
 	self.controls.itemSortSelection:SetSel(self.pbItemSortSelectionIndex, true)
 	self.controls.itemSortSelectionLabel = new("LabelControl", {"TOPRIGHT", self.controls.itemSortSelection, "TOPLEFT"}, {-4, 0, 56, 16}, "^7Sort By:")
 
+	-- Only show items with required attributes (or include unusable when checked)
+	local optionsRow3Anchor = {"TOPRIGHT", self.controls.fetchCountEdit, "BOTTOMRIGHT"}
+	self.controls.includeUnusableCheck = new("CheckBoxControl", optionsRow3Anchor, {0, row_height + row_vertical_padding, row_height, row_height}, "", function(state)
+		-- checked = include unusable -> disable attribute filter
+		self.includeUnusable = state
+		for row_idx, _ in pairs(self.resultTbl) do
+			self:UpdateControlsWithItems(row_idx)
+		end
+	end)
+	self.controls.includeUnusableLabel = new("LabelControl", {"RIGHT", self.controls.includeUnusableCheck, "LEFT"}, {-6, 0, 0, 16}, "^7Include unusable:")
+	self.controls.includeUnusableCheck.tooltipText = "Include items you cannot currently equip (ignore Str/Dex/Int/Omni requirements).\nUnchecked: only show items you meet the attributes for."
+	self.includeUnusable = self.includeUnusable == true
+	self.controls.includeUnusableCheck.state = self.includeUnusable
+	-- Reuse current Eldritch implicits and amulet enchant when enabled
+	local row3InlineAnchor = {"TOPLEFT", self.controls.itemSortSelectionLabel, "BOTTOMLEFT"}
+	self.controls.useCurrentEldritchCheck = new("CheckBoxControl", row3InlineAnchor, {0, row_height + row_vertical_padding, row_height, row_height}, "", function(state)
+		self.useCurrentEldritch = state
+		for row_idx, _ in pairs(self.resultTbl) do
+			self:UpdateControlsWithItems(row_idx)
+		end
+	end)
+	self.controls.useCurrentEldritchLabel = new("LabelControl", {"RIGHT", self.controls.useCurrentEldritchCheck, "LEFT"}, {-6, 0, 0, 16}, "^7Use current Eldritch:")
+	self.controls.useCurrentAmuletEnchantCheck = new("CheckBoxControl", {"LEFT", self.controls.useCurrentEldritchCheck, "RIGHT"}, {140, 0, row_height, row_height}, "", function(state)
+		self.useCurrentAmuletEnchant = state
+		for row_idx, _ in pairs(self.resultTbl) do
+			self:UpdateControlsWithItems(row_idx)
+		end
+	end)
+	self.controls.useCurrentAmuletEnchantLabel = new("LabelControl", {"RIGHT", self.controls.useCurrentAmuletEnchantCheck, "LEFT"}, {-6, 0, 0, 16}, "^7Use current amulet anoint:")
+	self.useCurrentEldritch = self.useCurrentEldritch == true
+	self.controls.useCurrentEldritchCheck.state = self.useCurrentEldritch
+	self.useCurrentAmuletEnchant = self.useCurrentAmuletEnchant == true
+	self.controls.useCurrentAmuletEnchantCheck.state = self.useCurrentAmuletEnchant
+
 	-- Realm selection
 	self.controls.realmLabel = new("LabelControl", {"LEFT", self.controls.setSelect, "RIGHT"}, {18, 0, 20, row_height - 4}, "^7Realm:")
 	self.controls.realm = new("DropDownControl", {"LEFT", self.controls.realmLabel, "RIGHT"}, {6, 0, 150, row_height}, self.realmDropList, function(index, value)
@@ -626,7 +660,7 @@ function TradeQueryClass:SetStatWeights(previousSelectionList)
 		for row_idx in pairs(self.resultTbl) do
 			self:UpdateControlsWithItems(row_idx)
 		end
-    end)
+	end)
 	controls.cancel = new("ButtonControl", { "BOTTOM", nil, "BOTTOM" }, { 0, -10, 80, 20 }, "Cancel", function()
 		if previousSelectionList and #previousSelectionList > 0 then
 			self.statSortSelectionList = copyTable(previousSelectionList, true)
@@ -719,6 +753,60 @@ function TradeQueryClass:ReduceOutput(output)
 	return smallOutput
 end
 
+-- Method to build a result Item, applying overrides from the current item in that slot
+-- (copy current amulet anoint, copy current Eldritch implicits) when the corresponding
+-- checkboxes are enabled.
+function TradeQueryClass:BuildResultItemWithOverrides(slotName, result)
+	if not result then
+		return nil
+	end
+	local function logOverride(msg)
+		if ConPrintf then
+			ConPrintf("[Trader Overrides] %s", msg)
+		end
+	end
+	local item = new("Item", result.item_string)
+	local needsRebuild = false
+	local activeSlotRef = self.itemsTab.activeItemSet[slotName] or (self.itemsTab.sockets[slotName] and self.itemsTab.activeItemSet[self.itemsTab.sockets[slotName].slotName])
+	local currentItem = activeSlotRef and activeSlotRef.selItemId and activeSlotRef.selItemId > 0 and self.itemsTab.items[activeSlotRef.selItemId]
+	if activeSlotRef then
+		logOverride(s_format("Slot %s activeSel=%s", slotName, tostring(activeSlotRef.selItemId)))
+	else
+		logOverride(s_format("Slot %s has no activeSlotRef", slotName))
+	end
+	if currentItem then
+		logOverride(s_format("Current item for %s: %s (implicits: %d)", slotName, currentItem.name or "?", #(currentItem.implicitModLines or {})))
+	end
+	if self.useCurrentAmuletEnchant and slotName == "Amulet" and currentItem then
+		if currentItem.enchantModLines and #currentItem.enchantModLines > 0 then
+			item.enchantModLines = currentItem.enchantModLines
+			needsRebuild = true
+			logOverride(s_format("Copied amulet anoint into result (slot %s)", slotName))
+		else
+			logOverride(s_format("No amulet anoint to copy (slot %s)", slotName))
+		end
+	elseif self.useCurrentAmuletEnchant and slotName == "Amulet" then
+		logOverride("Amulet anoint copy skipped: no current amulet selected")
+	end
+	if self.useCurrentEldritch and not item.synthesised then
+		if currentItem then
+			if currentItem.implicitModLines and #currentItem.implicitModLines > 0 then
+				item.implicitModLines = copyTable(currentItem.implicitModLines)
+				logOverride(s_format("Replaced implicits with current item implicits (count=%d) for slot %s", #currentItem.implicitModLines, slotName))
+			else
+				logOverride(s_format("Current item has no implicits to copy (slot %s)", slotName))
+			end
+			needsRebuild = true
+		else
+			logOverride(s_format("Cannot copy Eldritch implicits for slot %s: no current item selected", slotName))
+		end
+	end
+	if needsRebuild then
+		item:BuildAndParseRaw()
+	end
+	return item
+end
+
 -- Method to evaluate a result by getting it's output and weight
 function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, baseOutput)
 	local result = self.resultTbl[row_idx][result_index]
@@ -761,7 +849,7 @@ function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, ba
 		}
 		table.sort(result.evaluation, function(a, b) return a.weight > b.weight end)
 	else
-		local item = new("Item", result.item_string)
+		local item = self:BuildResultItemWithOverrides(slotName, result)
 
 		local output = self:ReduceOutput(calcFunc({ repSlotName = slotName, repItem = item }))
 		local weight = self.tradeQueryGenerator.WeightedRatioOutputs(baseOutput, output, self.statSortSelectionList)
@@ -776,16 +864,19 @@ function TradeQueryClass:UpdateDropdownList(row_idx)
 
 	if not self.resultTbl[row_idx] then return end
 
+	local slotName = self.slotTables[row_idx].nodeId and "Jewel " .. tostring(self.slotTables[row_idx].nodeId) or self.slotTables[row_idx].slotName
 	for result_index = 1, #self.resultTbl[row_idx] do
 
 		local pb_index = self.sortedResultTbl[row_idx][result_index].index
 		local result = self.resultTbl[row_idx][pb_index]
 		local price = string.format(" %s(%d %s)", colorCodes["CURRENCY"], result.amount, result.currency)
-		local item = new("Item", result.item_string)
+		local item = self:BuildResultItemWithOverrides(slotName, result)
 		table.insert(dropdownLabels, colorCodes[item.rarity] .. item.name .. price)
 	end
-	self.controls["resultDropdown".. row_idx].selIndex = 1
-	self.controls["resultDropdown".. row_idx]:SetList(dropdownLabels)
+	if self.controls["resultDropdown".. row_idx] then
+		self.controls["resultDropdown".. row_idx].selIndex = 1
+		self.controls["resultDropdown".. row_idx]:SetList(dropdownLabels)
+	end
 end
 function TradeQueryClass:UpdateControlsWithItems(row_idx)
 	local sortMode = self.itemSortSelectionList[self.pbItemSortSelectionIndex]
@@ -1104,7 +1195,7 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 		if not result then
 			return
 		end
-		local item = new("Item", result.item_string)
+		local item = self:BuildResultItemWithOverrides(slotTbl.slotName, result)
 		tooltip:Clear()
 		if slotTbl.slotName == "Watcher's Eye" then
 			-- for watcher's eye we don't have a target slot. this will also
@@ -1118,8 +1209,10 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 		tooltip:AddLine(16, string.format("^7Price: %s %s", result.amount, result.currency))
 	end
 	controls["importButton"..row_idx] = new("ButtonControl", { "TOPLEFT", controls["resultDropdown"..row_idx], "TOPRIGHT"}, {8, 0, 100, row_height}, "Import Item", function()
-		self.itemsTab:CreateDisplayItemFromRaw(self.resultTbl[row_idx][self.itemIndexTbl[row_idx]].item_string)
-		local item = self.itemsTab.displayItem
+		local result = self.resultTbl[row_idx][self.itemIndexTbl[row_idx]]
+		local item = self:BuildResultItemWithOverrides(slotTbl.slotName, result)
+		self.itemsTab:CreateDisplayItemFromRaw(item:BuildRaw())
+		item = self.itemsTab.displayItem
 		-- pass "true" to not auto equip it as we will have our own logic
 		self.itemsTab:AddDisplayItem(true)
 		-- Autoequip it
