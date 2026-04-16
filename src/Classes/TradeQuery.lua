@@ -957,6 +957,99 @@ function TradeQueryClass:SearchWithQueryPlan(queryPlan, callback, params)
 	searchNext(1)
 end
 
+function TradeQueryClass:GetQueryRarityFilter(query)
+	local queryJson = dkjson.decode(query)
+	local rarityFilter = queryJson
+		and queryJson.query
+		and queryJson.query.filters
+		and queryJson.query.filters.type_filters
+		and queryJson.query.filters.type_filters.filters
+		and queryJson.query.filters.type_filters.filters.rarity
+		and queryJson.query.filters.type_filters.filters.rarity.option
+	if rarityFilter == "unique" or rarityFilter == "nonunique" then
+		return rarityFilter
+	end
+	return "any"
+end
+
+function TradeQueryClass:SetQueryRarityFilter(query, rarityFilter)
+	local queryJson = dkjson.decode(query)
+	if not queryJson then
+		return nil, "Failed to parse trade query"
+	end
+	queryJson.query = queryJson.query or { }
+	queryJson.query.filters = queryJson.query.filters or { }
+	queryJson.query.filters.type_filters = queryJson.query.filters.type_filters or { }
+	queryJson.query.filters.type_filters.filters = queryJson.query.filters.type_filters.filters or { }
+	if rarityFilter == "unique" or rarityFilter == "nonunique" then
+		queryJson.query.filters.type_filters.filters.rarity = { option = rarityFilter }
+	else
+		queryJson.query.filters.type_filters.filters.rarity = nil
+	end
+	return dkjson.encode(queryJson)
+end
+
+function TradeQueryClass:MergeTradeSearchItems(uniqueItems, nonUniqueItems)
+	local merged = { }
+	local seenIds = { }
+	local function append(items)
+		for _, item in ipairs(items or { }) do
+			if item.id then
+				if not seenIds[item.id] then
+					seenIds[item.id] = true
+					t_insert(merged, item)
+				end
+			else
+				t_insert(merged, item)
+			end
+		end
+	end
+	append(uniqueItems)
+	append(nonUniqueItems)
+	return merged
+end
+
+function TradeQueryClass:SearchWithQueryWeightAdjustedAndRaritySplit(query, callback, params)
+	params = params or { }
+	if self:GetQueryRarityFilter(query) ~= "any" then
+		self.tradeQueryRequests:SearchWithQueryWeightAdjusted(self.pbRealm, self.pbLeague, query, callback, params)
+		return
+	end
+
+	local uniqueQuery, uniqueErr = self:SetQueryRarityFilter(query, "unique")
+	local nonUniqueQuery, nonUniqueErr = self:SetQueryRarityFilter(query, "nonunique")
+	if not uniqueQuery or not nonUniqueQuery then
+		callback(nil, uniqueErr or nonUniqueErr)
+		return
+	end
+
+	local paramsWithoutQueryId = { }
+	for key, value in pairs(params) do
+		if key ~= "callbackQueryId" then
+			paramsWithoutQueryId[key] = value
+		end
+	end
+
+	self.tradeQueryRequests:SearchWithQueryWeightAdjusted(self.pbRealm, self.pbLeague, uniqueQuery, function(uniqueItems, errMsg)
+		if errMsg and errMsg ~= "No Matching Results Found" then
+			callback(nil, errMsg)
+			return
+		end
+		self.tradeQueryRequests:SearchWithQueryWeightAdjusted(self.pbRealm, self.pbLeague, nonUniqueQuery, function(nonUniqueItems, nonUniqueErrMsg)
+			if nonUniqueErrMsg and nonUniqueErrMsg ~= "No Matching Results Found" then
+				callback(nil, nonUniqueErrMsg)
+				return
+			end
+			local mergedItems = self:MergeTradeSearchItems(uniqueItems, nonUniqueItems)
+			if #mergedItems == 0 then
+				callback(nil, "No Matching Results Found")
+				return
+			end
+			callback(mergedItems)
+		end, paramsWithoutQueryId)
+	end, params)
+end
+
 -- return valid slot for Watcher's Eye
 -- Tries to first return an existing watcher's eye slot if possible
 function TradeQueryClass:findValidSlotForWatchersEye()
@@ -1047,7 +1140,7 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 			if context.tradeQueryPlan and #context.tradeQueryPlan > 0 then
 				self:SearchWithQueryPlan(context.tradeQueryPlan, onSearchResults, searchParams)
 			else
-				self.tradeQueryRequests:SearchWithQueryWeightAdjusted(self.pbRealm, self.pbLeague, query, onSearchResults, searchParams)
+				self:SearchWithQueryWeightAdjustedAndRaritySplit(query, onSearchResults, searchParams)
 			end
 		end)
 	end)
