@@ -525,7 +525,7 @@ function TradeQueryGeneratorClass:GetRankedUniqueEntries(slot, baseName, statWei
 	return rankedUniques
 end
 
-function TradeQueryGeneratorClass:GetRankedSlotUniqueEntries(slot, existingItem, statWeights)
+function TradeQueryGeneratorClass:GetRankedSlotUniqueEntries(slot, existingItem, statWeights, requirementFilter)
 	local selectableBaseNames = self:GetSelectableBaseNames(slot, existingItem)
 	if not selectableBaseNames then
 		return nil
@@ -542,6 +542,10 @@ function TradeQueryGeneratorClass:GetRankedSlotUniqueEntries(slot, existingItem,
 		return nil
 	end
 
+	local build = self.itemsTab.build
+	local characterLevel = build and build.characterLevel
+	local mainOutput = calcsTab and calcsTab.mainOutput
+
 	local rankedUniques = { }
 	local seenNames = { }
 	local uniqueBaseData = getUniqueBaseData()
@@ -550,12 +554,29 @@ function TradeQueryGeneratorClass:GetRankedSlotUniqueEntries(slot, existingItem,
 			if not seenNames[entry.name] then
 				seenNames[entry.name] = true
 				local uniqueItem = new("Item", entry.raw)
+				local req = uniqueItem.requirements
+				if requirementFilter and requirementFilter > 1 and req then
+					local checkLevel = requirementFilter == 2 or requirementFilter == 4
+					local checkAttrs = requirementFilter >= 3
+					if checkLevel and req.level and characterLevel and req.level > characterLevel then
+						goto nextUniqueEntry
+					end
+					if checkAttrs and mainOutput then
+						if (req.strMod or 0) > (mainOutput.Str or 0)
+							or (req.dexMod or 0) > (mainOutput.Dex or 0)
+							or (req.intMod or 0) > (mainOutput.Int or 0) then
+							goto nextUniqueEntry
+						end
+					end
+				end
 				local output = slot and calcFunc({ repSlotName = slot.slotName, repItem = uniqueItem }) or baseOutput
 				t_insert(rankedUniques, {
 					name = uniqueItem.title or entry.name,
 					baseName = uniqueItem.baseName or entry.baseName or baseName,
 					score = self:WeightedRatioOutputs(baseOutput, output, statWeights or { }) * 1000,
+					raw = entry.raw,
 				})
+				::nextUniqueEntry::
 			end
 		end
 	end
@@ -2527,8 +2548,10 @@ Remove: %s will be removed from the search results.]], term, term, term)
 		end
 
 		local popupSelectedUniqueName = self.lastSelectedUniqueName
+		local popupUniqueRequirementFilter = self.lastUniqueRequirementFilter or 4
 
 		local cachedSlotUniques = nil
+		local cachedRequirementFilter = nil
 		updateUniqueDropdown = function()
 			if not controls.selectedUnique then return end
 			local currentRarity = controls.rarityFilter and rarityFilterByIndex[controls.rarityFilter.selIndex] or nil
@@ -2536,18 +2559,19 @@ Remove: %s will be removed from the search results.]], term, term, term)
 				controls.selectedUnique:SetList({ })
 				return
 			end
-			if not cachedSlotUniques then
-				cachedSlotUniques = self:GetRankedSlotUniqueEntries(slot, existingItem, statWeights) or { }
+			local reqFilter = controls.uniqueRequirement and controls.uniqueRequirement.selIndex or popupUniqueRequirementFilter
+			if not cachedSlotUniques or cachedRequirementFilter ~= reqFilter then
+				cachedSlotUniques = self:GetRankedSlotUniqueEntries(slot, existingItem, statWeights, reqFilter) or { }
+				cachedRequirementFilter = reqFilter
 			end
 			if #cachedSlotUniques == 0 then
 				controls.selectedUnique:SetList({ })
 				return
 			end
-			local uniqueEntries = { { label = "All (" .. #cachedSlotUniques .. " ranked)", uniqueName = nil, baseName = nil } }
-			for i, entry in ipairs(cachedSlotUniques) do
-				if i > MAX_UNIQUE_EXACT_SEARCHES then break end
+			local uniqueEntries = { { label = "All (top " .. math.min(#cachedSlotUniques, MAX_UNIQUE_EXACT_SEARCHES) .. " ranked)", uniqueName = nil, baseName = nil } }
+			for _, entry in ipairs(cachedSlotUniques) do
 				local scoreText = entry.score ~= 0 and string.format(" (%.0f)", entry.score) or ""
-				t_insert(uniqueEntries, { label = entry.name .. scoreText, uniqueName = entry.name, baseName = entry.baseName })
+				t_insert(uniqueEntries, { label = entry.name .. scoreText, uniqueName = entry.name, baseName = entry.baseName, raw = entry.raw })
 			end
 			controls.selectedUnique:SetList(uniqueEntries)
 			controls.selectedUnique.selIndex = 1
@@ -2616,18 +2640,39 @@ Remove: %s will be removed from the search results.]], term, term, term)
 		end
 		updateLastAnchor(controls.selectedBaseCount)
 
-		controls.selectedUnique = new("DropDownControl", {"TOPLEFT",controls.selectedBaseMode,"BOTTOMLEFT"}, {0, 5, 320, 18}, { }, function(index, value)
+		local uniqueRequirementOptions = { "Any requirements", "Current level", "Current attributes", "Current useable" }
+		controls.uniqueRequirement = new("DropDownControl", {"TOPLEFT",controls.selectedBaseMode,"BOTTOMLEFT"}, {0, 5, 150, 18}, uniqueRequirementOptions, function(index, value)
+			popupUniqueRequirementFilter = index
+			cachedSlotUniques = nil
+			updateUniqueDropdown()
+		end)
+		controls.uniqueRequirement.selIndex = popupUniqueRequirementFilter
+		controls.uniqueRequirementLabel = new("LabelControl", {"RIGHT",controls.uniqueRequirement,"LEFT"}, {-5, 0, 0, 16}, "Unique:")
+		controls.uniqueRequirement.shown = function()
+			local currentRarity = controls.rarityFilter and rarityFilterByIndex[controls.rarityFilter.selIndex] or nil
+			return currentRarity == "unique"
+		end
+		controls.uniqueRequirementLabel.shown = controls.uniqueRequirement.shown
+
+		controls.selectedUnique = new("DropDownControl", {"LEFT",controls.uniqueRequirement,"RIGHT"}, {8, 0, 250, 18}, { }, function(index, value)
 			popupSelectedUniqueName = type(value) == "table" and value.uniqueName or nil
 		end)
 		controls.selectedUnique.enableDroppedWidth = true
-		controls.selectedUnique.maxDroppedWidth = 400
-		controls.selectedUniqueLabel = new("LabelControl", {"RIGHT",controls.selectedUnique,"LEFT"}, {-5, 0, 0, 16}, "Unique:")
+		controls.selectedUnique.maxDroppedWidth = 500
 		controls.selectedUnique.shown = function()
 			local currentRarity = controls.rarityFilter and rarityFilterByIndex[controls.rarityFilter.selIndex] or nil
 			return currentRarity == "unique" and controls.selectedUnique.list and #controls.selectedUnique.list > 0
 		end
-		controls.selectedUniqueLabel.shown = controls.selectedUnique.shown
-		updateLastAnchor(controls.selectedUnique)
+		controls.selectedUnique.tooltipFunc = function(tooltip)
+			tooltip:Clear()
+			local hoveredEntry = controls.selectedUnique.list[controls.selectedUnique:GetHoverIndex()]
+			if not hoveredEntry or type(hoveredEntry) ~= "table" or not hoveredEntry.raw then
+				return
+			end
+			local uniqueItem = new("Item", hoveredEntry.raw)
+			self.itemsTab:AddItemTooltip(tooltip, uniqueItem, slot, true)
+		end
+		updateLastAnchor(controls.uniqueRequirement)
 		updateUniqueDropdown()
 	end
 
@@ -2670,29 +2715,25 @@ Remove: %s will be removed from the search results.]], term, term, term)
 	if controls.selectedBase then
 		controls.selectedBase.tooltipFunc = function(tooltip)
 			tooltip:Clear()
-			local influence1 = controls.influence1 and controls.influence1.selIndex or self.lastInfluence1 or 1
-			local influence2 = controls.influence2 and controls.influence2.selIndex or self.lastInfluence2 or 1
 			local selectedBaseValue = controls.selectedBase.list[controls.selectedBase:GetHoverIndex()]
 			local autoBaseDefenceProfile = type(selectedBaseValue) == "table" and selectedBaseValue.autoBaseDefenceProfile or nil
 			local anyBase = type(selectedBaseValue) == "table" and selectedBaseValue.anyBase or nil
 			local exactBaseName = type(selectedBaseValue) == "table" and selectedBaseValue.baseName or selectedBaseValue
-			local tooltipText = autoBaseDefenceProfile
-				and self:GetAutoBaseTooltipText(slot, existingItem, statWeights, influence1, influence2, autoBaseDefenceProfile, popupAutoBaseSearchCount)
-				or anyBase
-				and "Any Base: search all compatible bases for this slot without adding a base filter."
-				or self:GetExactBaseTooltipText(exactBaseName)
-			local currentRarity = controls.rarityFilter and rarityFilterByIndex[controls.rarityFilter.selIndex] or nil
-			if not autoBaseDefenceProfile and not anyBase and exactBaseName and currentRarity == "unique" then
-				local uniqueTooltip = self:GetUniqueRankedTooltipText(slot, exactBaseName, statWeights)
-				if uniqueTooltip then
-					tooltipText = tooltipText .. uniqueTooltip
-				end
-			end
-			for line in tooltipText:gmatch("([^\n]*)\n?") do
-				if line ~= "" then
-					tooltip:AddLine(16, line)
-				else
-					tooltip:AddLine(10, "")
+			if not autoBaseDefenceProfile and not anyBase and exactBaseName then
+				local baseItem = new("Item", "Rarity: RARE\nTrade Search\n" .. exactBaseName)
+				self.itemsTab:AddItemTooltip(tooltip, baseItem, slot, true)
+			else
+				local influence1 = controls.influence1 and controls.influence1.selIndex or self.lastInfluence1 or 1
+				local influence2 = controls.influence2 and controls.influence2.selIndex or self.lastInfluence2 or 1
+				local tooltipText = autoBaseDefenceProfile
+					and self:GetAutoBaseTooltipText(slot, existingItem, statWeights, influence1, influence2, autoBaseDefenceProfile, popupAutoBaseSearchCount)
+					or "Any Base: search all compatible bases for this slot without adding a base filter."
+				for line in tooltipText:gmatch("([^\n]*)\n?") do
+					if line ~= "" then
+						tooltip:AddLine(16, line)
+					else
+						tooltip:AddLine(10, "")
+					end
 				end
 			end
 		end
@@ -2820,6 +2861,9 @@ Remove: %s will be removed from the search results.]], term, term, term)
 				self.lastSelectedBaseName = options.selectedBaseName
 				options.autoBaseDefenceProfile = nil
 				options.autoBaseSearchCount = nil
+			end
+			if controls.uniqueRequirement then
+				self.lastUniqueRequirementFilter = controls.uniqueRequirement.selIndex
 			end
 			if controls.selectedUnique and controls.selectedUnique.selIndex then
 				local selectedUniqueValue = controls.selectedUnique.list[controls.selectedUnique.selIndex]
