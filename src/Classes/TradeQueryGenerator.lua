@@ -2000,14 +2000,7 @@ function TradeQueryGeneratorClass:FinishQuery()
 
 	local effective_max = MAX_FILTERS - num_extra
 
-	local prioritizedMods = {}
-	for _, entry in ipairs(self.modWeights) do
-		if #prioritizedMods < effective_max then
-			table.insert(prioritizedMods, entry)
-		else
-			break
-		end
-	end
+	local prioritizedMods = self.modWeights
 
 	self.modWeights = prioritizedMods
 
