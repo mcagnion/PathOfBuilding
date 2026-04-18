@@ -525,6 +525,51 @@ function TradeQueryGeneratorClass:GetRankedUniqueEntries(slot, baseName, statWei
 	return rankedUniques
 end
 
+function TradeQueryGeneratorClass:GetRankedSlotUniqueEntries(slot, existingItem, statWeights)
+	local selectableBaseNames = self:GetSelectableBaseNames(slot, existingItem)
+	if not selectableBaseNames then
+		return nil
+	end
+
+	local calcsTab = self.itemsTab and self.itemsTab.build and self.itemsTab.build.calcsTab
+	local getMiscCalculator = calcsTab and calcsTab.GetMiscCalculator
+	if not getMiscCalculator then
+		return nil
+	end
+
+	local calcFunc, baseOutput = getMiscCalculator(calcsTab)
+	if not calcFunc or not baseOutput then
+		return nil
+	end
+
+	local rankedUniques = { }
+	local seenNames = { }
+	local uniqueBaseData = getUniqueBaseData()
+	for _, baseName in ipairs(selectableBaseNames) do
+		for _, entry in ipairs(uniqueBaseData.entriesByBase[baseName] or { }) do
+			if not seenNames[entry.name] then
+				seenNames[entry.name] = true
+				local uniqueItem = new("Item", entry.raw)
+				local output = slot and calcFunc({ repSlotName = slot.slotName, repItem = uniqueItem }) or baseOutput
+				t_insert(rankedUniques, {
+					name = uniqueItem.title or entry.name,
+					baseName = uniqueItem.baseName or entry.baseName or baseName,
+					score = self:WeightedRatioOutputs(baseOutput, output, statWeights or { }) * 1000,
+				})
+			end
+		end
+	end
+
+	table.sort(rankedUniques, function(a, b)
+		if a.score == b.score then
+			return a.name < b.name
+		end
+		return a.score > b.score
+	end)
+
+	return #rankedUniques > 0 and rankedUniques or nil
+end
+
 function TradeQueryGeneratorClass:GetAutoBaseOptionEntries(slot, existingItem)
 	local selectableBaseNames = self:GetSelectableBaseNames(slot, existingItem)
 	if not selectableBaseNames then
@@ -2338,6 +2383,7 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 	local isWeaponSlot = slot and (slot.slotName == "Weapon 1" or slot.slotName == "Weapon 2")
 	local isEldritchModSlot = slot and eldritchModSlots[slot.slotName] == true
 	local selectableBaseNames = slot and self:GetSelectableBaseNames(slot, existingItem)
+	local updateUniqueDropdown = nil
 
 	controls.includeCorrupted = new("CheckBoxControl", {"TOP",nil,"TOP"}, {-88, 30, 18}, "Corrupted Mods:", function(state) end, "Includes corruption implicit modifiers in the weighted sum.\nNote that there is a maximum search filter count which means this might cause other weights to not be included.")
 	controls.includeCorrupted.state = not context.slotTbl.alreadyCorrupted and (self.lastIncludeCorrupted == nil or self.lastIncludeCorrupted == true)
@@ -2359,11 +2405,14 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		options.special = { itemName = context.slotTbl.slotName }
 	end
 
+	local isEquippedUnique = existingItem and existingItem.rarity == "UNIQUE"
 	local selectedRarityFilter
 	if context.slotTbl.unique then
 		selectedRarityFilter = "unique"
 	elseif self.lastRarityFilter then
 		selectedRarityFilter = self.lastRarityFilter
+	elseif isEquippedUnique then
+		selectedRarityFilter = "unique"
 	elseif self.lastRequireUnique == true then
 		selectedRarityFilter = "unique"
 	elseif self.lastRequireUnique == false then
@@ -2479,25 +2528,26 @@ Remove: %s will be removed from the search results.]], term, term, term)
 
 		local popupSelectedUniqueName = self.lastSelectedUniqueName
 
-		local function updateUniqueDropdown()
+		local cachedSlotUniques = nil
+		updateUniqueDropdown = function()
 			if not controls.selectedUnique then return end
 			local currentRarity = controls.rarityFilter and rarityFilterByIndex[controls.rarityFilter.selIndex] or nil
-			local currentBaseValue = controls.selectedBase and controls.selectedBase.list[controls.selectedBase.selIndex]
-			local currentBaseName = type(currentBaseValue) == "table" and currentBaseValue.baseName or currentBaseValue
-			if currentRarity ~= "unique" or not currentBaseName or popupBaseSelectionMode == BASE_SELECTION_MODE_ANY then
+			if currentRarity ~= "unique" then
 				controls.selectedUnique:SetList({ })
 				return
 			end
-			local rankedEntries = self:GetRankedUniqueEntries(slot, currentBaseName, statWeights)
-			if not rankedEntries or #rankedEntries == 0 then
+			if not cachedSlotUniques then
+				cachedSlotUniques = self:GetRankedSlotUniqueEntries(slot, existingItem, statWeights) or { }
+			end
+			if #cachedSlotUniques == 0 then
 				controls.selectedUnique:SetList({ })
 				return
 			end
-			local uniqueEntries = { { label = "All (" .. #rankedEntries .. " ranked)", uniqueName = nil } }
-			for i, entry in ipairs(rankedEntries) do
+			local uniqueEntries = { { label = "All (" .. #cachedSlotUniques .. " ranked)", uniqueName = nil, baseName = nil } }
+			for i, entry in ipairs(cachedSlotUniques) do
 				if i > MAX_UNIQUE_EXACT_SEARCHES then break end
 				local scoreText = entry.score ~= 0 and string.format(" (%.0f)", entry.score) or ""
-				t_insert(uniqueEntries, { label = entry.name .. scoreText, uniqueName = entry.name })
+				t_insert(uniqueEntries, { label = entry.name .. scoreText, uniqueName = entry.name, baseName = entry.baseName })
 			end
 			controls.selectedUnique:SetList(uniqueEntries)
 			controls.selectedUnique.selIndex = 1
@@ -2574,7 +2624,7 @@ Remove: %s will be removed from the search results.]], term, term, term)
 		controls.selectedUniqueLabel = new("LabelControl", {"RIGHT",controls.selectedUnique,"LEFT"}, {-5, 0, 0, 16}, "Unique:")
 		controls.selectedUnique.shown = function()
 			local currentRarity = controls.rarityFilter and rarityFilterByIndex[controls.rarityFilter.selIndex] or nil
-			return currentRarity == "unique" and popupBaseSelectionMode ~= BASE_SELECTION_MODE_ANY and controls.selectedUnique.list and #controls.selectedUnique.list > 0
+			return currentRarity == "unique" and controls.selectedUnique.list and #controls.selectedUnique.list > 0
 		end
 		controls.selectedUniqueLabel.shown = controls.selectedUnique.shown
 		updateLastAnchor(controls.selectedUnique)
@@ -2774,8 +2824,13 @@ Remove: %s will be removed from the search results.]], term, term, term)
 			if controls.selectedUnique and controls.selectedUnique.selIndex then
 				local selectedUniqueValue = controls.selectedUnique.list[controls.selectedUnique.selIndex]
 				local uniqueName = type(selectedUniqueValue) == "table" and selectedUniqueValue.uniqueName or nil
+				local uniqueBaseName = type(selectedUniqueValue) == "table" and selectedUniqueValue.baseName or nil
 				self.lastSelectedUniqueName = uniqueName
 				options.selectedUniqueName = uniqueName
+				if uniqueName and uniqueBaseName then
+					options.selectedBaseName = uniqueBaseName
+					self.lastSelectedBaseName = uniqueBaseName
+				end
 			else
 				self.lastSelectedUniqueName = nil
 				options.selectedUniqueName = nil
