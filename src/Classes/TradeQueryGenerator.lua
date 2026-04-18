@@ -356,7 +356,7 @@ local function getRankedCompatibleBaseNames(self, slot, existingItem, options)
 		local output = slot and calcFunc({ repSlotName = slot.slotName, repItem = testItem }) or baseOutput
 		t_insert(rankedBases, {
 			baseName = baseName,
-			score = self:WeightedRatioOutputs(baseOutput, output, options and options.statWeights or { }) * 1000,
+			score = self.WeightedRatioOutputs(baseOutput, output, options and options.statWeights or { }) * 1000,
 			fallbackScore = getBaseDefenceFallbackScore(baseName),
 			isCurrent = existingItem and existingItem.baseName == baseName or false,
 		})
@@ -511,7 +511,7 @@ function TradeQueryGeneratorClass:GetRankedUniqueEntries(slot, baseName, statWei
 		t_insert(rankedUniques, {
 			name = uniqueItem.title or entry.name,
 			baseName = uniqueItem.baseName or entry.baseName or baseName,
-			score = self:WeightedRatioOutputs(baseOutput, output, statWeights or { }) * 1000,
+			score = self.WeightedRatioOutputs(baseOutput, output, statWeights or { }) * 1000,
 		})
 	end
 
@@ -573,7 +573,7 @@ function TradeQueryGeneratorClass:GetRankedSlotUniqueEntries(slot, existingItem,
 				t_insert(rankedUniques, {
 					name = uniqueItem.title or entry.name,
 					baseName = uniqueItem.baseName or entry.baseName or baseName,
-					score = self:WeightedRatioOutputs(baseOutput, output, statWeights or { }) * 1000,
+					score = self.WeightedRatioOutputs(baseOutput, output, statWeights or { }) * 1000,
 					raw = entry.raw,
 				})
 				::nextUniqueEntry::

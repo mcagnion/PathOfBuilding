@@ -208,7 +208,7 @@ Implicits: 1
 						}
 					}
 				})
-				queryGen.WeightedRatioOutputs = function(_, _, output)
+				queryGen.WeightedRatioOutputs = function(_, output)
 					return output.score
 				end
 
@@ -248,7 +248,7 @@ Implicits: 1
 						}
 					}
 				})
-				queryGen.WeightedRatioOutputs = function(_, _, output)
+				queryGen.WeightedRatioOutputs = function(_, output)
 					return output.score
 				end
 
@@ -277,7 +277,7 @@ Implicits: 1
 						}
 					}
 				})
-				queryGen.WeightedRatioOutputs = function(_, _, output)
+				queryGen.WeightedRatioOutputs = function(_, output)
 					return output.score
 				end
 				return queryGen:GetUniqueRankedTooltipText({ slotName = "Weapon 1" }, "Void Sceptre", {})
@@ -369,7 +369,7 @@ Implicits: 1
 					}
 				}
 			})
-			queryGen.WeightedRatioOutputs = function(_, _, output)
+			queryGen.WeightedRatioOutputs = function(_, output)
 				return output.score
 			end
 
@@ -422,7 +422,7 @@ Implicits: 1
 					}
 				}
 			})
-			queryGen.WeightedRatioOutputs = function(_, _, output)
+			queryGen.WeightedRatioOutputs = function(_, output)
 				return output.score
 			end
 
@@ -455,7 +455,7 @@ Implicits: 1
 					}
 				}
 			})
-			queryGen.WeightedRatioOutputs = function(_, _, output)
+			queryGen.WeightedRatioOutputs = function(_, output)
 				return output.score
 			end
 
