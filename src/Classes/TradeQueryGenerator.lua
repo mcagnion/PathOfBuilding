@@ -1552,6 +1552,24 @@ function TradeQueryGeneratorClass:GetTradeStatEntries()
 	return self.tradeStatEntries
 end
 
+function TradeQueryGeneratorClass:GetTradeStatStrippedIndex()
+	if self.tradeStatStrippedIndex then
+		return self.tradeStatStrippedIndex
+	end
+	local entries = self:GetTradeStatEntries()
+	if not entries then
+		return nil
+	end
+	self.tradeStatStrippedIndex = { }
+	for _, entry in ipairs(entries) do
+		local stripped = entry.text:gsub("[#()0-9%-%+%.]", "")
+		if not self.tradeStatStrippedIndex[stripped] then
+			self.tradeStatStrippedIndex[stripped] = entry
+		end
+	end
+	return self.tradeStatStrippedIndex
+end
+
 function TradeQueryGeneratorClass:GenerateModWeights(modsToTest)
 	local start = GetTime()
 	for _, entry in pairs(modsToTest) do
@@ -2023,10 +2041,18 @@ function TradeQueryGeneratorClass:FinishQuery()
 						local allModLines = { }
 						for _, ml in ipairs(uniqueItem.explicitModLines or { }) do t_insert(allModLines, ml) end
 						for _, ml in ipairs(uniqueItem.implicitModLines or { }) do t_insert(allModLines, ml) end
+						local seenStripped = { }
 						for _, ml in ipairs(allModLines) do
+							if not uniqueItem:CheckModLineVariant(ml) then
+								goto nextModLine
+							end
 							local strippedLine = ml.line:gsub("[#()0-9%-%+%.]", "")
+							if seenStripped[strippedLine] then
+								goto nextModLine
+							end
+							seenStripped[strippedLine] = true
 							local foundInModData = false
-							for modType, mods in pairs(self.modData or { }) do
+							for _, mods in pairs(self.modData or { }) do
 								for _, modEntry in pairs(mods) do
 									if modEntry.tradeMod and modEntry.tradeMod.text then
 										if modEntry.tradeMod.text:gsub("[#()0-9%-%+%.]", "") == strippedLine then
@@ -2036,24 +2062,28 @@ function TradeQueryGeneratorClass:FinishQuery()
 									end
 								end
 							end
-							if not foundInModData and not uniqueModIds[strippedLine] and self.calcContext.calcFunc then
-								for _, tradeStat in ipairs(self:GetTradeStatEntries() or { }) do
-									if tradeStat.text:gsub("[#()0-9%-%+%.]", "") == strippedLine and not uniqueModIds[tradeStat.id] then
-										self.calcContext.testItem.explicitModLines[1] = { line = ml.line, custom = true }
-										self.calcContext.testItem:BuildAndParseRaw()
-										local output = self.calcContext.calcFunc({ repSlotName = self.calcContext.slot.slotName, repItem = self.calcContext.testItem })
-										local meanStatDiff = TradeQueryGeneratorClass.WeightedRatioOutputs(self.calcContext.baseOutput, output, self.calcContext.options.statWeights or { }) * 1000 - (self.calcContext.baseStatValue or 0)
-										if meanStatDiff > 0.01 then
-											local modValue = ml.line:match("(%d+)")
-											modValue = tonumber(modValue) or 1
-											t_insert(uniqueExtraWeights, { tradeModId = tradeStat.id, weight = meanStatDiff / modValue, meanStatDiff = meanStatDiff, invert = false })
-											uniqueModIds[tradeStat.id] = true
-											uniqueModIds[strippedLine] = true
+							if not foundInModData and self.calcContext.calcFunc then
+								local tradeStatIndex = self:GetTradeStatStrippedIndex()
+								local tradeStat = tradeStatIndex and tradeStatIndex[strippedLine]
+								if tradeStat and not uniqueModIds[tradeStat.id] then
+									self.calcContext.testItem.explicitModLines[1] = { line = ml.line, custom = true }
+									self.calcContext.testItem:BuildAndParseRaw()
+									local output = self.calcContext.calcFunc({ repSlotName = self.calcContext.slot.slotName, repItem = self.calcContext.testItem })
+									local meanStatDiff = TradeQueryGeneratorClass.WeightedRatioOutputs(self.calcContext.baseOutput, output, self.calcContext.options.statWeights or { }) * 1000 - (self.calcContext.baseStatValue or 0)
+									if meanStatDiff > 0.01 then
+										local minVal, maxVal = ml.line:match("%((%d+)%-(%d+)%)")
+										local modValue
+										if minVal and maxVal then
+											modValue = (tonumber(minVal) + tonumber(maxVal)) / 2
+										else
+											modValue = tonumber(ml.line:match("(%d+)")) or 1
 										end
-										break
+										t_insert(uniqueExtraWeights, { tradeModId = tradeStat.id, weight = meanStatDiff / modValue, meanStatDiff = meanStatDiff, invert = false })
+										uniqueModIds[tradeStat.id] = true
 									end
 								end
 							end
+							::nextModLine::
 						end
 						break
 					end
@@ -2247,6 +2277,8 @@ function TradeQueryGeneratorClass:FinishQuery()
 	if #queryTable.query.stats[1].filters == 0 and not rankedUniqueEntries then
 		-- No mods to filter
 		errMsg = "Could not generate search, found no mods to search for"
+	elseif #queryTable.query.stats[1].filters == 0 and rankedUniqueEntries then
+		ConPrintf("Trade query: no weight filters for unique search, results will be sorted by price only")
 	end
 
 	if self.requesterContext then

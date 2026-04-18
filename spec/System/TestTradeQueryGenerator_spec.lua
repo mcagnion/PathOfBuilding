@@ -220,6 +220,74 @@ Implicits: 1
 			assert.are.same({ "Nebulis", "Replica Nebulis" }, { ranked[1].name, ranked[2].name })
 		end)
 
+		it("generates ranked unique tooltip text with scores", function()
+			local originalUniques = data.uniques
+			local ok, tooltipText = pcall(function()
+				data.uniques = {
+					mace = {
+						[[Nebulis
+Void Sceptre
+Variant: Current
+Requires Level 68, 104 Str, 122 Int
+Implicits: 1
+40% increased Elemental Damage
+(5-10)% increased Elemental Damage per 1% Fire, Cold, or Lightning Resistance above 75%]],
+					},
+				}
+
+				local queryGen = new("TradeQueryGenerator", {
+					itemsTab = {
+						build = {
+							calcsTab = {
+								GetMiscCalculator = function()
+									return function(context)
+										return { score = 40 }
+									end, { score = 0 }
+								end
+							}
+						}
+					}
+				})
+				queryGen.WeightedRatioOutputs = function(_, _, output)
+					return output.score
+				end
+
+				return queryGen:GetUniqueRankedTooltipText({ slotName = "Weapon 1" }, "Void Sceptre", {})
+			end)
+
+			data.uniques = originalUniques
+			assert.is_true(ok)
+			assert.is_not_nil(tooltipText)
+			assert.is_truthy(tooltipText:find("Nebulis"))
+			assert.is_truthy(tooltipText:find("ranked by build score"))
+		end)
+
+		it("returns nil tooltip for base with no uniques", function()
+			local originalUniques = data.uniques
+			local ok, tooltipText = pcall(function()
+				data.uniques = { }
+				local queryGen = new("TradeQueryGenerator", {
+					itemsTab = {
+						build = {
+							calcsTab = {
+								GetMiscCalculator = function()
+									return function() return { score = 0 } end, { score = 0 }
+								end
+							}
+						}
+					}
+				})
+				queryGen.WeightedRatioOutputs = function(_, _, output)
+					return output.score
+				end
+				return queryGen:GetUniqueRankedTooltipText({ slotName = "Weapon 1" }, "Void Sceptre", {})
+			end)
+
+			data.uniques = originalUniques
+			assert.is_true(ok)
+			assert.is_nil(tooltipText)
+		end)
+
 		it("offers auto base profiles for empty armour slots", function()
 			local queryGen = new("TradeQueryGenerator", {
 				itemsTab = {
