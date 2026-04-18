@@ -1563,8 +1563,10 @@ function TradeQueryGeneratorClass:GetTradeStatStrippedIndex()
 	self.tradeStatStrippedIndex = { }
 	for _, entry in ipairs(entries) do
 		local stripped = entry.text:gsub("[#()0-9%-%+%.]", "")
-		if not self.tradeStatStrippedIndex[stripped] then
-			self.tradeStatStrippedIndex[stripped] = entry
+		local tradeType = entry.id and entry.id:match("^(%a+)%.") or "explicit"
+		local key = tradeType .. ":" .. stripped
+		if not self.tradeStatStrippedIndex[key] then
+			self.tradeStatStrippedIndex[key] = entry
 		end
 	end
 	return self.tradeStatStrippedIndex
@@ -2025,12 +2027,28 @@ function TradeQueryGeneratorClass:FinishQuery()
 			queryFilters.type_filters.filters.rarity = nil
 		end
 		local filters = 0
+		local nonExplicitPrioritizedIds = { }
+		for _, pm in ipairs(prioritizedMods) do
+			if not pm.tradeModId:match("^explicit%.") then
+				nonExplicitPrioritizedIds[pm.tradeModId] = true
+			end
+		end
 		local baseDefencePercentile = baseOverride and baseOverride.baseDefencePercentile or self.calcContext.baseDefencePercentile
 		local sameBaseType = baseOverride and baseOverride.baseName or self.calcContext.sameBaseType
 		local uniqueName = baseOverride and baseOverride.uniqueName or nil
 		local uniqueModIds = nil
 		local uniqueExtraWeights = nil
 		if uniqueName then
+			local prioritizedModIndex = { }
+			local prioritizedStatIndex = { }
+			for _, pm in ipairs(prioritizedMods) do
+				prioritizedModIndex[pm.tradeModId] = true
+				local statNum = pm.tradeModId:match("%.(.+)")
+				if statNum then
+					prioritizedStatIndex[statNum] = pm.tradeModId
+				end
+			end
+
 			local uniqueData = getUniqueBaseData().entriesByBase[sameBaseType or ""]
 			if uniqueData then
 				for _, entry in ipairs(uniqueData) do
@@ -2051,35 +2069,53 @@ function TradeQueryGeneratorClass:FinishQuery()
 								goto nextModLine
 							end
 							seenStripped[strippedLine] = true
-							local foundInModData = false
+
+							-- Find all matching trade mod IDs for this mod line
+							local modTradeType = ml.implicit and "implicit" or "explicit"
+							local matchedTradeIds = { }
 							for _, mods in pairs(self.modData or { }) do
 								for _, modEntry in pairs(mods) do
-									if modEntry.tradeMod and modEntry.tradeMod.text then
+									if modEntry.tradeMod and modEntry.tradeMod.text and modEntry.tradeMod.type == modTradeType then
 										if modEntry.tradeMod.text:gsub("[#()0-9%-%+%.]", "") == strippedLine then
-											uniqueModIds[modEntry.tradeMod.id] = true
-											foundInModData = true
+											t_insert(matchedTradeIds, modEntry.tradeMod.id)
 										end
 									end
 								end
 							end
-							if not foundInModData and self.calcContext.calcFunc then
+							if #matchedTradeIds == 0 then
 								local tradeStatIndex = self:GetTradeStatStrippedIndex()
-								local tradeStat = tradeStatIndex and tradeStatIndex[strippedLine]
-								if tradeStat and not uniqueModIds[tradeStat.id] then
-									self.calcContext.testItem.explicitModLines[1] = { line = ml.line, custom = true }
-									self.calcContext.testItem:BuildAndParseRaw()
-									local output = self.calcContext.calcFunc({ repSlotName = self.calcContext.slot.slotName, repItem = self.calcContext.testItem })
-									local meanStatDiff = TradeQueryGeneratorClass.WeightedRatioOutputs(self.calcContext.baseOutput, output, self.calcContext.options.statWeights or { }) * 1000 - (self.calcContext.baseStatValue or 0)
-									if meanStatDiff > 0.01 then
-										local minVal, maxVal = ml.line:match("%((%d+)%-(%d+)%)")
-										local modValue
-										if minVal and maxVal then
-											modValue = (tonumber(minVal) + tonumber(maxVal)) / 2
-										else
-											modValue = tonumber(ml.line:match("(%d+)")) or 1
+								local tradeStat = tradeStatIndex and tradeStatIndex[modTradeType .. ":" .. strippedLine]
+								if tradeStat then
+									t_insert(matchedTradeIds, tradeStat.id)
+								end
+							end
+
+							-- For each matched ID, either mark it for prioritizedMods or evaluate its weight
+							for _, tradeModId in ipairs(matchedTradeIds) do
+								if not uniqueModIds[tradeModId] then
+									local statNum = tradeModId:match("%.(.+)")
+									local crossTypeId = statNum and prioritizedStatIndex[statNum]
+									if prioritizedModIndex[tradeModId] then
+										uniqueModIds[tradeModId] = true
+									elseif crossTypeId and not uniqueModIds[crossTypeId] then
+										-- Same stat exists in prioritizedMods under a different type (e.g. implicit vs explicit)
+										uniqueModIds[crossTypeId] = true
+									elseif self.calcContext.calcFunc then
+										self.calcContext.testItem.explicitModLines = { { line = ml.line, custom = true } }
+										self.calcContext.testItem:BuildAndParseRaw()
+										local output = self.calcContext.calcFunc({ repSlotName = self.calcContext.slot.slotName, repItem = self.calcContext.testItem })
+										local meanStatDiff = TradeQueryGeneratorClass.WeightedRatioOutputs(self.calcContext.baseOutput, output, self.calcContext.options.statWeights or { }) * 1000 - (self.calcContext.baseStatValue or 0)
+										if meanStatDiff > 0.01 then
+											local minVal, maxVal = ml.line:match("%((%d+)%-(%d+)%)")
+											local modValue
+											if minVal and maxVal then
+												modValue = (tonumber(minVal) + tonumber(maxVal)) / 2
+											else
+												modValue = tonumber(ml.line:match("(%d+)")) or 1
+											end
+											t_insert(uniqueExtraWeights, { tradeModId = tradeModId, weight = meanStatDiff / modValue, meanStatDiff = meanStatDiff, invert = false })
+											uniqueModIds[tradeModId] = true
 										end
-										t_insert(uniqueExtraWeights, { tradeModId = tradeStat.id, weight = meanStatDiff / modValue, meanStatDiff = meanStatDiff, invert = false })
-										uniqueModIds[tradeStat.id] = true
 									end
 								end
 							end
@@ -2149,7 +2185,7 @@ function TradeQueryGeneratorClass:FinishQuery()
 		end
 
 		for _, entry in ipairs(prioritizedMods) do
-			if not uniqueModIds or uniqueModIds[entry.tradeModId] then
+			if not uniqueModIds or uniqueModIds[entry.tradeModId] or nonExplicitPrioritizedIds[entry.tradeModId] then
 				t_insert(queryTable.query.stats[1].filters, { id = entry.tradeModId, value = { weight = (entry.invert == true and entry.weight * -1 or entry.weight) } })
 				filters = filters + 1
 				if filters == effective_max then
