@@ -939,5 +939,57 @@ Implicits: 1
 			assert.are.equal("Nebulis", dkjson.decode(queryGen.requesterContext.tradeQueryPlan[1].query).query.name)
 			assert.are.equal("Replica Nebulis", dkjson.decode(queryGen.requesterContext.tradeQueryPlan[2].query).query.name)
 		end)
+
+		it("targets a single unique when selectedUniqueName is set", function()
+			local queryJson
+			local originalClosePopup = main.ClosePopup
+			main.ClosePopup = function() end
+
+			local queryGen = new("TradeQueryGenerator", { itemsTab = { items = {} } })
+			queryGen.requesterCallback = function(_, payload, errMsg)
+				assert.is_nil(errMsg)
+				queryJson = payload
+			end
+			queryGen.requesterContext = {}
+			queryGen.modWeights = {
+				{ tradeModId = "explicit.stat_1", weight = 2, meanStatDiff = 20 }
+			}
+			queryGen.calcContext = {
+				slot = { selItemId = 1, slotName = "Weapon 1" },
+				testItem = new("Item", "Rarity: RARE\nStat Tester\nVoid Sceptre"),
+				calcFunc = function() return { Score = 100 } end,
+				baseOutput = { Score = 100 },
+				baseStatValue = 0,
+				itemCategoryQueryStr = "weapon.onemace",
+				options = {
+					includeMirrored = true,
+					influence1 = 1,
+					influence2 = 1,
+					selectedBaseName = "Void Sceptre",
+					selectedUniqueName = "Nebulis",
+					rarityFilter = "unique",
+					statWeights = {
+						{ stat = "Score", weightMult = 1 }
+					}
+				},
+				sameBaseType = "Void Sceptre",
+				special = {},
+			}
+			queryGen.itemsTab.items[1] = {
+				explicitModLines = {},
+				scourgeModLines = {},
+				implicitModLines = {},
+				crucibleModLines = {},
+			}
+
+			queryGen:FinishQuery()
+
+			main.ClosePopup = originalClosePopup
+
+			local primaryQuery = dkjson.decode(queryJson)
+			assert.are.equal("Void Sceptre", primaryQuery.query.type)
+			assert.are.equal("Nebulis", primaryQuery.query.name)
+			assert.is_nil(queryGen.requesterContext.tradeQueryPlan)
+		end)
 	end)
 end)
