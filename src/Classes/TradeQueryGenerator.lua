@@ -104,6 +104,7 @@ local eldritchModSlots = {
 local MAX_FILTERS = 35
 local MAX_AUTO_BASE_SEARCHES = 4
 local DEFAULT_AUTO_BASE_SEARCHES = 2
+local MAX_UNIQUE_EXACT_SEARCHES = 6
 local AUTO_BASE_OPTION_LABEL = "Multiple (Top Bases)"
 local AUTO_BASE_OPTION_ANY_KEY = "any"
 local BASE_SELECTION_MODE_ANY = "any"
@@ -119,8 +120,8 @@ local autoBaseDefenceProfiles = {
 	{ key = "armour/energy_shield", label = "Multiple: STR/INT (Armour/ES)" },
 	{ key = "evasion/energy_shield", label = "Multiple: DEX/INT (Evasion/ES)" },
 }
-local cachedUniqueBaseNames = nil
-local cachedUniqueBaseNamesSource = nil
+local cachedUniqueBaseData = nil
+local cachedUniqueBaseDataSource = nil
 
 local autoBaseCountEntries = {
 	{ key = 2, label = "Top 2" },
@@ -223,28 +224,54 @@ local function getSlotFallbackBaseType(slot)
 	return nil
 end
 
-local function getUniqueBaseNames()
-	if cachedUniqueBaseNames and cachedUniqueBaseNamesSource == data.uniques then
-		return cachedUniqueBaseNames
+local function getUniqueBaseData()
+	if cachedUniqueBaseData and cachedUniqueBaseDataSource == data.uniques then
+		return cachedUniqueBaseData
 	end
 
-	local uniqueBaseNames = { }
+	local uniqueBaseData = {
+		baseNames = { },
+		entriesByBase = { },
+	}
 	for _, group in pairs(data.uniques or { }) do
 		for _, raw in ipairs(group) do
-			local lineIndex = 0
-			for line in raw:gmatch("[^\n]+") do
-				lineIndex = lineIndex + 1
-				if lineIndex == 2 then
-					uniqueBaseNames[line] = true
-					break
+			local item = new("Item", raw)
+			local baseName = item.baseName
+			local uniqueName = item.title or item.name
+			if baseName and uniqueName and uniqueName ~= "?" then
+				uniqueBaseData.baseNames[baseName] = true
+				uniqueBaseData.entriesByBase[baseName] = uniqueBaseData.entriesByBase[baseName] or { }
+				local alreadyAdded = false
+				for _, existingEntry in ipairs(uniqueBaseData.entriesByBase[baseName]) do
+					if existingEntry.name == uniqueName then
+						alreadyAdded = true
+						break
+					end
+				end
+				if not alreadyAdded then
+					t_insert(uniqueBaseData.entriesByBase[baseName], {
+						name = uniqueName,
+						baseName = baseName,
+						raw = raw,
+					})
 				end
 			end
 		end
 	end
 
-	cachedUniqueBaseNames = uniqueBaseNames
-	cachedUniqueBaseNamesSource = data.uniques
-	return uniqueBaseNames
+	for _, entries in pairs(uniqueBaseData.entriesByBase) do
+		table.sort(entries, function(a, b)
+			return a.name < b.name
+		end)
+	end
+
+	cachedUniqueBaseData = uniqueBaseData
+	cachedUniqueBaseDataSource = data.uniques
+	return uniqueBaseData
+end
+
+local function getUniqueBaseNames()
+	return getUniqueBaseData().baseNames
 end
 
 local function getSlotBaseType(slot, existingItem)
@@ -458,6 +485,44 @@ function TradeQueryGeneratorClass:GetSelectableBaseNames(slot, existingItem, def
 	end
 	table.sort(baseNames)
 	return #baseNames > 0 and baseNames or nil
+end
+
+function TradeQueryGeneratorClass:GetRankedUniqueEntries(slot, baseName, statWeights)
+	local uniqueEntries = getUniqueBaseData().entriesByBase[baseName]
+	if not uniqueEntries or #uniqueEntries == 0 then
+		return nil
+	end
+
+	local calcsTab = self.itemsTab and self.itemsTab.build and self.itemsTab.build.calcsTab
+	local getMiscCalculator = calcsTab and calcsTab.GetMiscCalculator
+	if not getMiscCalculator then
+		return uniqueEntries
+	end
+
+	local calcFunc, baseOutput = getMiscCalculator(calcsTab)
+	if not calcFunc or not baseOutput then
+		return uniqueEntries
+	end
+
+	local rankedUniques = { }
+	for _, entry in ipairs(uniqueEntries) do
+		local uniqueItem = new("Item", entry.raw)
+		local output = slot and calcFunc({ repSlotName = slot.slotName, repItem = uniqueItem }) or baseOutput
+		t_insert(rankedUniques, {
+			name = uniqueItem.title or entry.name,
+			baseName = uniqueItem.baseName or entry.baseName or baseName,
+			score = self:WeightedRatioOutputs(baseOutput, output, statWeights or { }) * 1000,
+		})
+	end
+
+	table.sort(rankedUniques, function(a, b)
+		if a.score == b.score then
+			return a.name < b.name
+		end
+		return a.score > b.score
+	end)
+
+	return rankedUniques
 end
 
 function TradeQueryGeneratorClass:GetAutoBaseOptionEntries(slot, existingItem)
@@ -1842,6 +1907,10 @@ function TradeQueryGeneratorClass:FinishQuery()
 			rarityFilter = "any"
 		end
 	end
+	local rankedUniqueEntries = nil
+	if rarityFilter == "unique" and options.selectedBaseName then
+		rankedUniqueEntries = self:GetRankedUniqueEntries(self.calcContext.slot, options.selectedBaseName, options.statWeights)
+	end
 
 	local num_extra = 2
 	if self.calcContext.baseDefencePercentile then
@@ -1891,6 +1960,7 @@ function TradeQueryGeneratorClass:FinishQuery()
 		local filters = 0
 		local baseDefencePercentile = baseOverride and baseOverride.baseDefencePercentile or self.calcContext.baseDefencePercentile
 		local sameBaseType = baseOverride and baseOverride.baseName or self.calcContext.sameBaseType
+		local uniqueName = baseOverride and baseOverride.uniqueName or nil
 		local baseMinWeight = minWeight
 		if baseDefencePercentile and baseDefencePercentile ~= self.calcContext.baseDefencePercentile then
 			baseMinWeight = megalomaniacSpecialMinWeight or ((currentStatDiff + baseDefencePercentile.weight * 100) * 0.5)
@@ -1918,6 +1988,9 @@ function TradeQueryGeneratorClass:FinishQuery()
 		end
 		if sameBaseType then
 			queryTable.query.type = sameBaseType
+		end
+		if uniqueName then
+			queryTable.query.name = uniqueName
 		end
 
 		local andFilters = { type = "and", filters = { } }
@@ -2018,7 +2091,14 @@ function TradeQueryGeneratorClass:FinishQuery()
 		return queryTable
 	end
 
-	local queryTable = buildQueryTable()
+	local initialQueryOverride = nil
+	if rankedUniqueEntries and rankedUniqueEntries[1] then
+		initialQueryOverride = {
+			baseName = rankedUniqueEntries[1].baseName,
+			uniqueName = rankedUniqueEntries[1].name,
+		}
+	end
+	local queryTable = buildQueryTable(initialQueryOverride)
 	local queryPlan = nil
 	if options.autoBaseDefenceProfile and not options.selectedBaseName then
 		local autoBaseNames = self:GetAutoBaseSearchNames(self.calcContext.slot, originalItem, options, options.autoBaseSearchCount or self.lastAutoBaseSearchCount or DEFAULT_AUTO_BASE_SEARCHES)
@@ -2034,6 +2114,21 @@ function TradeQueryGeneratorClass:FinishQuery()
 				})
 			end
 		end
+	elseif rankedUniqueEntries and #rankedUniqueEntries > 1 then
+		queryPlan = { }
+		for index, uniqueEntry in ipairs(rankedUniqueEntries) do
+			if index > MAX_UNIQUE_EXACT_SEARCHES then
+				break
+			end
+			t_insert(queryPlan, {
+				baseName = uniqueEntry.baseName,
+				uniqueName = uniqueEntry.name,
+				query = dkjson.encode(buildQueryTable({
+					baseName = uniqueEntry.baseName,
+					uniqueName = uniqueEntry.name,
+				})),
+			})
+		end
 	end
 
 	local errMsg = nil
@@ -2043,6 +2138,7 @@ function TradeQueryGeneratorClass:FinishQuery()
 	end
 
 	if self.requesterContext then
+		self.requesterContext.rankedUniqueEntries = rankedUniqueEntries
 		self.requesterContext.tradeQueryPlan = queryPlan
 	end
 

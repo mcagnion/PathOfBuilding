@@ -169,6 +169,57 @@ describe("TradeQueryGenerator", function()
 			assert.are.same({ "Heavy Belt", "Leather Belt" }, bases)
 		end)
 
+		it("ranks unique items for an exact base by build score", function()
+			local originalUniques = data.uniques
+			local ok, ranked = pcall(function()
+				data.uniques = {
+					mace = {
+						[[Nebulis
+Void Sceptre
+Variant: Current
+Requires Level 68, 104 Str, 122 Int
+Implicits: 1
+40% increased Elemental Damage
+(5-10)% increased Elemental Damage per 1% Fire, Cold, or Lightning Resistance above 75%]],
+						[[Replica Nebulis
+Void Sceptre
+Variant: Current
+Requires Level 68, 104 Str, 122 Int
+Implicits: 1
+40% increased Elemental Damage
+(10-15)% increased Elemental Damage per 1% Missing Fire, Cold, or Lightning Resistance, up to a maximum of 450%]],
+					},
+				}
+
+				local queryGen = new("TradeQueryGenerator", {
+					itemsTab = {
+						build = {
+							calcsTab = {
+								GetMiscCalculator = function()
+									return function(context)
+										local scores = {
+											["Nebulis"] = 40,
+											["Replica Nebulis"] = 10,
+										}
+										return { score = scores[context.repItem.title] or 0 }
+									end, { score = 0 }
+								end
+							}
+						}
+					}
+				})
+				queryGen.WeightedRatioOutputs = function(_, _, output)
+					return output.score
+				end
+
+				return queryGen:GetRankedUniqueEntries({ slotName = "Weapon 1" }, "Void Sceptre", {})
+			end)
+
+			data.uniques = originalUniques
+			assert.is_true(ok)
+			assert.are.same({ "Nebulis", "Replica Nebulis" }, { ranked[1].name, ranked[2].name })
+		end)
+
 		it("offers auto base profiles for empty armour slots", function()
 			local queryGen = new("TradeQueryGenerator", {
 				itemsTab = {
@@ -823,6 +874,70 @@ describe("TradeQueryGenerator", function()
 			assert.are.equal(2, #queryGen.requesterContext.tradeQueryPlan)
 			assert.are.equal("Iron Hat", dkjson.decode(queryGen.requesterContext.tradeQueryPlan[1].query).query.type)
 			assert.are.equal("Cone Helmet", dkjson.decode(queryGen.requesterContext.tradeQueryPlan[2].query).query.type)
+		end)
+
+		it("builds a ranked unique search plan for exact-base unique queries", function()
+			local queryJson
+			local originalClosePopup = main.ClosePopup
+			main.ClosePopup = function() end
+
+			local queryGen = new("TradeQueryGenerator", { itemsTab = { items = {} } })
+			queryGen.requesterCallback = function(_, payload, errMsg)
+				assert.is_nil(errMsg)
+				queryJson = payload
+			end
+			queryGen.requesterContext = {}
+			queryGen.modWeights = {
+				{ tradeModId = "explicit.stat_1", weight = 2, meanStatDiff = 20 }
+			}
+			queryGen.GetRankedUniqueEntries = function()
+				return {
+					{ name = "Nebulis", baseName = "Void Sceptre", score = 40000 },
+					{ name = "Replica Nebulis", baseName = "Void Sceptre", score = 10000 },
+				}
+			end
+			queryGen.calcContext = {
+				slot = { selItemId = 1, slotName = "Weapon 1" },
+				testItem = new("Item", "Rarity: RARE\nStat Tester\nVoid Sceptre"),
+				calcFunc = function(context)
+					if context and context.repItem then
+						return { Score = 20 }
+					end
+					return { Score = 100 }
+				end,
+				baseOutput = { Score = 100 },
+				baseStatValue = 0,
+				itemCategoryQueryStr = "weapon.onemace",
+				options = {
+					includeMirrored = true,
+					influence1 = 1,
+					influence2 = 1,
+					selectedBaseName = "Void Sceptre",
+					rarityFilter = "unique",
+					statWeights = {
+						{ stat = "Score", weightMult = 1 }
+					}
+				},
+				sameBaseType = "Void Sceptre",
+				special = {},
+			}
+			queryGen.itemsTab.items[1] = {
+				explicitModLines = {},
+				scourgeModLines = {},
+				implicitModLines = {},
+				crucibleModLines = {},
+			}
+
+			queryGen:FinishQuery()
+
+			main.ClosePopup = originalClosePopup
+
+			local primaryQuery = dkjson.decode(queryJson)
+			assert.are.equal("Void Sceptre", primaryQuery.query.type)
+			assert.are.equal("Nebulis", primaryQuery.query.name)
+			assert.are.equal(2, #queryGen.requesterContext.tradeQueryPlan)
+			assert.are.equal("Nebulis", dkjson.decode(queryGen.requesterContext.tradeQueryPlan[1].query).query.name)
+			assert.are.equal("Replica Nebulis", dkjson.decode(queryGen.requesterContext.tradeQueryPlan[2].query).query.name)
 		end)
 	end)
 end)
