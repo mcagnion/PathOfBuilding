@@ -1240,14 +1240,14 @@ describe("TestDefence", function()
 		it("increases survival time when life leech is added", function()
 			local output = buildRecoveryCalcs({
 				enemySpeed = 5000,
-				skillGroup = "Freezing Pulse 20/0 Default  1\n"
+				skillGroup = "Freezing Pulse 20/0  1\n"
 			})
 			local baseLeech = output.LifeEHPLeechRate or 0
 			local baseSurvivalTime = output.EHPRecoverySurvivalTime or 0
 
 			output = buildRecoveryCalcs({
 				enemySpeed = 5000,
-				skillGroup = "Freezing Pulse 20/0 Default  1\n",
+				skillGroup = "Freezing Pulse 20/0  1\n",
 				customMods = [[
 					100% of Spell Damage Leeched as Life
 				]]
@@ -1349,7 +1349,7 @@ describe("TestDefence", function()
 
 			output = buildRecoveryCalcs({
 				enemySpeed = 100,
-				skillGroup = "Steelskin 20/0 Default  1\n"
+				skillGroup = "Steelskin 20/0  1\n"
 			})
 
 			assert.is_true((output.sharedGuardAbsorb or 0) > 0)
