@@ -224,6 +224,23 @@ local function getSlotFallbackBaseType(slot)
 	return nil
 end
 
+local function buildTestItemRaw(baseName)
+	local rawLines = { "Rarity: RARE", "Stat Tester", baseName }
+	local baseData = data.itemBases and data.itemBases[baseName]
+	local implicitText = baseData and baseData.implicit
+	if implicitText then
+		local implicitLines = {}
+		for line in implicitText:gmatch("[^\n]+") do
+			t_insert(implicitLines, line)
+		end
+		t_insert(rawLines, "Implicits: " .. #implicitLines)
+		for _, line in ipairs(implicitLines) do
+			t_insert(rawLines, line)
+		end
+	end
+	return table.concat(rawLines, "\n")
+end
+
 local function getUniqueBaseData()
 	if cachedUniqueBaseData and cachedUniqueBaseDataSource == data.uniques then
 		return cachedUniqueBaseData
@@ -360,7 +377,7 @@ local function getRankedCompatibleBaseNames(self, slot, existingItem, options)
 
 	local rankedBases = { }
 	for _, baseName in ipairs(selectableBaseNames) do
-		local testItem = new("Item", "Rarity: RARE\nStat Tester\n" .. baseName)
+		local testItem = new("Item", buildTestItemRaw(baseName))
 		applyRequestedInfluences(testItem, options)
 		local output = slot and calcFunc({ repSlotName = slot.slotName, repItem = testItem }) or baseOutput
 		t_insert(rankedBases, {
@@ -970,7 +987,7 @@ function TradeQueryGeneratorClass:GetAutoBaseSearchNames(slot, existingItem, opt
 	local calcFunc, baseOutput = self.itemsTab.build.calcsTab:GetMiscCalculator()
 	local rankedBases = { }
 	for _, baseName in ipairs(selectableBaseNames) do
-		local testItem = new("Item", "Rarity: RARE\nStat Tester\n" .. baseName)
+		local testItem = new("Item", buildTestItemRaw(baseName))
 		applyRequestedInfluences(testItem, options)
 		local output = slot and calcFunc({ repSlotName = slot.slotName, repItem = testItem }) or baseOutput
 		t_insert(rankedBases, {
@@ -1101,7 +1118,7 @@ function TradeQueryGeneratorClass:BuildBaseDefencePercentileForBase(slot, existi
 
 	local calcFunc = self.calcContext.calcFunc
 	local baseOutput = self.calcContext.baseOutput
-	local baseItem = new("Item", "Rarity: RARE\nStat Tester\n" .. baseName)
+	local baseItem = new("Item", buildTestItemRaw(baseName))
 	applyRequestedInfluences(baseItem, options)
 	local baseItemOutput = slot and calcFunc({ repSlotName = slot.slotName, repItem = baseItem }) or baseOutput
 	local compStatValue = TradeQueryGeneratorClass.WeightedRatioOutputs(baseOutput, baseItemOutput, options.statWeights) * 1000
@@ -2732,7 +2749,7 @@ Remove: %s will be removed from the search results.]], term, term, term)
 			local anyBase = type(selectedBaseValue) == "table" and selectedBaseValue.anyBase or nil
 			local exactBaseName = type(selectedBaseValue) == "table" and selectedBaseValue.baseName or selectedBaseValue
 			if not autoBaseDefenceProfile and not anyBase and exactBaseName then
-				local baseItem = new("Item", "Rarity: RARE\nTrade Search\n" .. exactBaseName)
+				local baseItem = new("Item", buildTestItemRaw(exactBaseName))
 				self.itemsTab:AddItemTooltip(tooltip, baseItem, slot, true)
 			else
 				local influence1 = controls.influence1 and controls.influence1.selIndex or self.lastInfluence1 or 1
