@@ -603,7 +603,7 @@ Implicits: 1
 				}
 			})
 
-			assert.are.equal("^xC79A2B120 ^x6FD3FF40", queryGen:GetBaseDefenceListDetailText("Hybrid Helm"))
+			assert.are.equal("^xC79A2B120 ^x6FD3FF40^7", queryGen:GetBaseDefenceListDetailText("Hybrid Helm"))
 		end)
 
 		it("does not use implicits as the selection detail for accessory bases", function()

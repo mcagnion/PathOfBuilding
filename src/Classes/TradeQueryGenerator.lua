@@ -663,7 +663,7 @@ function TradeQueryGeneratorClass:GetBaseDefenceListDetailText(baseName)
 		}
 		return (order[a:match("^(%^x......)")] or 99) < (order[b:match("^(%^x......)")] or 99)
 	end)
-	return #detailParts > 0 and t_concat(detailParts, " ") or nil
+	return #detailParts > 0 and t_concat(detailParts, " ") .. "^7" or nil
 end
 
 function TradeQueryGeneratorClass:GetBaseImplicitText(baseName)
@@ -2666,7 +2666,7 @@ Remove: %s will be removed from the search results.]], term, term, term)
 		end
 		controls.uniqueRequirementLabel.shown = controls.uniqueRequirement.shown
 
-		controls.selectedUnique = new("DropDownControl", {"LEFT",controls.uniqueRequirement,"RIGHT"}, {8, 0, 280, 18}, { }, function(index, value)
+		controls.selectedUnique = new("DropDownControl", {"LEFT",controls.uniqueRequirement,"RIGHT"}, {8, 0, 220, 18}, { }, function(index, value)
 			popupSelectedUniqueName = type(value) == "table" and value.uniqueName or nil
 		end)
 		controls.selectedUnique.enableDroppedWidth = true
