@@ -21,7 +21,6 @@ local getStatValue = common.getStatValue
 local formatDelta = common.formatDelta
 local slotHasOtherImbuedGem = common.slotHasOtherImbuedGem
 local getGemActiveSkills = common.getGemActiveSkills
-local alternateGemQualityPrefixMap = common.alternateGemQualityPrefixMap
 
 local imbuedCoinLabelByColor = {
 	[1] = "CoinOfPower",
@@ -194,7 +193,7 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters, buildState)
 			if gemInstance.gemData and grantedEffect and gemInstance.enabled and groupEnabled then
 				local gemType = grantedEffect.support and "Support" or (grantedEffect.hasGlobalEffect and "Global" or "Active")
 				local gemCategory = grantedEffect.support and "SUPPORT" or "ACTIVE"
-				local gemName = (alternateGemQualityPrefixMap[gemInstance.qualityId or "Default"] or "") .. gemInstance.nameSpec
+				local gemName = gemInstance.nameSpec
 				local groupLabel = socketGroup.displayLabel or socketGroup.label or ("Socket Group " .. groupIndex)
 				local currentQuality = m_max(0, gemInstance.quality or 0)
 				local naturalMaxLevel = gemInstance.gemData.naturalMaxLevel or 0
@@ -333,16 +332,20 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters, buildState)
 					end
 				end
 
+				local slotName = socketGroup.slot
+				local groupHasImbued = socketGroup.imbuedSupport and socketGroup.imbuedSupport ~= ""
 				if gemCategory == "ACTIVE"
 					and not isCorrupted
 					and currentLevel == 20
-					and socketGroup.slot
-					and not (gemInstance.imbuedSupport and gemInstance.imbuedSupport ~= "")
-					and not slotHasOtherImbuedGem(skillsTab, socketGroup.slot, socketGroup, gemIndex) then
+					and slotName
+					and not groupHasImbued
+					and not slotHasOtherImbuedGem(skillsTab, slotName, socketGroup) then
 					local activeSkills = getGemActiveSkills(socketGroup, gemInstance)
 					if #activeSkills > 0 then
 						local imbuedSupportEntries = { }
 						local imbuedCalcCount = 0
+						local currentGroupImbuedSupport = socketGroup.imbuedSupport
+						local currentSlotImbuedGrantedEffect = skillsTab.imbuedSupportBySlot and skillsTab.imbuedSupportBySlot[slotName] or nil
 						for _, supportGemData in ipairs(reportableImbuedSupports) do
 							local supportGrantedEffect = supportGemData.grantedEffect
 							local coinLabel = getImbuedCoinLabel(supportGemData)
@@ -358,9 +361,15 @@ function gemUpgradeReport.Build(skillsTab, currentStat, filters, buildState)
 								if imbuedCalcCount % 10 == 0 and co_running() then
 									co_yield()
 								end
-								gemInstance.imbuedSupport = supportGemData.grantedEffectId
+								socketGroup.imbuedSupport = supportGemData.name
+								if skillsTab.imbuedSupportBySlot then
+									skillsTab.imbuedSupportBySlot[slotName] = supportGrantedEffect
+								end
 								local errMsg, output = PCall(calcFunc, nil, useFullDPS)
-								gemInstance.imbuedSupport = ""
+								socketGroup.imbuedSupport = currentGroupImbuedSupport
+								if skillsTab.imbuedSupportBySlot then
+									skillsTab.imbuedSupportBySlot[slotName] = currentSlotImbuedGrantedEffect
+								end
 								if not errMsg then
 									local score = lowerIsBetter and -(getStatValue(output, currentStat, build) - baseValue) or (getStatValue(output, currentStat, build) - baseValue)
 									t_insert(imbuedSupportEntries, {

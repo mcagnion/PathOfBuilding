@@ -126,11 +126,9 @@ function supportReplacementReport.Build(skillsTab, currentStat, filters, buildSt
 					local currentName = gemInstance.nameSpec or gemInstance.gemData.name
 					local currentLevel = gemInstance.level or 0
 					local currentQuality = m_max(0, gemInstance.quality or 0)
-					local currentQualityId = gemInstance.qualityId or "Default"
 					local currentGemId = gemInstance.gemId
 					local currentNameSpec = gemInstance.nameSpec
 					local currentSkillId = gemInstance.skillId
-					local currentImbuedSupport = gemInstance.imbuedSupport
 					local currentCorrupted = gemInstance.corrupted
 
 					local replacementCalcCount = 0
@@ -169,8 +167,6 @@ function supportReplacementReport.Build(skillsTab, currentStat, filters, buildSt
 									gemInstance.grantedEffect = candidateGrantedEffect
 									gemInstance.level = candidateLevel
 									gemInstance.quality = candidateQuality
-									gemInstance.qualityId = "Default"
-									gemInstance.imbuedSupport = nil
 									gemInstance.corrupted = (candidateLevel > (candidateGemData.naturalMaxLevel or 0)) or candidateQuality > 20
 									skillsTab:ProcessSocketGroup(socketGroup)
 									local errMsg, output = PCall(calcFunc, nil, useFullDPS)
@@ -209,13 +205,10 @@ function supportReplacementReport.Build(skillsTab, currentStat, filters, buildSt
 											socketGroup = socketGroup,
 											gemIndex = gemIndex,
 											currentGemId = currentGemId,
-											currentQualityId = currentQualityId,
 											candidateGemId = candidateGemData.id,
 											candidateLevel = candidateLevel,
 											candidateQuality = candidateQuality,
-											candidateQualityId = "Default",
 											tradeGemNameSpec = getTradeGemNameSpec(candidateGemData),
-											tradeQualityId = "Default",
 											tradeNaturalMaxLevel = candidateGemData.naturalMaxLevel,
 											targetLevel = candidateLevel,
 											targetQuality = candidateQuality,
@@ -233,8 +226,6 @@ function supportReplacementReport.Build(skillsTab, currentStat, filters, buildSt
 									gemInstance.grantedEffect = gemInstance.gemData and gemInstance.gemData.grantedEffect
 									gemInstance.level = currentLevel
 									gemInstance.quality = currentQuality
-									gemInstance.qualityId = currentQualityId
-									gemInstance.imbuedSupport = currentImbuedSupport
 									gemInstance.corrupted = currentCorrupted
 									skillsTab:ProcessSocketGroup(socketGroup)
 								end

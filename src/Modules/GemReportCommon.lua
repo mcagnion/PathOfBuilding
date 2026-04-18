@@ -14,13 +14,6 @@ local co_yield = coroutine.yield
 
 local common = { }
 
-common.alternateGemQualityPrefixMap = {
-	Default = "",
-	Alternate1 = "Anomalous ",
-	Alternate2 = "Divergent ",
-	Alternate3 = "Phantasmal ",
-}
-
 function common.advanceBuildState(buildState)
 	if not buildState then
 		return
@@ -136,17 +129,17 @@ function common.isReportableImbuedSupportGem(gemData)
 	return gemData.grantedEffect.levels and gemData.grantedEffect.levels[1] ~= nil
 end
 
-function common.slotHasOtherImbuedGem(skillsTab, slotName, sourceGroup, sourceGemIndex)
+-- Upstream stores imbued support per-slot on the socket group (socketGroup.imbuedSupport = name),
+-- with SkillsTab:imbuedSupportBySlot[slotName] mirroring the grantedEffect. A slot is
+-- considered "already imbued" if any socket group targeting the slot has it set.
+function common.slotHasOtherImbuedGem(skillsTab, slotName, sourceGroup)
 	if not slotName then
 		return false
 	end
 	for _, socketGroup in ipairs(skillsTab.socketGroupList) do
-		if socketGroup.slot == slotName then
-			for gemIndex, gemInstance in ipairs(socketGroup.gemList) do
-				if not (socketGroup == sourceGroup and gemIndex == sourceGemIndex) and gemInstance.imbuedSupport and gemInstance.imbuedSupport ~= "" then
-					return true
-				end
-			end
+		if socketGroup ~= sourceGroup and socketGroup.slot == slotName
+			and socketGroup.imbuedSupport and socketGroup.imbuedSupport ~= "" then
+			return true
 		end
 	end
 	return false

@@ -117,6 +117,21 @@ local function buildGemFilterList(skillsTab)
 	return list
 end
 
+-- Resolve a reportRow's targetImbuedSupport (stored as a grantedEffectId) into the pair
+-- { name, grantedEffect } that the upstream imbued API expects.
+local function resolveImbuedSupportInfo(dataGems, grantedEffectId)
+	if not grantedEffectId then
+		return nil
+	end
+	local grantedEffect = data.skills[grantedEffectId]
+	local gemId = grantedEffect and data.gemForSkill[grantedEffect]
+	local gemData = gemId and dataGems[gemId]
+	if not (gemData and gemData.grantedEffect) then
+		return nil
+	end
+	return { name = gemData.name, grantedEffect = gemData.grantedEffect }
+end
+
 local SkillsTabClass = newClass("SkillsTab", "UndoHandler", "ControlHost", "Control", function(self, build)
 	self.UndoHandler()
 	self.ControlHost()
@@ -660,7 +675,6 @@ local function getGemTradePriceKey(reportRow, league)
 	return table.concat({
 		league or reportRow.tradeLeague or "",
 		reportRow.tradeGemNameSpec or reportRow.name or "",
-		reportRow.tradeQualityId or "Default",
 		tostring(reportRow.targetLevel or ""),
 		tostring(reportRow.targetQuality or ""),
 		tostring(reportRow.targetImbuedSupport or ""),
@@ -1167,9 +1181,6 @@ end
 function SkillsTabClass:BuildGemTradePriceQuery(reportRow, queryContext)
 	if not reportRow.tradeGemNameSpec or reportRow.tradeGemNameSpec == "" then
 		return nil, "Missing gem name."
-	end
-	if reportRow.tradeQualityId and reportRow.tradeQualityId ~= "Default" then
-		return nil, "Alt quality pricing is not supported yet."
 	end
 
 	local queryTable = {
@@ -1831,7 +1842,6 @@ function SkillsTabClass:AddGemQualitySummaryToTooltip(tooltip, gemInstance, qual
 		return 0
 	end
 	local gemData = gemInstance.gemData
-	local qualityType = gemInstance.qualityId or "Default"
 	local qualityValue = m_max(0, qualityAmount or gemInstance.quality or 0)
 	if qualityValue <= 0 then
 		return 0
@@ -1841,7 +1851,7 @@ function SkillsTabClass:AddGemQualitySummaryToTooltip(tooltip, gemInstance, qual
 	local function addQualityLines(qualityList, grantedEffect)
 		tooltip:AddLine(18, colorCodes.GEM .. grantedEffect.name)
 		tooltip:AddLine(16, colorCodes.NORMAL .. "At +" .. tostring(qualityValue) .. "% Quality:")
-		for _, qual in pairs(qualityList) do
+		for _, qual in ipairs(qualityList) do
 			local stats = { }
 			stats[qual[1]] = qual[2] * qualityValue
 			local descriptions = self.build.data.describeStats(stats, grantedEffect.statDescriptionScope)
@@ -1861,15 +1871,15 @@ function SkillsTabClass:AddGemQualitySummaryToTooltip(tooltip, gemInstance, qual
 	end
 
 	local addedSection = false
-	if gemData.grantedEffect and gemData.grantedEffect.qualityStats and gemData.grantedEffect.qualityStats[qualityType] then
-		addQualityLines(gemData.grantedEffect.qualityStats[qualityType], gemData.grantedEffect)
+	if gemData.grantedEffect and gemData.grantedEffect.qualityStats and gemData.grantedEffect.qualityStats[1] then
+		addQualityLines(gemData.grantedEffect.qualityStats, gemData.grantedEffect)
 		addedSection = true
 	end
-	if gemData.secondaryGrantedEffect and gemData.secondaryGrantedEffect.qualityStats and gemData.secondaryGrantedEffect.qualityStats[qualityType] then
+	if gemData.secondaryGrantedEffect and gemData.secondaryGrantedEffect.qualityStats and gemData.secondaryGrantedEffect.qualityStats[1] then
 		if addedSection then
 			tooltip:AddSeparator(10)
 		end
-		addQualityLines(gemData.secondaryGrantedEffect.qualityStats[qualityType], gemData.secondaryGrantedEffect)
+		addQualityLines(gemData.secondaryGrantedEffect.qualityStats, gemData.secondaryGrantedEffect)
 	end
 	return lineCount
 end
@@ -1959,7 +1969,7 @@ function SkillsTabClass:AddGemUpgradeReportPreviewGemTooltip(tooltip, gemInstanc
 	return true
 end
 
-function SkillsTabClass:AddGemUpgradeReportPreviewGemDataTooltip(tooltip, gemData, level, quality, qualityId, imbuedSupport)
+function SkillsTabClass:AddGemUpgradeReportPreviewGemDataTooltip(tooltip, gemData, level, quality)
 	if not gemData then
 		return false
 	end
@@ -1970,8 +1980,6 @@ function SkillsTabClass:AddGemUpgradeReportPreviewGemDataTooltip(tooltip, gemDat
 		nameSpec = gemData.name,
 		level = level or gemData.naturalMaxLevel or 1,
 		quality = quality or 0,
-		qualityId = qualityId or "Default",
-		imbuedSupport = imbuedSupport,
 		enabled = true,
 		count = 1,
 	}
@@ -2028,8 +2036,7 @@ function SkillsTabClass:AddGemUpgradeReportCandidateGemTooltip(tooltip, reportRo
 	local previewGem = copyTable(gemInstance, true)
 	previewGem.level = reportRow.targetLevel or previewGem.level
 	previewGem.quality = reportRow.targetQuality or previewGem.quality
-	previewGem.qualityId = reportRow.tradeQualityId or previewGem.qualityId or "Default"
-	previewGem.imbuedSupport = reportRow.targetImbuedSupport or previewGem.imbuedSupport
+	-- Imbued preview is rendered by AddGemUpgradeReportSupportTooltip below; the gem tooltip itself stays static.
 	previewGem.displayEffect = nil
 	local startLineIndex = #tooltip.lines + 1
 	if not self:AddGemUpgradeReportPreviewGemTooltip(tooltip, previewGem) then
@@ -2050,7 +2057,7 @@ function SkillsTabClass:AddGemUpgradeReportSupportTooltip(tooltip, supportGrante
 	if not gemData then
 		return false
 	end
-	return self:AddGemUpgradeReportPreviewGemDataTooltip(tooltip, gemData, 1, 0, "Default")
+	return self:AddGemUpgradeReportPreviewGemDataTooltip(tooltip, gemData, 1, 0)
 end
 
 function SkillsTabClass:AddGemUpgradeReportMethodTooltip(tooltip, reportRow)
@@ -2110,16 +2117,27 @@ function SkillsTabClass:AddGemUpgradeReportDeltaTooltip(tooltip, reportRow)
 
 	local currentLevel = gemInstance.level
 	local currentQuality = gemInstance.quality
-	local currentImbuedSupport = gemInstance.imbuedSupport
+	local slotName = socketGroup.slot
+	local currentGroupImbuedSupport = socketGroup.imbuedSupport
+	local currentSlotImbuedGrantedEffect = slotName and self.imbuedSupportBySlot and self.imbuedSupportBySlot[slotName] or nil
 	gemInstance.level = reportRow.targetLevel or gemInstance.level
 	gemInstance.quality = reportRow.targetQuality or gemInstance.quality
-	gemInstance.imbuedSupport = reportRow.targetImbuedSupport or gemInstance.imbuedSupport
+	local imbuedInfo = resolveImbuedSupportInfo(self.build.data.gems, reportRow.targetImbuedSupport)
+	if imbuedInfo then
+		socketGroup.imbuedSupport = imbuedInfo.name
+		if slotName and self.imbuedSupportBySlot then
+			self.imbuedSupportBySlot[slotName] = imbuedInfo.grantedEffect
+		end
+	end
 
 	local errMsg, upgradedOutput = PCall(calcFunc, nil, reportRow.useFullDPS)
 
 	gemInstance.level = currentLevel
 	gemInstance.quality = currentQuality
-	gemInstance.imbuedSupport = currentImbuedSupport
+	socketGroup.imbuedSupport = currentGroupImbuedSupport
+	if slotName and self.imbuedSupportBySlot then
+		self.imbuedSupportBySlot[slotName] = currentSlotImbuedGrantedEffect
+	end
 	self:ProcessSocketGroup(socketGroup)
 
 	if errMsg then
@@ -2209,7 +2227,7 @@ end
 function SkillsTabClass:AddSupportReplacementCandidateTooltip(tooltip, reportRow)
 	tooltip:Clear()
 	local gemData = reportRow and reportRow.candidateGemId and self.build.data.gems[reportRow.candidateGemId]
-	return self:AddGemUpgradeReportPreviewGemDataTooltip(tooltip, gemData, reportRow.candidateLevel, reportRow.candidateQuality, reportRow.candidateQualityId)
+	return self:AddGemUpgradeReportPreviewGemDataTooltip(tooltip, gemData, reportRow.candidateLevel, reportRow.candidateQuality)
 end
 
 function SkillsTabClass:AddSupportReplacementDeltaTooltip(tooltip, reportRow)
@@ -2238,8 +2256,6 @@ function SkillsTabClass:AddSupportReplacementDeltaTooltip(tooltip, reportRow)
 	local currentGrantedEffect = gemInstance.grantedEffect
 	local currentLevel = gemInstance.level
 	local currentQuality = gemInstance.quality
-	local currentQualityId = gemInstance.qualityId
-	local currentImbuedSupport = gemInstance.imbuedSupport
 	local currentCorrupted = gemInstance.corrupted
 
 	gemInstance.gemId = candidateGemData.id
@@ -2249,8 +2265,6 @@ function SkillsTabClass:AddSupportReplacementDeltaTooltip(tooltip, reportRow)
 	gemInstance.grantedEffect = candidateGemData.grantedEffect
 	gemInstance.level = reportRow.candidateLevel
 	gemInstance.quality = reportRow.candidateQuality
-	gemInstance.qualityId = reportRow.candidateQualityId or "Default"
-	gemInstance.imbuedSupport = nil
 	gemInstance.corrupted = (reportRow.candidateLevel or 0) > (candidateGemData.naturalMaxLevel or 0) or (reportRow.candidateQuality or 0) > 20
 	self:ProcessSocketGroup(socketGroup)
 
@@ -2263,8 +2277,6 @@ function SkillsTabClass:AddSupportReplacementDeltaTooltip(tooltip, reportRow)
 	gemInstance.grantedEffect = currentGrantedEffect
 	gemInstance.level = currentLevel
 	gemInstance.quality = currentQuality
-	gemInstance.qualityId = currentQualityId
-	gemInstance.imbuedSupport = currentImbuedSupport
 	gemInstance.corrupted = currentCorrupted
 	self:ProcessSocketGroup(socketGroup)
 
@@ -2304,16 +2316,27 @@ function SkillsTabClass:AddGemUpgradeReportTooltip(tooltip, reportRow)
 
 	local currentLevel = gemInstance.level
 	local currentQuality = gemInstance.quality
-	local currentImbuedSupport = gemInstance.imbuedSupport
+	local slotName = socketGroup.slot
+	local currentGroupImbuedSupport = socketGroup.imbuedSupport
+	local currentSlotImbuedGrantedEffect = slotName and self.imbuedSupportBySlot and self.imbuedSupportBySlot[slotName] or nil
 	gemInstance.level = reportRow.targetLevel or gemInstance.level
 	gemInstance.quality = reportRow.targetQuality or gemInstance.quality
-	gemInstance.imbuedSupport = reportRow.targetImbuedSupport or gemInstance.imbuedSupport
+	local imbuedInfo = resolveImbuedSupportInfo(self.build.data.gems, reportRow.targetImbuedSupport)
+	if imbuedInfo then
+		socketGroup.imbuedSupport = imbuedInfo.name
+		if slotName and self.imbuedSupportBySlot then
+			self.imbuedSupportBySlot[slotName] = imbuedInfo.grantedEffect
+		end
+	end
 
 	local errMsg, upgradedOutput = PCall(calcFunc, nil, reportRow.useFullDPS)
 
 	gemInstance.level = currentLevel
 	gemInstance.quality = currentQuality
-	gemInstance.imbuedSupport = currentImbuedSupport
+	socketGroup.imbuedSupport = currentGroupImbuedSupport
+	if slotName and self.imbuedSupportBySlot then
+		self.imbuedSupportBySlot[slotName] = currentSlotImbuedGrantedEffect
+	end
 	self:ProcessSocketGroup(socketGroup)
 
 	if errMsg then

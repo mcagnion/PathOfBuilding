@@ -22,7 +22,6 @@ local formatDelta = common.formatDelta
 local isReportableImbuedSupportGem = common.isReportableImbuedSupportGem
 local slotHasOtherImbuedGem = common.slotHasOtherImbuedGem
 local getGemActiveSkills = common.getGemActiveSkills
-local alternateGemQualityPrefixMap = common.alternateGemQualityPrefixMap
 
 local gemTradeReport = { }
 
@@ -78,7 +77,7 @@ function gemTradeReport.Build(skillsTab, currentStat, filters, buildState)
 	-- Pre-filter imbued support gems once instead of scanning data.gems per active gem.
 	local reportableImbuedSupports = common.filterReportableImbuedSupports(build.data.gems)
 
-	local function addTradeRow(gemType, gemCategory, upgradeLabel, name, groupLabel, currentValue, nextValue, curSort, nextSort, output, socketGroup, gemIndex, targetLevel, targetQuality, tradeGemNameSpec, tradeQualityId, tradeNaturalMaxLevel, targetImbuedSupport)
+	local function addTradeRow(gemType, gemCategory, upgradeLabel, name, groupLabel, currentValue, nextValue, curSort, nextSort, output, socketGroup, gemIndex, targetLevel, targetQuality, tradeGemNameSpec, tradeNaturalMaxLevel, targetImbuedSupport)
 		local upgradedValue = getStatValue(output, currentStat, build)
 		local delta = upgradedValue - baseValue
 		local score = lowerIsBetter and -delta or delta
@@ -113,7 +112,6 @@ function gemTradeReport.Build(skillsTab, currentStat, filters, buildState)
 			targetLevel = targetLevel,
 			targetQuality = targetQuality,
 			tradeGemNameSpec = tradeGemNameSpec,
-			tradeQualityId = tradeQualityId,
 			tradeNaturalMaxLevel = tradeNaturalMaxLevel,
 			targetImbuedSupport = targetImbuedSupport,
 			useFullDPS = useFullDPS,
@@ -132,11 +130,13 @@ function gemTradeReport.Build(skillsTab, currentStat, filters, buildState)
 			if gemInstance.gemData and grantedEffect and gemInstance.enabled and groupEnabled then
 				local gemType = grantedEffect.support and "Support" or (grantedEffect.hasGlobalEffect and "Global" or "Active")
 				local gemCategory = grantedEffect.support and "SUPPORT" or "ACTIVE"
-				local gemName = (alternateGemQualityPrefixMap[gemInstance.qualityId or "Default"] or "") .. gemInstance.nameSpec
+				local gemName = gemInstance.nameSpec
 				local groupLabel = socketGroup.displayLabel or socketGroup.label or ("Socket Group " .. groupIndex)
 				local currentLevel = gemInstance.level or 0
 				local currentQuality = m_max(0, gemInstance.quality or 0)
-				local currentImbuedSupport = gemInstance.imbuedSupport
+				local currentGroupImbuedSupport = socketGroup.imbuedSupport
+				local slotName = socketGroup.slot
+				local currentSlotImbuedGrantedEffect = slotName and skillsTab.imbuedSupportBySlot and skillsTab.imbuedSupportBySlot[slotName] or nil
 				local naturalMaxLevel = gemInstance.gemData.naturalMaxLevel or 0
 				local maxLevel = naturalMaxLevel
 				-- Exceptional line gems do not get the generic +1 corrupted level step.
@@ -187,7 +187,6 @@ function gemTradeReport.Build(skillsTab, currentStat, filters, buildState)
 									targetLevel,
 									targetQuality,
 									getTradeGemNameSpec(gemInstance.gemData, gemInstance.nameSpec),
-									gemInstance.qualityId or "Default",
 									naturalMaxLevel,
 									nil
 								)
@@ -197,9 +196,10 @@ function gemTradeReport.Build(skillsTab, currentStat, filters, buildState)
 				end
 
 				if gemCategory == "ACTIVE"
-					and socketGroup.slot
+					and slotName
 					and currentLevel <= 20
-					and not slotHasOtherImbuedGem(skillsTab, socketGroup.slot, socketGroup, gemIndex) then
+					and not (currentGroupImbuedSupport and currentGroupImbuedSupport ~= "")
+					and not slotHasOtherImbuedGem(skillsTab, slotName, socketGroup) then
 					local activeSkills = getGemActiveSkills(socketGroup, gemInstance)
 					if #activeSkills > 0 then
 						local imbuedQualities = { }
@@ -225,7 +225,10 @@ function gemTradeReport.Build(skillsTab, currentStat, filters, buildState)
 									if imbuedCalcCount % 10 == 0 and co_running() then
 										co_yield()
 									end
-									gemInstance.imbuedSupport = supportGemData.grantedEffectId
+									socketGroup.imbuedSupport = supportGemData.name
+									if slotName and skillsTab.imbuedSupportBySlot then
+										skillsTab.imbuedSupportBySlot[slotName] = supportGrantedEffect
+									end
 									local errMsg, output = PCall(calcFunc, nil, useFullDPS)
 									if not errMsg and isLevelUsable(skillsTab, gemInstance, grantedEffect, 20, output) then
 										addTradeRow(
@@ -244,7 +247,6 @@ function gemTradeReport.Build(skillsTab, currentStat, filters, buildState)
 											20,
 											targetQuality,
 											getTradeGemNameSpec(gemInstance.gemData, gemInstance.nameSpec),
-											gemInstance.qualityId or "Default",
 											naturalMaxLevel,
 											supportGemData.grantedEffectId
 										)
@@ -257,7 +259,10 @@ function gemTradeReport.Build(skillsTab, currentStat, filters, buildState)
 
 				gemInstance.level = currentLevel
 				gemInstance.quality = currentQuality
-				gemInstance.imbuedSupport = currentImbuedSupport
+				socketGroup.imbuedSupport = currentGroupImbuedSupport
+				if slotName and skillsTab.imbuedSupportBySlot then
+					skillsTab.imbuedSupportBySlot[slotName] = currentSlotImbuedGrantedEffect
+				end
 			end
 		end
 		advanceBuildState(buildState)
