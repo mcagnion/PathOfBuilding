@@ -233,30 +233,39 @@ local function getUniqueBaseData()
 		baseNames = { },
 		entriesByBase = { },
 	}
-	for _, group in pairs(data.uniques or { }) do
-		for _, raw in ipairs(group) do
-			local item = new("Item", raw)
-			local baseName = item.baseName
-			local uniqueName = item.title or item.name
-			if baseName and uniqueName and uniqueName ~= "?" then
-				uniqueBaseData.baseNames[baseName] = true
-				uniqueBaseData.entriesByBase[baseName] = uniqueBaseData.entriesByBase[baseName] or { }
-				local alreadyAdded = false
-				for _, existingEntry in ipairs(uniqueBaseData.entriesByBase[baseName]) do
-					if existingEntry.name == uniqueName then
-						alreadyAdded = true
-						break
-					end
-				end
-				if not alreadyAdded then
-					t_insert(uniqueBaseData.entriesByBase[baseName], {
-						name = uniqueName,
-						baseName = baseName,
-						raw = raw,
-					})
+	local function addUniqueRaw(raw)
+		local item = new("Item", raw)
+		local baseName = item.baseName
+		local uniqueName = item.title or item.name
+		if baseName and uniqueName and uniqueName ~= "?" then
+			uniqueBaseData.baseNames[baseName] = true
+			uniqueBaseData.entriesByBase[baseName] = uniqueBaseData.entriesByBase[baseName] or { }
+			local alreadyAdded = false
+			for _, existingEntry in ipairs(uniqueBaseData.entriesByBase[baseName]) do
+				if existingEntry.name == uniqueName then
+					alreadyAdded = true
+					break
 				end
 			end
+			if not alreadyAdded then
+				-- For Foulborn items, the trade API uses the original unique name
+				local tradeName = uniqueName:match("^Foulborn (.+) %d+$") or uniqueName
+				t_insert(uniqueBaseData.entriesByBase[baseName], {
+					name = uniqueName,
+					tradeName = tradeName,
+					baseName = baseName,
+					raw = raw,
+				})
+			end
 		end
+	end
+	for _, group in pairs(data.uniques or { }) do
+		for _, raw in ipairs(group) do
+			addUniqueRaw(raw)
+		end
+	end
+	for _, raw in ipairs(data.uniques.generated or { }) do
+		addUniqueRaw(raw)
 	end
 
 	for _, entries in pairs(uniqueBaseData.entriesByBase) do
@@ -510,6 +519,7 @@ function TradeQueryGeneratorClass:GetRankedUniqueEntries(slot, baseName, statWei
 		local output = slot and calcFunc({ repSlotName = slot.slotName, repItem = uniqueItem }) or baseOutput
 		t_insert(rankedUniques, {
 			name = uniqueItem.title or entry.name,
+			tradeName = entry.tradeName or uniqueItem.title or entry.name,
 			baseName = uniqueItem.baseName or entry.baseName or baseName,
 			score = self.WeightedRatioOutputs(baseOutput, output, statWeights or { }) * 1000,
 		})
@@ -572,6 +582,7 @@ function TradeQueryGeneratorClass:GetRankedSlotUniqueEntries(slot, existingItem,
 				local output = slot and calcFunc({ repSlotName = slot.slotName, repItem = uniqueItem }) or baseOutput
 				t_insert(rankedUniques, {
 					name = uniqueItem.title or entry.name,
+					tradeName = entry.tradeName or uniqueItem.title or entry.name,
 					baseName = uniqueItem.baseName or entry.baseName or baseName,
 					score = self.WeightedRatioOutputs(baseOutput, output, statWeights or { }) * 1000,
 					raw = entry.raw,
@@ -2041,7 +2052,7 @@ function TradeQueryGeneratorClass:FinishQuery()
 	local rankedUniqueEntries = nil
 	if rarityFilter == "unique" and options.selectedBaseName then
 		if options.selectedUniqueName then
-			rankedUniqueEntries = { { name = options.selectedUniqueName, baseName = options.selectedBaseName, score = 0 } }
+			rankedUniqueEntries = { { name = options.selectedUniqueName, tradeName = options.selectedUniqueTradeName or options.selectedUniqueName, baseName = options.selectedBaseName, score = 0 } }
 		else
 			rankedUniqueEntries = self:GetRankedUniqueEntries(self.calcContext.slot, options.selectedBaseName, options.statWeights)
 		end
@@ -2332,7 +2343,7 @@ function TradeQueryGeneratorClass:FinishQuery()
 	if rankedUniqueEntries and rankedUniqueEntries[1] then
 		initialQueryOverride = {
 			baseName = rankedUniqueEntries[1].baseName,
-			uniqueName = rankedUniqueEntries[1].name,
+			uniqueName = rankedUniqueEntries[1].tradeName or rankedUniqueEntries[1].name,
 		}
 	end
 	local queryTable = buildQueryTable(initialQueryOverride)
@@ -2357,12 +2368,13 @@ function TradeQueryGeneratorClass:FinishQuery()
 			if index > MAX_UNIQUE_EXACT_SEARCHES then
 				break
 			end
+			local entryTradeName = uniqueEntry.tradeName or uniqueEntry.name
 			t_insert(queryPlan, {
 				baseName = uniqueEntry.baseName,
-				uniqueName = uniqueEntry.name,
+				uniqueName = entryTradeName,
 				query = dkjson.encode(buildQueryTable({
 					baseName = uniqueEntry.baseName,
-					uniqueName = uniqueEntry.name,
+					uniqueName = entryTradeName,
 				})),
 			})
 		end
@@ -2571,7 +2583,7 @@ Remove: %s will be removed from the search results.]], term, term, term)
 			local uniqueEntries = { { label = "All (top " .. math.min(#cachedSlotUniques, MAX_UNIQUE_EXACT_SEARCHES) .. " ranked)", uniqueName = nil, baseName = nil } }
 			for _, entry in ipairs(cachedSlotUniques) do
 				local scoreText = entry.score ~= 0 and string.format(" (%.0f)", entry.score) or ""
-				t_insert(uniqueEntries, { label = entry.name .. scoreText, uniqueName = entry.name, baseName = entry.baseName, raw = entry.raw })
+				t_insert(uniqueEntries, { label = entry.name .. scoreText, uniqueName = entry.name, tradeName = entry.tradeName, baseName = entry.baseName, raw = entry.raw })
 			end
 			controls.selectedUnique:SetList(uniqueEntries)
 			controls.selectedUnique.selIndex = 1
@@ -2868,9 +2880,11 @@ Remove: %s will be removed from the search results.]], term, term, term)
 			if controls.selectedUnique and controls.selectedUnique.selIndex then
 				local selectedUniqueValue = controls.selectedUnique.list[controls.selectedUnique.selIndex]
 				local uniqueName = type(selectedUniqueValue) == "table" and selectedUniqueValue.uniqueName or nil
+				local uniqueTradeName = type(selectedUniqueValue) == "table" and selectedUniqueValue.tradeName or nil
 				local uniqueBaseName = type(selectedUniqueValue) == "table" and selectedUniqueValue.baseName or nil
 				self.lastSelectedUniqueName = uniqueName
 				options.selectedUniqueName = uniqueName
+				options.selectedUniqueTradeName = uniqueTradeName or uniqueName
 				if uniqueName and uniqueBaseName then
 					options.selectedBaseName = uniqueBaseName
 					self.lastSelectedBaseName = uniqueBaseName
