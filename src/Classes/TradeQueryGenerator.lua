@@ -114,6 +114,8 @@ local autoBaseDefenceProfiles = {
 	{ key = "armour/energy_shield", label = "Auto: STR/INT (Armour/ES)" },
 	{ key = "evasion/energy_shield", label = "Auto: DEX/INT (Evasion/ES)" },
 }
+local cachedUniqueBaseNames = nil
+local cachedUniqueBaseNamesSource = nil
 local BASE_DEFENCE_PERCENTILE_TRADE_MOD_ID = "pseudo.pseudo_base_defence_percentile"
 local baseDefencePercentileStats = {
 	{ percentileKey = "ArmourBasePercentile", minKey = "ArmourBaseMin", maxKey = "ArmourBaseMax" },
@@ -151,10 +153,32 @@ local function getBaseDefencePercentileFields(item)
 	return #fields > 0 and fields or nil
 end
 
-local function getSlotBaseType(slot, existingItem)
-	if not slot then
+local function getExistingItemBaseData(itemBases, existingItem)
+	if not existingItem then
 		return nil
 	end
+	if existingItem.base then
+		return existingItem.base
+	end
+	if existingItem.baseName and itemBases then
+		return itemBases[existingItem.baseName]
+	end
+	return nil
+end
+
+local function shouldMatchBaseSubType(baseType)
+	return baseType == "Flask" or baseType == "Jewel"
+end
+
+local function shouldRestrictToUniqueBases(existingItem)
+	return existingItem and (existingItem.rarity == "UNIQUE" or existingItem.rarity == "RELIC")
+end
+
+local function getSlotFallbackBaseType(slot)
+	if not slot or not slot.slotName then
+		return nil
+	end
+
 	if slot.slotName == "Body Armour" then
 		return "Body Armour"
 	elseif slot.slotName == "Helmet" then
@@ -163,10 +187,63 @@ local function getSlotBaseType(slot, existingItem)
 		return "Gloves"
 	elseif slot.slotName == "Boots" then
 		return "Boots"
-	elseif slot.slotName:find("^Weapon %d") and existingItem and existingItem.type == "Shield" then
-		return "Shield"
+	elseif slot.slotName == "Amulet" then
+		return "Amulet"
+	elseif slot.slotName:find("^Ring %d") then
+		return "Ring"
+	elseif slot.slotName == "Belt" then
+		return "Belt"
+	elseif slot.slotName:find("^Flask %d") then
+		return "Flask"
+	elseif slot.slotName:find("Abyssal") ~= nil then
+		return "Jewel", "Abyss"
+	elseif slot.slotName:find("Jewel") ~= nil then
+		return "Jewel"
 	end
+
 	return nil
+end
+
+local function getUniqueBaseNames()
+	if cachedUniqueBaseNames and cachedUniqueBaseNamesSource == data.uniques then
+		return cachedUniqueBaseNames
+	end
+
+	local uniqueBaseNames = { }
+	for _, group in pairs(data.uniques or { }) do
+		for _, raw in ipairs(group) do
+			local lineIndex = 0
+			for line in raw:gmatch("[^\n]+") do
+				lineIndex = lineIndex + 1
+				if lineIndex == 2 then
+					uniqueBaseNames[line] = true
+					break
+				end
+			end
+		end
+	end
+
+	cachedUniqueBaseNames = uniqueBaseNames
+	cachedUniqueBaseNamesSource = data.uniques
+	return uniqueBaseNames
+end
+
+local function getSlotBaseType(slot, existingItem)
+	if not slot then
+		return nil
+	end
+
+	local baseData = getExistingItemBaseData(slot.itemBases, existingItem)
+	local baseType = baseData and baseData.type or existingItem and existingItem.type
+	local baseSubType = baseData and baseData.subType or nil
+	if not baseType then
+		return getSlotFallbackBaseType(slot)
+	end
+
+	if slot.slotName:find("^Weapon %d") and existingItem and existingItem.type == "Shield" then
+		return "Shield", baseSubType
+	end
+	return baseType, baseSubType
 end
 
 local function buildBaseDefencePercentileItem(baseName, options, fields, percentile)
@@ -260,14 +337,17 @@ local TradeQueryGeneratorClass = newClass("TradeQueryGenerator", function(self, 
 end)
 
 function TradeQueryGeneratorClass:GetSelectableBaseNames(slot, existingItem, defenceProfile)
-	local baseType = getSlotBaseType(slot, existingItem)
+	local lookupSlot = slot and { slotName = slot.slotName, itemBases = self.itemsTab.build.data.itemBases } or nil
+	local baseType, baseSubType = getSlotBaseType(lookupSlot, existingItem)
 	if not baseType then
 		return nil
 	end
 
 	local baseNames = { }
+	local uniqueBaseNames = shouldRestrictToUniqueBases(existingItem) and getUniqueBaseNames() or nil
 	for baseName, baseData in pairs(self.itemsTab.build.data.itemBases) do
-		if baseData.type == baseType and baseData.armour and (not defenceProfile or getBaseDefenceProfile(baseData) == defenceProfile) then
+		local subTypeMatches = not shouldMatchBaseSubType(baseType) or baseData.subType == baseSubType
+		if baseData.type == baseType and subTypeMatches and (not uniqueBaseNames or uniqueBaseNames[baseName]) and (not defenceProfile or getBaseDefenceProfile(baseData) == defenceProfile) then
 			t_insert(baseNames, baseName)
 		end
 	end
@@ -289,9 +369,14 @@ function TradeQueryGeneratorClass:GetAutoBaseOptionEntries(slot, existingItem)
 		end
 	end
 
+	if not next(availableProfiles) then
+		return nil
+	end
+
 	local entries = { }
+	t_insert(entries, { key = AUTO_BASE_OPTION_ANY_KEY, label = AUTO_BASE_OPTION_LABEL })
 	for _, profile in ipairs(autoBaseDefenceProfiles) do
-		if profile.key == AUTO_BASE_OPTION_ANY_KEY or availableProfiles[profile.key] then
+		if profile.key ~= AUTO_BASE_OPTION_ANY_KEY and availableProfiles[profile.key] then
 			t_insert(entries, profile)
 		end
 	end
@@ -570,10 +655,12 @@ end
 function TradeQueryGeneratorClass:GetAutoBaseTooltipText(slot, existingItem, statWeights, influence1, influence2, autoBaseDefenceProfile)
 	local selectedProfile = autoBaseDefenceProfile or self.lastAutoBaseDefenceProfile or AUTO_BASE_OPTION_ANY_KEY
 	local autoBaseLabel = AUTO_BASE_OPTION_LABEL
-	for _, profile in ipairs(autoBaseDefenceProfiles) do
-		if profile.key == selectedProfile then
-			autoBaseLabel = profile.label
-			break
+	if selectedProfile ~= AUTO_BASE_OPTION_ANY_KEY then
+		for _, profile in ipairs(autoBaseDefenceProfiles) do
+			if profile.key == selectedProfile then
+				autoBaseLabel = profile.label
+				break
+			end
 		end
 	end
 
@@ -1743,8 +1830,8 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 	local isBeltSlot = slot and slot.slotName == "Belt"
 	local isWeaponSlot = slot and (slot.slotName == "Weapon 1" or slot.slotName == "Weapon 2")
 	local isEldritchModSlot = slot and eldritchModSlots[slot.slotName] == true
-	local selectableBaseNames = existingItem and self:GetSelectableBaseNames(slot, existingItem)
-	local autoBaseOptions = existingItem and self:GetAutoBaseOptionEntries(slot, existingItem)
+	local selectableBaseNames = slot and self:GetSelectableBaseNames(slot, existingItem)
+	local autoBaseOptions = slot and self:GetAutoBaseOptionEntries(slot, existingItem)
 	local selectedBaseIndex = 1
 
 	controls.includeCorrupted = new("CheckBoxControl", {"TOP",nil,"TOP"}, {-40, 30, 18}, "Corrupted Mods:", function(state) end, "Includes corruption implicit modifiers in the weighted sum.\nNote that there is a maximum search filter count which means this might cause other weights to not be included.")
@@ -1829,13 +1916,15 @@ Remove: %s will be removed from the search results.]], term, term, term)
 
 	if selectableBaseNames then
 		local baseOptions = { }
-		for _, autoOption in ipairs(autoBaseOptions or { { key = AUTO_BASE_OPTION_ANY_KEY, label = AUTO_BASE_OPTION_LABEL } }) do
-			t_insert(baseOptions, {
-				label = autoOption.label,
-				autoBaseDefenceProfile = autoOption.key,
-			})
-			if not self.lastSelectedBaseName and (self.lastAutoBaseDefenceProfile or AUTO_BASE_OPTION_ANY_KEY) == autoOption.key then
-				selectedBaseIndex = #baseOptions
+		if autoBaseOptions then
+			for _, autoOption in ipairs(autoBaseOptions) do
+				t_insert(baseOptions, {
+					label = autoOption.label,
+					autoBaseDefenceProfile = autoOption.key,
+				})
+				if not self.lastSelectedBaseName and (self.lastAutoBaseDefenceProfile or AUTO_BASE_OPTION_ANY_KEY) == autoOption.key then
+					selectedBaseIndex = #baseOptions
+				end
 			end
 		end
 		for _, baseName in ipairs(selectableBaseNames) do
@@ -1844,7 +1933,7 @@ Remove: %s will be removed from the search results.]], term, term, term)
 				baseName = baseName,
 				detail = self:GetBaseDefenceListDetailText(baseName),
 			})
-			if self.lastSelectedBaseName == baseName then
+			if self.lastSelectedBaseName == baseName or (not self.lastSelectedBaseName and not autoBaseOptions and existingItem and existingItem.baseName == baseName) then
 				selectedBaseIndex = #baseOptions
 			end
 		end
