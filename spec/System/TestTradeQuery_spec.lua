@@ -10,6 +10,7 @@ describe("TradeQuery", function()
 			local tq = new("TradeQuery", { itemsTab = {} })
 			tq.itemsTab.activeItemSet = {}
 			tq.itemsTab.slots         = {}
+			tq.itemsTab.sockets       = {}
 			tq.slotTables[1] = { slotName = "Ring 1" }
 			if state.resultTbl       then tq.resultTbl       = state.resultTbl       end
 			if state.sortedResultTbl then tq.sortedResultTbl = state.sortedResultTbl end
