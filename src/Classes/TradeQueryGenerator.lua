@@ -2653,7 +2653,7 @@ Remove: %s will be removed from the search results.]], term, term, term)
 		updateLastAnchor(controls.selectedBaseCount)
 
 		local uniqueRequirementOptions = { "Any requirements", "Current level", "Current attributes", "Current useable" }
-		controls.uniqueRequirement = new("DropDownControl", {"TOPLEFT",controls.selectedBaseMode,"BOTTOMLEFT"}, {0, 5, 150, 18}, uniqueRequirementOptions, function(index, value)
+		controls.uniqueRequirement = new("DropDownControl", {"TOPLEFT",lastItemAnchor,"BOTTOMLEFT",true}, {0, 5, 130, 18}, uniqueRequirementOptions, function(index, value)
 			popupUniqueRequirementFilter = index
 			cachedSlotUniques = nil
 			updateUniqueDropdown()
@@ -2666,7 +2666,7 @@ Remove: %s will be removed from the search results.]], term, term, term)
 		end
 		controls.uniqueRequirementLabel.shown = controls.uniqueRequirement.shown
 
-		controls.selectedUnique = new("DropDownControl", {"LEFT",controls.uniqueRequirement,"RIGHT"}, {8, 0, 250, 18}, { }, function(index, value)
+		controls.selectedUnique = new("DropDownControl", {"LEFT",controls.uniqueRequirement,"RIGHT"}, {8, 0, 280, 18}, { }, function(index, value)
 			popupSelectedUniqueName = type(value) == "table" and value.uniqueName or nil
 		end)
 		controls.selectedUnique.enableDroppedWidth = true
@@ -2939,5 +2939,5 @@ Remove: %s will be removed from the search results.]], term, term, term)
 	controls.cancel = new("ButtonControl", { "BOTTOM", nil, "BOTTOM" }, {45, -10, 80, 20}, "Cancel", function()
 		main:ClosePopup()
 	end)
-	main:OpenPopup(475, popupHeight, "Query Options", controls)
+	main:OpenPopup(530, popupHeight, "Query Options", controls)
 end
