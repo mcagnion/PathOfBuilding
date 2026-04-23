@@ -1493,21 +1493,7 @@ local rarityMap = { [0] = "NORMAL", "MAGIC", "RARE", "UNIQUE", [9] = "RELIC", [1
 local slotMap = { ["Weapon"] = "Weapon 1", ["Offhand"] = "Weapon 2", ["Weapon2"] = "Weapon 1 Swap", ["Offhand2"] = "Weapon 2 Swap", ["Helm"] = "Helmet", ["BodyArmour"] = "Body Armour", ["Gloves"] = "Gloves", ["Boots"] = "Boots",
 				  ["Amulet"] = "Amulet", ["Ring"] = "Ring 1", ["Ring2"] = "Ring 2", ["Ring3"] = "Ring 3", ["Belt"] = "Belt",  ["BrequelGrafts"] = "Graft 1", ["BrequelGrafts2"] = "Graft 2", }
 
-function ImportTabClass:ImportItem(itemData, slotName, ignoreWeaponSwap, itemSetId)
-	if not slotName then
-		if itemData.inventoryId == "PassiveJewels" then
-			slotName = "Jewel "..self.build.latestTree.jewelSlots[itemData.x + 1]
-		elseif itemData.inventoryId == "Flask" then
-			slotName = "Flask "..(itemData.x + 1)
-		elseif not (ignoreWeaponSwap and (itemData.inventoryId == "Weapon2" or itemData.inventoryId == "Offhand2")) then
-			slotName = slotMap[itemData.inventoryId]
-		end
-	end
-	if not slotName then
-		-- Ignore any items that won't go into known slots
-		return
-	end
-
+function ImportTabClass:BuildItemFromApiData(itemData)
 	local item = new("Item")
 
 	-- Determine rarity, display name and base type of the item
@@ -1654,9 +1640,6 @@ function ImportTabClass:ImportItem(itemData, slotName, ignoreWeaponSwap, itemSet
 			t_insert(itemData.explicitMods, "Has " .. item.abyssalSocketCount .. " Abyssal Sockets")
 		end
 	end
-	if itemData.socketedItems then
-		self:ImportSocketedItems(item, itemData.socketedItems, slotName)
-	end
 	if itemData.requirements and (not itemData.socketedItems or not itemData.socketedItems[1]) then
 		-- Requirements cannot be trusted if there are socketed gems, as they may override the item's natural requirements
 		item.requirements = { }
@@ -1791,31 +1774,54 @@ function ImportTabClass:ImportItem(itemData, slotName, ignoreWeaponSwap, itemSet
 		item.foilType = foilVariants[itemData.foilVariation] or "Rainbow"
 	end
 
-	-- Add and equip the new item
 	item:BuildAndParseRaw()
-	--ConPrintf("%s", item.raw)
-	if item.base then
-		local repIndex, repItem
-		for index, item in pairs(self.build.itemsTab.items) do
-			if item.uniqueID == itemData.id then
-				repIndex = index
-				repItem = item
-				break
-			end
+	if not item.base then
+		return nil
+	end
+	return item
+end
+
+function ImportTabClass:ImportItem(itemData, slotName, ignoreWeaponSwap, itemSetId)
+	if not slotName then
+		if itemData.inventoryId == "PassiveJewels" then
+			slotName = "Jewel "..self.build.latestTree.jewelSlots[itemData.x + 1]
+		elseif itemData.inventoryId == "Flask" then
+			slotName = "Flask "..(itemData.x + 1)
+		elseif not (ignoreWeaponSwap and (itemData.inventoryId == "Weapon2" or itemData.inventoryId == "Offhand2")) then
+			slotName = slotMap[itemData.inventoryId]
 		end
-		if repIndex then
-			-- Item already exists in the build, overwrite it
-			item.id = repItem.id
-			self.build.itemsTab.items[item.id] = item
-			item:BuildModList()
-		else
-			self.build.itemsTab:AddItem(item, true)
+	end
+	if not slotName then
+		-- Ignore any items that won't go into known slots
+		return
+	end
+	local item = self:BuildItemFromApiData(itemData)
+	if not item then
+		return
+	end
+	if itemData.socketedItems then
+		self:ImportSocketedItems(item, itemData.socketedItems, slotName)
+	end
+	local repIndex, repItem
+	for index, existing in pairs(self.build.itemsTab.items) do
+		if existing.uniqueID == itemData.id then
+			repIndex = index
+			repItem = existing
+			break
 		end
-		if itemSetId and itemSetId ~= self.build.itemsTab.activeItemSetId then
-			self.build.itemsTab.itemSets[itemSetId][slotName].selItemId = item.id
-		else
-			self.build.itemsTab.slots[slotName]:SetSelItemId(item.id)
-		end
+	end
+	if repIndex then
+		-- Item already exists in the build, overwrite it
+		item.id = repItem.id
+		self.build.itemsTab.items[item.id] = item
+		item:BuildModList()
+	else
+		self.build.itemsTab:AddItem(item, true)
+	end
+	if itemSetId and itemSetId ~= self.build.itemsTab.activeItemSetId then
+		self.build.itemsTab.itemSets[itemSetId][slotName].selItemId = item.id
+	else
+		self.build.itemsTab.slots[slotName]:SetSelItemId(item.id)
 	end
 end
 
