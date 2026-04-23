@@ -27,7 +27,12 @@ local ItemDBClass = newClass("ItemDBControl", "ListControl", function(self, anch
 	self.leagueList = { "Any league", "No league" }
 	self.typeList = { "Any type", "Armour", "Jewellery", "One Handed Melee", "Two Handed Melee" }
 	self.slotList = { "Any slot", "Weapon 1", "Weapon 2", "Helmet", "Body Armour", "Gloves", "Boots", "Amulet", "Ring", "Belt", "Jewel", "Flask", "Graft 1", "Graft 2" }
-	local baseY = dbType == "RARE" and -22 or -62
+	local baseY
+	if dbType == "RARE" then
+		baseY = -22
+	else
+		baseY = -62
+	end
 	self.controls.slot = new("DropDownControl", {"BOTTOMLEFT",self,"TOPLEFT"}, {0, baseY, 179, 18}, self.slotList, function(index, value)
 		self.listBuildFlag = true
 	end)
@@ -45,6 +50,35 @@ local ItemDBClass = newClass("ItemDBControl", "ListControl", function(self, anch
 			self.listBuildFlag = true
 		end)
 		self.controls.obtainable = new("DropDownControl", {"LEFT",self.controls.requirement,"RIGHT"}, {2, 0, 179, 18}, { "Obtainable", "Any source", "Unobtainable", "Vendor Recipe", "Upgraded", "Boss Item", "Corruption"}, function(index, value)
+			self.listBuildFlag = true
+		end)
+	elseif dbType == "STASH" then
+		self.controls.sort = new("DropDownControl", {"BOTTOMLEFT",self,"TOPLEFT"}, {0, baseY + 20, 179, 18}, self.sortDropList, function(index, value)
+			self:SetSortMode(value.sortMode)
+		end)
+		self.controls.loadStash = new("ButtonControl", {"LEFT",self.controls.sort,"RIGHT"}, {2, 0, 120, 18}, "Load Stash Tabs...", function()
+			if not self.stashLoader then
+				self.stashLoader = new("StashLoader", self.itemsTab)
+			end
+			self.stashLoader:OpenTabSelector(function()
+				self.listBuildFlag = true
+			end)
+		end)
+		self.controls.clearStash = new("ButtonControl", {"LEFT",self.controls.loadStash,"RIGHT"}, {2, 0, 55, 18}, "Clear", function()
+			local count = 0
+			for _ in pairs(self.db.list) do count = count + 1 end
+			if count == 0 then
+				return
+			end
+			main:OpenConfirmPopup("Clear stash", "Remove all "..count.." stash items from this build?", "Clear", function()
+				wipeTable(self.db.list)
+				self.listBuildFlag = true
+			end)
+		end)
+		self.controls.clearStash.enabled = function()
+			return next(self.db.list) ~= nil
+		end
+		self.controls.requirement = new("DropDownControl", {"LEFT",self.controls.sort,"BOTTOMLEFT"}, {0, 11, 179, 18}, { "Any requirements", "Current level", "Current attributes", "Current useable" }, function(index, value)
 			self.listBuildFlag = true
 		end)
 	end
@@ -124,11 +158,15 @@ function ItemDBClass:DoesItemMatchFilters(item)
 			return false
 		end
 	end
-	if self.dbType == "UNIQUE" and self.controls.requirement.selIndex > 1 then
-		if (self.controls.requirement.selIndex == 2 or self.controls.requirement.selIndex == 4) and item.requirements.level and item.requirements.level > self.itemsTab.build.characterLevel then
+	if (self.dbType == "UNIQUE" or self.dbType == "STASH") and self.controls.requirement.selIndex > 1 then
+		if (self.controls.requirement.selIndex == 2 or self.controls.requirement.selIndex == 4) and item.requirements and item.requirements.level and item.requirements.level > self.itemsTab.build.characterLevel then
 			return false
 		end
-		if self.controls.requirement.selIndex > 2 and item.requirements and (item.requirements.strMod > self.itemsTab.build.calcsTab.mainOutput.Str or item.requirements.dexMod > self.itemsTab.build.calcsTab.mainOutput.Dex or item.requirements.intMod > self.itemsTab.build.calcsTab.mainOutput.Int) then
+		if self.controls.requirement.selIndex > 2 and item.requirements and (
+			(item.requirements.strMod or 0) > self.itemsTab.build.calcsTab.mainOutput.Str
+			or (item.requirements.dexMod or 0) > self.itemsTab.build.calcsTab.mainOutput.Dex
+			or (item.requirements.intMod or 0) > self.itemsTab.build.calcsTab.mainOutput.Int
+		) then
 			return false
 		end
 	end
@@ -281,7 +319,11 @@ function ItemDBClass:ListBuilder()
 	end)
 
 	self.list = list
-	self.defaultText = "^7No items found that match those filters."
+	if self.dbType == "STASH" and not next(self.db.list) then
+		self.defaultText = "^7No stash items loaded yet.\nClick 'Load Stash Tabs...' to fetch items."
+	else
+		self.defaultText = "^7No items found that match those filters."
+	end
 end
 
 function ItemDBClass:Draw(viewPort)

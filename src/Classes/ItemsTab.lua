@@ -90,6 +90,8 @@ local ItemsTabClass = newClass("ItemsTab", "UndoHandler", "ControlHost", "Contro
 	self.items = { }
 	self.itemOrderList = { }
 
+	self.stashDB = { list = { } }
+
 	self.showStatDifferences = true
 
 	-- PoB Trader class initialization
@@ -270,29 +272,39 @@ local ItemsTabClass = newClass("ItemsTab", "UndoHandler", "ControlHost", "Contro
 		self.controls.itemList = new("ItemListControl", {"TOPLEFT",self.controls.setManage,"TOPRIGHT"}, {20, 20, 360, 308}, self, true)
 	end
 
-	-- Database selector
+	-- Database selector (always visible now that a 3rd Stash option exists — in tall mode,
+	-- uniqueDB + rareDB are stacked automatically, but the user still needs the dropdown
+	-- to reach the Stash DB)
 	self.controls.selectDBLabel = new("LabelControl", {"TOPLEFT",self.controls.itemList,"BOTTOMLEFT"}, {0, 14, 0, 16}, "^7Import from:")
-	self.controls.selectDBLabel.shown = function()
-		return self.height < 980
-	end
-	self.controls.selectDB = new("DropDownControl", {"LEFT",self.controls.selectDBLabel,"RIGHT"}, {4, 0, 150, 18}, { "Uniques", "Rare Templates" })
+	self.controls.selectDB = new("DropDownControl", {"LEFT",self.controls.selectDBLabel,"RIGHT"}, {4, 0, 150, 18}, { "Uniques", "Rare Templates", "Stash" })
 
-	-- Unique database
+	-- Unique database (Y in tall mode = 118, not 96, so its slot/type filters don't
+	-- overlap with the always-visible selectDBLabel row at y=14..32)
 	self.controls.uniqueDB = new("ItemDBControl", {"TOPLEFT",self.controls.itemList,"BOTTOMLEFT"}, {0, 76, 360, function(c) return m_min(244, self.maxY - select(2, c:GetPos())) end}, self, main.uniqueDB, "UNIQUE")
 	self.controls.uniqueDB.y = function()
-		return self.controls.selectDBLabel:IsShown() and 118 or 96
+		return 118
 	end
 	self.controls.uniqueDB.shown = function()
-		return not self.controls.selectDBLabel:IsShown() or self.controls.selectDB.selIndex == 1
+		return self.controls.selectDB.selIndex ~= 3 and (self.height >= 980 or self.controls.selectDB.selIndex == 1)
 	end
 
-	-- Rare template database
+	-- Rare template database (tall mode Y shifted from 396 to 418 to stay below the
+	-- shifted uniqueDB)
 	self.controls.rareDB = new("ItemDBControl", {"TOPLEFT",self.controls.itemList,"BOTTOMLEFT"}, {0, 76, 360, function(c) return m_min(260, self.maxY - select(2, c:GetPos())) end}, self, main.rareDB, "RARE")
 	self.controls.rareDB.y = function()
-		return self.controls.selectDBLabel:IsShown() and 78 or 396
+		return self.height < 980 and 78 or 418
 	end
 	self.controls.rareDB.shown = function()
-		return not self.controls.selectDBLabel:IsShown() or self.controls.selectDB.selIndex == 2
+		return self.controls.selectDB.selIndex ~= 3 and (self.height >= 980 or self.controls.selectDB.selIndex == 2)
+	end
+
+	-- Stash item database
+	self.controls.stashDB = new("ItemDBControl", {"TOPLEFT",self.controls.itemList,"BOTTOMLEFT"}, {0, 76, 360, function(c) return m_min(244, self.maxY - select(2, c:GetPos())) end}, self, self.stashDB, "STASH")
+	self.controls.stashDB.y = function()
+		return 118
+	end
+	self.controls.stashDB.shown = function()
+		return self.controls.selectDB.selIndex == 3
 	end
 	-- Create/import item
 	self.controls.craftDisplayItem = new("ButtonControl", {"TOPLEFT",main.portraitMode and self.controls.setManage or self.controls.itemList,"TOPRIGHT"}, {20, main.portraitMode and 0 or -20, 120, 20}, "Craft item...", function()
@@ -1185,12 +1197,16 @@ holding Shift will put it in the second.]])
 	t_insert(self.controls.rareDB.dragTargetList, self.controls.itemList)
 	t_insert(self.controls.rareDB.dragTargetList, self.controls.sharedItemList)
 	t_insert(self.controls.rareDB.dragTargetList, build.controls.mainSkillMinion)
+	t_insert(self.controls.stashDB.dragTargetList, self.controls.itemList)
+	t_insert(self.controls.stashDB.dragTargetList, self.controls.sharedItemList)
+	t_insert(self.controls.stashDB.dragTargetList, build.controls.mainSkillMinion)
 	t_insert(self.controls.sharedItemList.dragTargetList, self.controls.itemList)
 	t_insert(self.controls.sharedItemList.dragTargetList, build.controls.mainSkillMinion)
 	for _, slot in pairs(self.slots) do
 		t_insert(self.controls.itemList.dragTargetList, slot)
 		t_insert(self.controls.uniqueDB.dragTargetList, slot)
 		t_insert(self.controls.rareDB.dragTargetList, slot)
+		t_insert(self.controls.stashDB.dragTargetList, slot)
 		t_insert(self.controls.sharedItemList.dragTargetList, slot)
 	end
 
@@ -1257,6 +1273,28 @@ function ItemsTabClass:Load(xml, dbFileName)
 				item:BuildModList()
 				self.items[item.id] = item
 				t_insert(self.itemOrderList, item.id)
+			end
+		elseif node.elem == "StashItems" then
+			local nextId = 1
+			for _, child in ipairs(node) do
+				if child.elem == "StashItem" then
+					local raw
+					for _, sub in ipairs(child) do
+						if type(sub) == "string" then
+							raw = sub
+							break
+						end
+					end
+					if raw then
+						local item = new("Item", raw)
+						if item.base then
+							item.stashTab = child.attrib.stashTab ~= "" and child.attrib.stashTab or nil
+							item:BuildModList()
+							self.stashDB.list[nextId] = item
+							nextId = nextId + 1
+						end
+					end
+				end
 			end
 		-- Below is OBE and left for legacy compatibility (all Slots are part of ItemSets now)
 		elseif node.elem == "Slot" then
@@ -1371,6 +1409,14 @@ function ItemsTabClass:Save(xml)
 			id = id + 1
 		end
 		t_insert(xml, child)
+	end
+	if next(self.stashDB.list) then
+		local stashRoot = { elem = "StashItems" }
+		for _, item in pairs(self.stashDB.list) do
+			item:BuildAndParseRaw()
+			t_insert(stashRoot, { elem = "StashItem", attrib = { stashTab = item.stashTab or "" }, item.raw })
+		end
+		t_insert(xml, stashRoot)
 	end
 	for _, itemSetId in ipairs(self.itemSetOrderList) do
 		local itemSet = self.itemSets[itemSetId]
