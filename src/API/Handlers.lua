@@ -274,6 +274,110 @@ handlers.save_build = function(params)
   return { ok = true, result = res }
 end
 
+-- Generate a weighted trade query JSON via PoB's TradeQueryGenerator.
+-- Drives the normally async coroutine to completion in headless mode.
+-- Params:
+--   slot          (string, required) — e.g. "Belt", "Ring 1", "Body Armour", "Helmet Abyssal Socket #1"
+--   options       (table, optional)  — pass-through to StartQuery (statWeights, influence1, influence2,
+--                                       jewelType, includeMirrored, includeCorrupted, includeScourge,
+--                                       includeEldritch, includeSynthesis, maxPrice, maxPriceType,
+--                                       maxLevel, sockets, links, special{itemName})
+-- Returns: { ok=true, query=<json string>, warning?=<string> } or { ok=false, error=<string> }
+handlers.generate_weighted_trade_query = function(params)
+  if not _G.build or not _G.build.itemsTab then
+    return { ok = false, error = 'no build loaded' }
+  end
+  if not params or type(params.slot) ~= 'string' then
+    return { ok = false, error = 'missing slot' }
+  end
+
+  local itemsTab = _G.build.itemsTab
+  local slot = itemsTab.slots and itemsTab.slots[params.slot]
+  if not slot then
+    return { ok = false, error = 'unknown slot: ' .. tostring(params.slot) }
+  end
+  if not itemsTab.tradeQuery then
+    return { ok = false, error = 'trade query subsystem missing on itemsTab' }
+  end
+  -- TradeQueryGenerator is lazy-initialized inside TradeQueryClass:PriceItem()
+  -- (the GUI "Price This Item" button handler). Instantiate it directly here
+  -- so headless callers don't depend on GUI side effects.
+  local generator = itemsTab.tradeQuery.tradeQueryGenerator
+  if not generator then
+    local ok_new, gen_or_err = pcall(_G.new, 'TradeQueryGenerator', itemsTab.tradeQuery)
+    if not ok_new then
+      return { ok = false, error = 'failed to instantiate TradeQueryGenerator: ' .. tostring(gen_or_err) }
+    end
+    generator = gen_or_err
+    itemsTab.tradeQuery.tradeQueryGenerator = generator
+  end
+
+  -- Build options with defaults; caller can override any field.
+  local options = {}
+  if type(params.options) == 'table' then
+    for k, v in pairs(params.options) do options[k] = v end
+  end
+  if options.statWeights == nil then
+    options.statWeights = itemsTab.tradeQuery.statSortSelectionList
+  end
+  if not options.statWeights or #options.statWeights == 0 then
+    -- Match the GUI's canonical default (TradeQuery.lua initStatSortSelectionList).
+    options.statWeights = {
+      { label = 'Full DPS',            stat = 'FullDPS',  weightMult = 1.0 },
+      { label = 'Effective Hit Pool',  stat = 'TotalEHP', weightMult = 0.5 },
+    }
+  end
+  if options.influence1 == nil then options.influence1 = 1 end
+  if options.influence2 == nil then options.influence2 = 1 end
+  if options.jewelType  == nil then options.jewelType  = 'Any' end
+  if options.includeMirrored == nil then options.includeMirrored = false end
+
+  -- Capture FinishQuery's callback output without touching the GUI.
+  local resultJson, resultErr
+  generator.requesterContext = {}
+  generator.requesterCallback = function(_ctx, queryJson, errMsg)
+    resultJson = queryJson
+    resultErr = errMsg
+  end
+
+  -- Mock the popup API so headless mode doesn't blow up at OpenPopup/ClosePopup.
+  local origOpen = _G.main and _G.main.OpenPopup
+  local origClose = _G.main and _G.main.ClosePopup
+  if _G.main then
+    _G.main.OpenPopup = function() return { Close = function() end } end
+    _G.main.ClosePopup = function() end
+  end
+
+  local ok, err = pcall(function() generator:StartQuery(slot, options) end)
+  if not ok then
+    if _G.main then _G.main.OpenPopup, _G.main.ClosePopup = origOpen, origClose end
+    return { ok = false, error = 'StartQuery failed: ' .. tostring(err) }
+  end
+
+  -- Pump the coroutine to completion. Mod-weight loops can iterate thousands of times,
+  -- but each :OnFrame() resumes the coroutine for one step, so we need a generous cap.
+  local maxIters = 100000
+  while generator.calcContext and generator.calcContext.co and maxIters > 0 do
+    local ok2, err2 = pcall(function() generator:OnFrame() end)
+    if not ok2 then
+      if _G.main then _G.main.OpenPopup, _G.main.ClosePopup = origOpen, origClose end
+      return { ok = false, error = 'coroutine resume failed: ' .. tostring(err2) }
+    end
+    maxIters = maxIters - 1
+  end
+
+  if _G.main then _G.main.OpenPopup, _G.main.ClosePopup = origOpen, origClose end
+
+  if maxIters == 0 then
+    return { ok = false, error = 'coroutine pump exceeded iteration cap' }
+  end
+  if not resultJson then
+    return { ok = false, error = resultErr or 'query generation produced no result' }
+  end
+
+  return { ok = true, query = resultJson, warning = resultErr }
+end
+
 return {
   handlers = handlers,
   version_meta = version_meta,
