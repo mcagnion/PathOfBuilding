@@ -126,15 +126,34 @@ function calcs.getNodeCalculator(build)
 	end)
 end
 
-local function getPowerReportEnemyConditionCandidates(env)
+-- Cache the enemyDB.mods scan on the enemyDB object itself.
+-- Same enemyDB instance reused across calcFunc calls →
+-- this avoids the O(n) scan on every node evaluation.
+-- Lifecycle: tied to enemyDB lifetime; no leak risk (released when enemyDB GC'd).
+local function getEnemyConditionCandidatesFromEnemyDB(enemyDB)
+	if not enemyDB then return nil end
+	local cached = enemyDB._cachedConditionCandidates
+	if cached then return cached end
 	local candidates = { }
-	local enemyMods = env.enemyDB and env.enemyDB.mods
+	local enemyMods = enemyDB.mods
 	if enemyMods then
 		for modName, modList in pairs(enemyMods) do
 			local condition = modName:match("^Condition:(.+)$")
 			if condition and modList and #modList > 0 then
 				candidates[condition] = true
 			end
+		end
+	end
+	enemyDB._cachedConditionCandidates = candidates
+	return candidates
+end
+
+local function getPowerReportEnemyConditionCandidates(env)
+	local candidates = { }
+	local enemyCands = getEnemyConditionCandidatesFromEnemyDB(env.enemyDB)
+	if enemyCands then
+		for condition in pairs(enemyCands) do
+			candidates[condition] = true
 		end
 	end
 
