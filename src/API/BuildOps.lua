@@ -626,7 +626,6 @@ function M.remove_gem(params)
   return true
 end
 
-
 -- params: { path: string }
 function M.save_build(params)
   if not build or not build.SaveDB then
@@ -637,8 +636,7 @@ function M.save_build(params)
   end
 
   -- Sync curAscendClassName from the current ascendClassId so the Build XML
-  -- element always reflects the live state (guards against stale names after
-  -- set_tree or new_build with a different ascendancy).
+  -- element reflects the live state after set_tree/new_build operations.
   if build.spec and build.spec.curClass and build.spec.curClass.classes then
     local ascendId = build.spec.curAscendClassId or 0
     local ascendClass = build.spec.curClass.classes[ascendId] or build.spec.curClass.classes[0]
@@ -647,11 +645,7 @@ function M.save_build(params)
     end
   end
 
-  -- Re-process all socket groups so that gem modifications made via add_gem /
-  -- set_gem_level / set_gem_quality are fully resolved before SaveDB serialises
-  -- the skillsTab.  ProcessSocketGroup populates gemData / grantedEffect from
-  -- the current gemId/nameSpec, ensuring accurate gemId and nameSpec values in
-  -- the output XML.
+  -- Resolve socket group gem metadata before SaveDB serialises skills.
   if build.skillsTab and build.skillsTab.socketGroupList then
     for _, socketGroup in ipairs(build.skillsTab.socketGroupList) do
       if build.skillsTab.ProcessSocketGroup then

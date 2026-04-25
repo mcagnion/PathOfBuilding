@@ -274,6 +274,127 @@ handlers.save_build = function(params)
   return { ok = true, result = res }
 end
 
+local function import_status_success(status, successText)
+  return type(status) == 'string' and status:find(successText, 1, true) ~= nil
+end
+
+local function import_status_error(status, fallback)
+  if type(status) ~= 'string' or #status == 0 then
+    return fallback
+  end
+  -- Strip PoB colour escapes before returning the status over JSON-RPC.
+  return (status:gsub('%^x%x%x%x%x%x%x', ''):gsub('%^%d', ''))
+end
+
+-- Import character passive tree + jewels from PoE official API JSON.
+-- Caller fetches /character-window/get-passive-skills and forwards the raw
+-- response body as params.json. params.char_data carries character metadata
+-- required by ImportTab.lua (name, level, class, league).
+handlers.import_passive_tree = function(params)
+  if not _G.build or not _G.build.importTab then
+    return { ok = false, error = 'no build loaded - call load_build_xml or new_build first' }
+  end
+  if not params or type(params.json) ~= 'string' or #params.json == 0 then
+    return { ok = false, error = 'missing or empty json' }
+  end
+  if type(params.char_data) ~= 'table' then
+    return { ok = false, error = 'missing char_data (need at least name, level, class, league)' }
+  end
+
+  local importTab = _G.build.importTab
+  if params.clear_jewels ~= nil and importTab.controls and importTab.controls.charImportTreeClearJewels then
+    importTab.controls.charImportTreeClearJewels.state = params.clear_jewels and true or false
+  end
+
+  local ok, err = pcall(function()
+    importTab:ImportPassiveTreeAndJewels(params.json, params.char_data)
+  end)
+  if not ok then
+    return { ok = false, error = 'ImportPassiveTreeAndJewels failed: ' .. tostring(err) }
+  end
+  if not import_status_success(importTab.charImportStatus, 'Passive tree and jewels successfully imported') then
+    return {
+      ok = false,
+      error = 'ImportPassiveTreeAndJewels failed: ' .. import_status_error(importTab.charImportStatus, 'import did not report success'),
+    }
+  end
+
+  return {
+    ok = true,
+    status = importTab.charImportStatus,
+    level = _G.build.characterLevel,
+    className = _G.build.spec and _G.build.spec.curClassName or nil,
+    ascendClassName = _G.build.spec and _G.build.spec.curAscendClassName or nil,
+  }
+end
+
+-- Import character items + skill gems from PoE official API JSON.
+-- params.json is the raw body of /character-window/get-items.
+handlers.import_items_skills = function(params)
+  if not _G.build or not _G.build.importTab then
+    return { ok = false, error = 'no build loaded - call load_build_xml or new_build first' }
+  end
+  if not params or type(params.json) ~= 'string' or #params.json == 0 then
+    return { ok = false, error = 'missing or empty json' }
+  end
+
+  local importTab = _G.build.importTab
+  local controls = importTab.controls or {}
+  if params.clear_items ~= nil and controls.charImportItemsClearItems then
+    controls.charImportItemsClearItems.state = params.clear_items and true or false
+  end
+  if params.clear_skills ~= nil and controls.charImportItemsClearSkills then
+    controls.charImportItemsClearSkills.state = params.clear_skills and true or false
+  end
+  if params.ignore_weapon_swap ~= nil and controls.charImportItemsIgnoreWeaponSwap then
+    controls.charImportItemsIgnoreWeaponSwap.state = params.ignore_weapon_swap and true or false
+  end
+
+  local ok, ret = pcall(function()
+    return importTab:ImportItemsAndSkills(params.json)
+  end)
+  if not ok then
+    return { ok = false, error = 'ImportItemsAndSkills failed: ' .. tostring(ret) }
+  end
+  if not import_status_success(importTab.charImportStatus, 'Items and skills successfully imported') then
+    return {
+      ok = false,
+      error = 'ImportItemsAndSkills failed: ' .. import_status_error(importTab.charImportStatus, 'import did not report success'),
+    }
+  end
+
+  -- The PoE API returns the character's currently active inventory under
+  -- "Weapon"/"Offhand" and the swap set under "Weapon2"/"Offhand2".
+  -- ImportTab maps those to primary and swap slots but does not update
+  -- useSecondWeaponSet. Unless swap import is intentionally ignored, force the
+  -- active item set back to primary slots so immediate calculations match the
+  -- live character's active weapons.
+  if not (params.ignore_weapon_swap and true or false) and _G.build.itemsTab and _G.build.itemsTab.activeItemSet then
+    _G.build.itemsTab.activeItemSet.useSecondWeaponSet = false
+    if _G.build.itemsTab.AddUndoState then
+      pcall(function() _G.build.itemsTab:AddUndoState() end)
+    end
+    _G.build.buildFlag = true
+  end
+
+  local character = nil
+  if type(ret) == 'table' then
+    character = {
+      name = ret.name,
+      level = ret.level,
+      class = ret.class,
+      league = ret.league,
+    }
+  end
+
+  return {
+    ok = true,
+    status = importTab.charImportStatus,
+    level = _G.build.characterLevel,
+    character = character,
+  }
+end
+
 return {
   handlers = handlers,
   version_meta = version_meta,
