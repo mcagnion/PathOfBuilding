@@ -44,6 +44,7 @@ describe("TestPowerReportPortableMatrix", function()
 	-- Returns true if the build was loaded, false if the file is missing
 	-- (e.g. user-specific XML not committed in the repo). Allows graceful skip.
 	local function loadXmlAt(path, name)
+		if not path or path == "" then return false end
 		local f = io.open(path, "r")
 		if not f then return false end
 		local xml = f:read("*a")
@@ -77,7 +78,7 @@ describe("TestPowerReportPortableMatrix", function()
 	local probeBuilds = {
 		{ label = "3.13 OccVortex (light)", load = function() loadTestBuildModule("../spec/TestBuilds/3.13/OccVortex.lua", "OccVortex") end },
 		{ label = "3.13 Generals Perforate Zerker (medium)", load = function() loadTestBuildModule("../spec/TestBuilds/3.13/Generals Perforate Zerker.lua", "GeneralsPerforate") end },
-		{ label = "3.28 MickaMirageShadow (heavy)", load = function() loadXmlAt("/mnt/d/GitHub/PathOfBuilding/src/Builds/3.28 - Mirage/mrtiz - MickaMirageShadow.xml", "MickaShadow") end },
+		{ label = "external heavy build from POB_POWER_REPORT_HEAVY_XML", load = function() loadXmlAt(os.getenv("POB_POWER_REPORT_HEAVY_XML"), "HeavyPowerReportBuild") end },
 	}
 	local probeStats = { "Life", "FullDPS", "TotalEHP", "WeightedScore" }
 

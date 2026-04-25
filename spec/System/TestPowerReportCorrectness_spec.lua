@@ -44,6 +44,7 @@ describe("TestPowerReportCorrectness", function()
 
 	-- Returns true if loaded, false if file missing (graceful skip for user XMLs).
 	local function loadXmlAt(path, name)
+		if not path or path == "" then return false end
 		local f = io.open(path, "r")
 		if not f then return false end
 		local xml = f:read("*a")
@@ -105,19 +106,19 @@ describe("TestPowerReportCorrectness", function()
 		captureAndWrite("generals", "Life")
 	end)
 
-	it("Correctness MickaShadow [Life] #benchmark", function()
-		if loadXmlAt("/mnt/d/GitHub/PathOfBuilding/src/Builds/3.28 - Mirage/mrtiz - MickaMirageShadow.xml", "MickaShadow") == false then
-			print("\n  [correctness] MickaShadow [Life]: SKIP (build XML not available)")
+	it("Correctness external heavy build [Life] #benchmark", function()
+		if loadXmlAt(os.getenv("POB_POWER_REPORT_HEAVY_XML"), "HeavyPowerReportBuild") == false then
+			print("\n  [correctness] external heavy build [Life]: SKIP (POB_POWER_REPORT_HEAVY_XML unavailable)")
 			return
 		end
-		captureAndWrite("micka", "Life")
+		captureAndWrite("heavy", "Life")
 	end)
 
-	it("Correctness MickaShadow [TotalEHP] #benchmark", function()
-		if loadXmlAt("/mnt/d/GitHub/PathOfBuilding/src/Builds/3.28 - Mirage/mrtiz - MickaMirageShadow.xml", "MickaShadow") == false then
-			print("\n  [correctness] MickaShadow [TotalEHP]: SKIP (build XML not available)")
+	it("Correctness external heavy build [TotalEHP] #benchmark", function()
+		if loadXmlAt(os.getenv("POB_POWER_REPORT_HEAVY_XML"), "HeavyPowerReportBuild") == false then
+			print("\n  [correctness] external heavy build [TotalEHP]: SKIP (POB_POWER_REPORT_HEAVY_XML unavailable)")
 			return
 		end
-		captureAndWrite("micka", "TotalEHP")
+		captureAndWrite("heavy", "TotalEHP")
 	end)
 end)
