@@ -499,6 +499,117 @@ handlers.generate_weighted_trade_query = function(params)
   return { ok = true, query = resultJson, warning = resultErr }
 end
 
+-- Rank anointable notables by their DPS/EHP impact on the build, using PoB's
+-- non-destructive MiscCalculator (same mechanism as the GUI's NotableDBControl
+-- when sorting anoints in the item picker). Iterates every anointable notable
+-- in the tree, simulates each via calcFunc({repSlotName, repItem=anointItem(node)}),
+-- returns rankings sorted by combined score.
+handlers.evaluate_anoint_candidates = function(params)
+  if not _G.build or not _G.build.itemsTab or not _G.build.calcsTab or not _G.build.spec then
+    return { ok = false, error = 'no build loaded' }
+  end
+  local itemsTab = _G.build.itemsTab
+  local slotName = params and params.slot
+  if type(slotName) ~= 'string' or slotName == '' then
+    return { ok = false, error = 'missing slot (e.g. "Amulet" or "Belt")' }
+  end
+
+  local slot = itemsTab.slots and itemsTab.slots[slotName]
+  if not slot then
+    return { ok = false, error = 'unknown slot: ' .. tostring(slotName) }
+  end
+  local currentItem = itemsTab.items and itemsTab.items[slot.selItemId]
+  if not currentItem then
+    return { ok = false, error = 'no item equipped in slot: ' .. slotName }
+  end
+
+  local baseType = currentItem.base and currentItem.base.type
+  if not baseType then
+    return { ok = false, error = 'item has no base type' }
+  end
+  -- Anointable items: any Amulet, or specifically Cord Belt
+  if baseType ~= 'Amulet' and not (baseType == 'Belt' and currentItem.baseName == 'Cord Belt') then
+    return { ok = false, error = 'slot item is not anointable (must be Amulet or Cord Belt)' }
+  end
+
+  local focus = (params and params.focus) or 'both'
+  if focus ~= 'dps' and focus ~= 'defence' and focus ~= 'both' then
+    return { ok = false, error = 'invalid focus (use "dps", "defence", or "both")' }
+  end
+  local dpsWeight = (focus == 'defence') and 0 or 1
+  local ehpWeight = (focus == 'dps') and 0 or 0.5
+
+  -- SetDisplayItem so anointItem() reads the right base; restore at the end.
+  local origDisplay = itemsTab.displayItem
+  local origAnointSlot = itemsTab.anointEnchantSlot
+  itemsTab:SetDisplayItem(currentItem)
+
+  local calcFunc = _G.build.calcsTab:GetMiscCalculator()
+  local ok_base, calcBase = pcall(calcFunc, { repSlotName = baseType, repItem = itemsTab:anointItem(nil) })
+  if not ok_base or type(calcBase) ~= 'table' then
+    itemsTab.displayItem = origDisplay
+    itemsTab.anointEnchantSlot = origAnointSlot
+    return { ok = false, error = 'baseline calc failed: ' .. tostring(calcBase) }
+  end
+
+  local baseDPS = tonumber(calcBase.CombinedDPS) or tonumber(calcBase.TotalDPS) or 0
+  local baseEHP = tonumber(calcBase.TotalEHP) or tonumber(calcBase.Life) or 0
+
+  local rankings = {}
+  local evaluated = 0
+  local skipped = 0
+  for nodeId, node in pairs(_G.build.spec.tree.nodes) do
+    -- Anointable: has a recipe (oil combo). Skip nodes already allocated.
+    if node.recipe and #node.recipe >= 1 and not (_G.build.spec.allocNodes and _G.build.spec.allocNodes[nodeId]) then
+      local ok_eval, output = pcall(calcFunc, { repSlotName = baseType, repItem = itemsTab:anointItem(node) })
+      if ok_eval and type(output) == 'table' then
+        local newDPS = tonumber(output.CombinedDPS) or tonumber(output.TotalDPS) or 0
+        local newEHP = tonumber(output.TotalEHP) or tonumber(output.Life) or 0
+        local dpsDelta = newDPS - baseDPS
+        local ehpDelta = newEHP - baseEHP
+        local score = 0
+        if baseDPS > 0 then score = score + (dpsDelta / baseDPS) * dpsWeight end
+        if baseEHP > 0 then score = score + (ehpDelta / baseEHP) * ehpWeight end
+        table.insert(rankings, {
+          nodeId = nodeId,
+          name = node.dn,
+          dpsDelta = dpsDelta,
+          ehpDelta = ehpDelta,
+          score = score,
+          recipe = node.recipe,
+        })
+        evaluated = evaluated + 1
+      else
+        skipped = skipped + 1
+      end
+    end
+  end
+
+  -- Restore original display item state
+  itemsTab.displayItem = origDisplay
+  itemsTab.anointEnchantSlot = origAnointSlot
+
+  table.sort(rankings, function(a, b) return a.score > b.score end)
+
+  local limit = tonumber(params and params.limit) or 20
+  if limit > 0 and limit < #rankings then
+    local truncated = {}
+    for i = 1, limit do truncated[i] = rankings[i] end
+    rankings = truncated
+  end
+
+  return {
+    ok = true,
+    candidates = rankings,
+    base = { CombinedDPS = baseDPS, TotalEHP = baseEHP },
+    evaluated = evaluated,
+    skipped = skipped,
+    slot = slotName,
+    baseType = baseType,
+    focus = focus,
+  }
+end
+
 return {
   handlers = handlers,
   version_meta = version_meta,
