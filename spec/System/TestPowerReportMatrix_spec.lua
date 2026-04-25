@@ -25,9 +25,14 @@ describe("TestPowerReportPortableMatrix", function()
 
 	local function setAllOptions(value)
 		if not powerReportOptions then return end
-		for _, key in ipairs(powerReportOptions.getKeys()) do
+		for _, key in ipairs(powerReportOptions.getContentKeys()) do
 			build.treeTab[key] = value
 		end
+	end
+
+	local function isEnvEnabled(name)
+		local value = os.getenv(name)
+		return value == "1" or value == "true"
 	end
 
 	local function drainPowerBuild(stat)
@@ -61,6 +66,9 @@ describe("TestPowerReportPortableMatrix", function()
 
 	local function measure(label, statName)
 		setAllOptions(true)
+		if isEnvEnabled("POB_POWER_REPORT_EXCLUDE_CLUSTERS") then
+			build.treeTab.includePowerReportClusters = false
+		end
 		local stat = findStat(statName)
 		if not stat then
 			-- Stat absent on this branch (e.g. WeightedScore on vanilla/OursCodeur).
@@ -76,9 +84,9 @@ describe("TestPowerReportPortableMatrix", function()
 	end
 
 	local probeBuilds = {
-		{ label = "3.13 OccVortex (light)", load = function() loadTestBuildModule("../spec/TestBuilds/3.13/OccVortex.lua", "OccVortex") end },
-		{ label = "3.13 Generals Perforate Zerker (medium)", load = function() loadTestBuildModule("../spec/TestBuilds/3.13/Generals Perforate Zerker.lua", "GeneralsPerforate") end },
-		{ label = "external heavy build from POB_POWER_REPORT_HEAVY_XML", load = function() loadXmlAt(os.getenv("POB_POWER_REPORT_HEAVY_XML"), "HeavyPowerReportBuild") end },
+		{ label = "3.13 OccVortex (light)", load = function() return loadTestBuildModule("../spec/TestBuilds/3.13/OccVortex.lua", "OccVortex") end },
+		{ label = "3.13 Generals Perforate Zerker (medium)", load = function() return loadTestBuildModule("../spec/TestBuilds/3.13/Generals Perforate Zerker.lua", "GeneralsPerforate") end },
+		{ label = "external heavy build from POB_POWER_REPORT_HEAVY_XML", load = function() return loadXmlAt(os.getenv("POB_POWER_REPORT_HEAVY_XML"), "HeavyPowerReportBuild") end },
 	}
 	local probeStats = { "Life", "FullDPS", "TotalEHP", "WeightedScore" }
 

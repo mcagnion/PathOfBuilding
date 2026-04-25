@@ -29,7 +29,7 @@ describe("TestPowerReportCorrectness", function()
 
 	local function setAllOptions(value)
 		if not powerReportOptions then return end
-		for _, key in ipairs(powerReportOptions.getKeys()) do
+		for _, key in ipairs(powerReportOptions.getContentKeys()) do
 			build.treeTab[key] = value
 		end
 	end

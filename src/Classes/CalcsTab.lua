@@ -497,6 +497,8 @@ function CalcsTabClass:PowerBuilder()
 	local includeNotables = not treeTab or treeTab.includePowerReportNotables
 	local includeKeystones = not treeTab or treeTab.includePowerReportKeystones
 	local includeMasteries = not treeTab or treeTab.includePowerReportMasteries
+	local includeClusters = not treeTab or treeTab.includePowerReportClusters ~= false
+	local includeEnemyConditionAssumptions = treeTab and treeTab.includePowerReportEnemyConditionAssumptions
 	local function isIncludedNodeType(node)
 		if node.type == "Normal" then return includeNormals
 		elseif node.type == "Notable" then return includeNotables
@@ -549,6 +551,9 @@ function CalcsTabClass:PowerBuilder()
 		if not output then
 			output = calcFunc(override, useFullDPS)
 			cache[cacheKey] = output
+		end
+		if not includeEnemyConditionAssumptions then
+			return output, nil
 		end
 		local assumptions = buildAssumeEnemyConditions(output)
 		local assumptionKey, assumptionList = buildAssumptionInfo(assumptions)
@@ -634,7 +639,7 @@ function CalcsTabClass:PowerBuilder()
 
 	for nodeId, node in pairs(self.build.spec.nodes) do
 		wipeTable(node.power)
-		if node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] then
+		if node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] and (includeClusters or not powerReportUtils.isClusterJewelPassiveNode(node)) then
 			local nodeDistance = isRemoteAscendancyCandidate(node) and 1 or (node.pathDist or 1000)
 			distanceMap[nodeDistance] = distanceMap[nodeDistance] or { }
 			distanceMap[nodeDistance][nodeId] = node
@@ -649,9 +654,11 @@ function CalcsTabClass:PowerBuilder()
 	distanceMap = nil
 	table.sort(distanceList, function(a, b) return a[1] < b[1] end)
 	-- Count eligible cluster nodes
-	for _, node in pairs(self.build.spec.tree.clusterNodeMap) do
-		if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[node.id] then
-			total = total + 1
+	if includeClusters then
+		for _, node in pairs(self.build.spec.tree.clusterNodeMap) do
+			if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[node.id] and isIncludedNodeType(node) then
+				total = total + 1
+			end
 		end
 	end
 
@@ -853,33 +860,35 @@ function CalcsTabClass:PowerBuilder()
 		end
 	end
 
-	-- Calculate the impact of every cluster notable
-	-- used for the power report screen
-	for nodeName, node in pairs(self.build.spec.tree.clusterNodeMap) do
-		if not node.power then
-			node.power = { }
-		end
-		wipeTable(node.power)
-		if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[node.id] then
-			local clusterOverride = { addNodes = { [node] = true } }
-			if not cache[node.modKey] then
-				cache[node.modKey] = calcFunc(clusterOverride, useFullDPS)
+	-- Calculate the impact of included cluster jewel passives
+	-- used for the power report screen.
+	if includeClusters then
+		for nodeName, node in pairs(self.build.spec.tree.clusterNodeMap) do
+			if not node.power then
+				node.power = { }
 			end
-			local output, assumedEnemyConditions = calcWithPowerReportAssumptions(
-				clusterOverride,
-				node.modKey
-			)
-			node.power.assumedEnemyConditions = assumedEnemyConditions
-			if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
-				node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
-			end
-			nodeIndex = nodeIndex + 1
-			if coroutine.running() and GetTime() - start > 100 then
-				if self.build.powerBuilderProgressCallback then
-					self.build.powerBuilderProgressCallback(m_floor(nodeIndex/total*100))
+			wipeTable(node.power)
+			if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[node.id] and isIncludedNodeType(node) then
+				local clusterOverride = { addNodes = { [node] = true } }
+				if not cache[node.modKey] then
+					cache[node.modKey] = calcFunc(clusterOverride, useFullDPS)
 				end
-				coroutine.yield()
-				start = GetTime()
+				local output, assumedEnemyConditions = calcWithPowerReportAssumptions(
+					clusterOverride,
+					node.modKey
+				)
+				node.power.assumedEnemyConditions = assumedEnemyConditions
+				if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
+					node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
+				end
+				nodeIndex = nodeIndex + 1
+				if coroutine.running() and GetTime() - start > 100 then
+					if self.build.powerBuilderProgressCallback then
+						self.build.powerBuilderProgressCallback(m_floor(nodeIndex/total*100))
+					end
+					coroutine.yield()
+					start = GetTime()
+				end
 			end
 		end
 	end

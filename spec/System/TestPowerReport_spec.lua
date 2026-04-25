@@ -25,7 +25,7 @@ describe("TestPowerReport", function()
 	end
 
 	local function setAllOptions(value)
-		for _, key in ipairs(powerReportOptions.getKeys()) do
+		for _, key in ipairs(powerReportOptions.getContentKeys()) do
 			build.treeTab[key] = value
 		end
 	end
@@ -40,6 +40,15 @@ describe("TestPowerReport", function()
 			assert.is_not.equal(itemType, item.type,
 				"Report should not contain type '" .. itemType .. "' but found: " .. item.name)
 		end
+	end
+
+	local function reportHasName(report, name)
+		for _, item in ipairs(report) do
+			if item.name == name then
+				return true
+			end
+		end
+		return false
 	end
 
 	-- Basic sanity ----------------------------------------------------------
@@ -64,6 +73,146 @@ describe("TestPowerReport", function()
 		setAllOptions(false)
 		drainPowerBuild()
 		assert.are.equal(0, #build.calcsTab.powerTattooOptions)
+	end)
+
+	it("enemy condition assumptions are disabled by default and do not count as report content", function()
+		local target = { }
+		powerReportOptions.applyDefaults(target)
+
+		assert.is_true(target.includePowerReportClusters)
+		assert.is_false(target.includePowerReportEnemyConditionAssumptions)
+
+		for _, key in ipairs(powerReportOptions.getContentKeys()) do
+			assert.are_not.equal("includePowerReportEnemyConditionAssumptions", key)
+		end
+
+		local onlyAssumptions = powerReportOptions.buildStateByKey(false)
+		onlyAssumptions.includePowerReportEnemyConditionAssumptions = true
+		assert.is_false(powerReportOptions.hasAnyEnabled(onlyAssumptions))
+	end)
+
+	it("enemy condition assumptions only rerun when the option is enabled", function()
+		local originalGetMiscCalculator = build.calcsTab.GetMiscCalculator
+		local originalNodePowerMaxDepth = build.calcsTab.nodePowerMaxDepth
+		build.calcsTab.nodePowerMaxDepth = -1
+
+		setAllOptions(false)
+		build.treeTab.includePowerReportNormals = true
+		build.treeTab.includePowerReportClusters = false
+
+		local calls = { }
+		build.calcsTab.GetMiscCalculator = function()
+			local function calcFunc(override)
+				calls[#calls + 1] = override or { }
+				return {
+					Life = 100,
+					PowerReportEnemyConditionsAvailable = { Shocked = true },
+					PowerReportEnemyConditionsUsed = { Shocked = true },
+				}
+			end
+			return calcFunc, {
+				Life = 100,
+				PowerReportEnemyConditionsAvailable = { Shocked = true },
+				PowerReportEnemyConditionsUsed = { Shocked = true },
+			}
+		end
+
+		local function hasAssumedCall()
+			for _, override in ipairs(calls) do
+				if override.assumeEnemyConditions and override.assumeEnemyConditions.Shocked then
+					return true
+				end
+			end
+			return false
+		end
+
+		build.treeTab.includePowerReportEnemyConditionAssumptions = false
+		drainPowerBuild()
+		assert.is_false(hasAssumedCall())
+
+		calls = { }
+		build.treeTab.includePowerReportEnemyConditionAssumptions = true
+		drainPowerBuild()
+		assert.is_true(hasAssumedCall())
+
+		build.calcsTab.GetMiscCalculator = originalGetMiscCalculator
+		build.calcsTab.nodePowerMaxDepth = originalNodePowerMaxDepth
+	end)
+
+	it("cluster jewel passives are only calculated when the cluster option is enabled", function()
+		local originalGetMiscCalculator = build.calcsTab.GetMiscCalculator
+		local originalNodePowerMaxDepth = build.calcsTab.nodePowerMaxDepth
+		local originalClusterNodeMap = build.spec.tree.clusterNodeMap
+		local generatedClusterNodeId = 900001
+		local originalGeneratedClusterNode = build.spec.nodes[generatedClusterNodeId]
+		local fakeClusterNode = {
+			id = -900001,
+			type = "Notable",
+			modKey = "test:cluster:power-report",
+			dn = "Test Cluster Passive",
+			sd = { "Test cluster passive" },
+			alloc = false,
+			power = { },
+		}
+		local fakeGeneratedClusterNode = {
+			id = generatedClusterNodeId,
+			type = "Notable",
+			modKey = "test:generated-cluster:power-report",
+			dn = "Test Generated Cluster Passive",
+			sd = { "Test generated cluster passive" },
+			alloc = false,
+			expansionSkill = true,
+			pathDist = 0,
+			path = { },
+			power = { },
+		}
+		build.spec.tree.clusterNodeMap = {
+			TestClusterPassive = fakeClusterNode,
+		}
+		build.spec.nodes[generatedClusterNodeId] = fakeGeneratedClusterNode
+		build.calcsTab.nodePowerMaxDepth = 0
+
+		setAllOptions(false)
+		build.treeTab.includePowerReportNotables = true
+		build.treeTab.includePowerReportEnemyConditionAssumptions = false
+
+		local clusterCalls = 0
+		local generatedClusterCalls = 0
+		build.calcsTab.GetMiscCalculator = function()
+			local function calcFunc(override)
+				if override and override.addNodes and override.addNodes[fakeClusterNode] then
+					clusterCalls = clusterCalls + 1
+				end
+				if override and override.addNodes and override.addNodes[fakeGeneratedClusterNode] then
+					generatedClusterCalls = generatedClusterCalls + 1
+				end
+				return { Life = 100 }
+			end
+			return calcFunc, { Life = 100 }
+		end
+
+		build.treeTab.includePowerReportClusters = false
+		drainPowerBuild()
+		assert.are.equal(0, clusterCalls)
+		assert.are.equal(0, generatedClusterCalls)
+		local report = buildReport()
+		assert.is_false(reportHasName(report, fakeClusterNode.dn))
+		assert.is_false(reportHasName(report, fakeGeneratedClusterNode.dn))
+
+		clusterCalls = 0
+		generatedClusterCalls = 0
+		build.treeTab.includePowerReportClusters = true
+		drainPowerBuild()
+		assert.are.equal(1, clusterCalls)
+		assert.are.equal(1, generatedClusterCalls)
+		report = buildReport()
+		assert.is_true(reportHasName(report, fakeClusterNode.dn))
+		assert.is_true(reportHasName(report, fakeGeneratedClusterNode.dn))
+
+		build.calcsTab.GetMiscCalculator = originalGetMiscCalculator
+		build.calcsTab.nodePowerMaxDepth = originalNodePowerMaxDepth
+		build.spec.tree.clusterNodeMap = originalClusterNodeMap
+		build.spec.nodes[generatedClusterNodeId] = originalGeneratedClusterNode
 	end)
 
 	it("powerMax is initialized when all options are enabled", function()

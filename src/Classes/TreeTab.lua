@@ -1096,7 +1096,7 @@ function TreeTabClass:OpenPowerReportOptionsPopup()
 		controls[key] = new("CheckBoxControl", nil, { checkOffset, y, 20 }, label, function(state)
 			self[key] = state
 			self:RefreshPowerReportList()
-		end)
+		end, option.tooltip)
 		controls[key].state = self[key]
 		y = y + 24
 	end
@@ -1130,6 +1130,7 @@ function TreeTabClass:BuildPowerReportList(currentStat)
 	local includeNormals = self.includePowerReportNormals
 	local includeNotables = self.includePowerReportNotables
 	local includeKeystones = self.includePowerReportKeystones
+	local includeClusters = self.includePowerReportClusters ~= false
 
 	if not (currentStat and currentStat.stat) then
 		return report
@@ -1247,6 +1248,7 @@ function TreeTabClass:BuildPowerReportList(currentStat)
 			and node.type ~= "ClassStart"
 			and node.type ~= "AscendClassStart"
 			and isIncludedAscendancyNode(node)
+			and (includeClusters or not powerReportUtils.isClusterJewelPassiveNode(node))
 		if includeNode then
 			local pathDist
 			if isAlloc then
@@ -1332,7 +1334,7 @@ function TreeTabClass:BuildPowerReportList(currentStat)
 		local isClusterNodeIncluded = (node.type == "Notable" and includeNotables)
 			or (node.type == "Keystone" and includeKeystones)
 			or (node.type == "Normal" and includeNormals)
-		if not isAlloc and isClusterNodeIncluded then
+		if includeClusters and not isAlloc and isClusterNodeIncluded then
 			local nodePower = (node.power and node.power.singleStat or 0) * statScale
 			local nodePowerStr = formatSinglePowerValue(nodePower)
 			local nodePowerPct, nodePowerPctStr = formatPercentPowerValue(nodePower)

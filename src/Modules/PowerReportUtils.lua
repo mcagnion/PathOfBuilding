@@ -19,6 +19,13 @@ function powerReportUtils.isRunegraftName(name)
 	return name and name:find("Runegraft", 1, true) ~= nil
 end
 
+function powerReportUtils.isClusterJewelPassiveNode(node)
+	return node
+		and node.expansionSkill
+		and node.id
+		and node.id >= 65536
+end
+
 function powerReportUtils.isCurrentAscendancyNode(context, node)
 	return node
 		and node.ascendancyName
