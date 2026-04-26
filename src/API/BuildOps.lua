@@ -36,6 +36,7 @@ function M.export_stats(fields)
     "AttackDodgeChance", "EffectiveMovementSpeedMod",
     "SpellSuppressionChance", "LifeLeechGainRate", "ManaLeechGainRate",
     "EnduranceChargesMax", "FrenzyChargesMax", "PowerChargesMax",
+    "FullDPS", "FullDotDPS", "ActiveTotemLimit",
   }
   local result = {}
   for _, k in ipairs(wanted) do
