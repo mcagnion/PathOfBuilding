@@ -2541,7 +2541,7 @@ Remove: %s will be removed from the search results.]], term, term, term)
 		updateLastAnchor(controls.copyEnchantMode)
 	end
 
-	if selectableBaseNames then
+	if selectableBaseNames and not context.slotTbl.unique then
 		local modeEntries = self:GetBaseSelectionModeEntries(slot, existingItem)
 		local popupBaseSelectionMode = self:GetDefaultBaseSelectionMode(slot, existingItem)
 		local popupSelectedBaseName = self.lastSelectedBaseName
