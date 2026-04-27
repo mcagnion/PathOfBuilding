@@ -217,33 +217,79 @@ function M.get_config()
   return cfg
 end
 
+-- Lazily-built lookup of every ConfigOptions var -> declared type, so
+-- set_config can pass arbitrary keys through to build.configTab.input
+-- instead of relying on a hand-maintained whitelist that silently drops
+-- anything outside its scope.
+local _configVarTypes = nil
+local function _getConfigVarTypes()
+  if _configVarTypes then return _configVarTypes end
+  local ok, varList = pcall(LoadModule, "Modules/ConfigOptions")
+  local map = {}
+  if ok and type(varList) == 'table' then
+    for _, opt in ipairs(varList) do
+      if type(opt) == 'table' and opt.var and opt.type then
+        map[opt.var] = opt.type
+      end
+    end
+  end
+  _configVarTypes = map
+  return map
+end
+
+-- Older callers wrote to keys that don't exist in ConfigOptions, so the
+-- writes were silent no-ops. Map them to the real var names rather than
+-- breaking those callers.
+local _configAliases = {
+  enemyFireResistance = "enemyFireResist",
+  enemyColdResistance = "enemyColdResist",
+  enemyLightningResistance = "enemyLightningResist",
+  enemyChaosResistance = "enemyChaosResist",
+  conditionFortify = "buffFortification",
+  conditionShockedGround = "conditionOnShockedGround",
+}
+
+local function _coerceConfigValue(varType, value)
+  if varType == 'check' then
+    if type(value) == 'string' then return value == 'true' end
+    return value and true or false
+  elseif varType == 'count' or varType == 'countAllowZero' or varType == 'integer' or varType == 'float' then
+    return tonumber(value)
+  end
+  if type(value) == 'boolean' then return value and 'true' or 'false' end
+  return tostring(value)
+end
+
 function M.set_config(params)
   if not build or not build.configTab then return nil, 'build/config not initialized' end
   if type(params) ~= 'table' then return nil, 'invalid params' end
   local input = build.configTab.input or {}
   build.configTab.input = input
+  local varTypes = _getConfigVarTypes()
+  local appliedKeys, aliasedKeys, ignoredKeys = {}, {}, {}
   local changed = false
-  if params.bandit ~= nil then input.bandit = tostring(params.bandit); changed = true end
-  if params.pantheonMajorGod ~= nil then input.pantheonMajorGod = tostring(params.pantheonMajorGod); changed = true end
-  if params.pantheonMinorGod ~= nil then input.pantheonMinorGod = tostring(params.pantheonMinorGod); changed = true end
-  if params.enemyLevel ~= nil then build.configTab.enemyLevel = tonumber(params.enemyLevel) or build.configTab.enemyLevel; changed = true end
-  if params.enemyFireResist ~= nil then input.enemyFireResistance = tonumber(params.enemyFireResist); changed = true end
-  if params.enemyColdResist ~= nil then input.enemyColdResistance = tonumber(params.enemyColdResist); changed = true end
-  if params.enemyLightningResist ~= nil then input.enemyLightningResistance = tonumber(params.enemyLightningResist); changed = true end
-  if params.enemyChaosResist ~= nil then input.enemyChaosResistance = tonumber(params.enemyChaosResist); changed = true end
-  if params.enemyArmour ~= nil then input.enemyArmour = tonumber(params.enemyArmour); changed = true end
-  if params.enemyEvasion ~= nil then input.enemyEvasion = tonumber(params.enemyEvasion); changed = true end
-  if params.usePowerCharges ~= nil then input.usePowerCharges = params.usePowerCharges; changed = true end
-  if params.useFrenzyCharges ~= nil then input.useFrenzyCharges = params.useFrenzyCharges; changed = true end
-  if params.useEnduranceCharges ~= nil then input.useEnduranceCharges = params.useEnduranceCharges; changed = true end
-  if params.conditionShockedGround ~= nil then input.conditionShockedGround = params.conditionShockedGround; changed = true end
-  if params.conditionFortify ~= nil then input.conditionFortify = params.conditionFortify; changed = true end
-  if params.conditionLeeching ~= nil then input.conditionLeeching = params.conditionLeeching; changed = true end
-  if params.buffOnslaught ~= nil then input.buffOnslaught = params.buffOnslaught; changed = true end
-  if params.enemyIsBoss ~= nil then input.enemyIsBoss = tostring(params.enemyIsBoss); changed = true end
+  for key, value in pairs(params) do
+    local resolved = _configAliases[key] or key
+    local varType = varTypes[resolved]
+    if not varType then
+      table.insert(ignoredKeys, key)
+    else
+      local coerced = _coerceConfigValue(varType, value)
+      if varType ~= 'check' and coerced == nil then
+        table.insert(ignoredKeys, key)
+      else
+        input[resolved] = coerced
+        if resolved ~= key then aliasedKeys[key] = resolved end
+        table.insert(appliedKeys, resolved)
+        changed = true
+      end
+    end
+  end
+  table.sort(appliedKeys)
+  table.sort(ignoredKeys)
   if changed and build.configTab.BuildModList then build.configTab:BuildModList() end
   M.get_main_output()
-  return true
+  return { ok = true, appliedKeys = appliedKeys, aliasedKeys = aliasedKeys, ignoredKeys = ignoredKeys }
 end
 
 
