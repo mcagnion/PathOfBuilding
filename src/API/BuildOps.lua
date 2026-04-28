@@ -21,6 +21,27 @@ function M.get_main_output()
   return output
 end
 
+local function copy_scalar_fields(tbl)
+  local out = {}
+  if type(tbl) ~= 'table' then return out end
+  for key, value in pairs(tbl) do
+    local valueType = type(value)
+    if (type(key) == 'string' or type(key) == 'number') and
+       (valueType == 'number' or valueType == 'string' or valueType == 'boolean') then
+      out[key] = value
+    end
+  end
+  return out
+end
+
+local function compact_calc_output(output)
+  local out = copy_scalar_fields(output)
+  if output and type(output.Minion) == 'table' then
+    out.Minion = copy_scalar_fields(output.Minion)
+  end
+  return out
+end
+
 function M.export_stats(fields)
   local output, err = M.get_main_output()
   if not output then
@@ -91,6 +112,99 @@ function M.get_tree()
   end
   table.sort(out.nodes)
   return out
+end
+
+local function normalize_mastery_effects(masteryEffects)
+  local out = {}
+  if type(masteryEffects) ~= 'table' then return out end
+  for mastery, effect in pairs(masteryEffects) do
+    local masteryId = tonumber(mastery)
+    local effectId = tonumber(effect)
+    if masteryId and effectId then
+      out[masteryId] = effectId
+    end
+  end
+  return out
+end
+
+local function find_assigned_mastery_node(spec, effectId)
+  for masteryId, selectedEffectId in pairs(spec.masterySelections or {}) do
+    if tonumber(selectedEffectId) == tonumber(effectId) then
+      return tonumber(masteryId)
+    end
+  end
+  return nil
+end
+
+local function mastery_effect_stats(effect)
+  local stats = {}
+  if effect and type(effect.sd) == 'table' then
+    for _, stat in ipairs(effect.sd) do
+      if type(stat) == 'string' then table.insert(stats, stat) end
+    end
+  end
+  return stats
+end
+
+function M.get_mastery_options()
+  if not build or not build.spec then
+    return nil, "build/spec not initialized"
+  end
+  local spec = build.spec
+  local tree = spec.tree
+  if not tree or not tree.masteryEffects then
+    return { masteries = {}, count = 0 }
+  end
+
+  local masteries = {}
+  for id, node in pairs(spec.allocNodes or {}) do
+    if node and node.type == "Mastery" and node.masteryEffects then
+      local availableEffects = {}
+      local nodeId = tonumber(id) or tonumber(node.id)
+      local allocatedEffect = tonumber((spec.masterySelections or {})[nodeId])
+
+      for _, option in ipairs(node.masteryEffects or {}) do
+        local effectId = tonumber(option.effect)
+        local assignedNodeId = effectId and find_assigned_mastery_node(spec, effectId) or nil
+        if effectId and (not assignedNodeId or assignedNodeId == nodeId) then
+          local effect = tree.masteryEffects[effectId]
+          local stats = mastery_effect_stats(effect)
+          if #stats == 0 and type(option.stats) == 'table' then
+            for _, stat in ipairs(option.stats) do
+              if type(stat) == 'string' then table.insert(stats, stat) end
+            end
+          end
+          if #stats > 0 then
+            table.insert(availableEffects, {
+              effectId = effectId,
+              stat = table.concat(stats, " / "),
+              stats = stats,
+            })
+          end
+        end
+      end
+
+      table.sort(availableEffects, function(a, b)
+        return (a.stat or '') < (b.stat or '')
+      end)
+
+      table.insert(masteries, {
+        nodeId = nodeId,
+        nodeName = node.name or node.dn or "Mastery",
+        allocatedEffect = allocatedEffect,
+        availableEffects = availableEffects,
+      })
+    end
+  end
+
+  table.sort(masteries, function(a, b)
+    if (a.nodeName or '') ~= (b.nodeName or '') then
+      return (a.nodeName or '') < (b.nodeName or '')
+    end
+    return (a.nodeId or 0) < (b.nodeId or 0)
+  end)
+
+  return { masteries = masteries, count = #masteries }
 end
 
 -- params: { classId, ascendClassId, secondaryAscendClassId?, nodes:[int], masteryEffects?:{[id]=effect}, treeVersion? }
@@ -181,9 +295,74 @@ function M.update_tree_delta(params)
 end
 
 
--- params: { addNodes?: number[], removeNodes?: number[], useFullDPS?: boolean }
+-- params: { addNodes?: number[], removeNodes?: number[], masteryEffects?:{[id]=effect}, useFullDPS?: boolean }
 function M.calc_with(params)
   if not build or not build.calcsTab then return nil, 'build not initialized' end
+  if params and type(params.masteryEffects) == 'table' then
+    if not build.spec then return nil, 'build/spec not initialized' end
+    if not build.spec.CreateUndoState or not build.spec.RestoreUndoState then
+      return nil, 'passive tree restore API not available'
+    end
+    local current, treeErr = M.get_tree()
+    if not current then return nil, treeErr end
+
+    local set = {}
+    for _, id in ipairs(current.nodes or {}) do set[id] = true end
+    if type(params.removeNodes) == 'table' then
+      for _, id in ipairs(params.removeNodes) do set[tonumber(id)] = nil end
+    end
+    if type(params.addNodes) == 'table' then
+      for _, id in ipairs(params.addNodes) do set[tonumber(id)] = true end
+    end
+    local nodes = {}
+    for id, _ in pairs(set) do table.insert(nodes, id) end
+    table.sort(nodes)
+
+    local masteryEffects = normalize_mastery_effects(current.masteryEffects)
+    for masteryId, effectId in pairs(normalize_mastery_effects(params.masteryEffects)) do
+      masteryEffects[masteryId] = effectId
+    end
+
+    local undoState = build.spec:CreateUndoState()
+    local output, outputErr
+    local ok, err = pcall(function()
+      build.spec:ImportFromNodeList(
+        tonumber(current.classId) or 0,
+        tonumber(current.ascendClassId) or 0,
+        tonumber(current.secondaryAscendClassId) or 0,
+        nodes,
+        {},
+        masteryEffects,
+        current.treeVersion
+      )
+      local calcFunc = build.calcsTab and build.calcsTab:GetMiscCalculator()
+      if calcFunc then
+        output = calcFunc({}, params and params.useFullDPS)
+      else
+        output, outputErr = M.get_main_output()
+      end
+    end)
+
+    local restoreOk, restoreErr = pcall(function()
+      build.spec:RestoreUndoState(undoState)
+      local restoredOutput, restoredOutputErr = M.get_main_output()
+      if not restoredOutput then
+        error(restoredOutputErr or 'failed to recalculate after restoring passive tree')
+      end
+    end)
+
+    if not ok then
+      return nil, tostring(err) .. (restoreOk and '' or '; restore failed: ' .. tostring(restoreErr))
+    end
+    if not restoreOk then
+      return nil, 'failed to restore passive tree after mastery calculation: ' .. tostring(restoreErr)
+    end
+    if not output then
+      return nil, outputErr or 'failed to recalculate with mastery effects'
+    end
+    return compact_calc_output(output), nil
+  end
+
   local calcFunc, baseOut = build.calcsTab:GetMiscCalculator()
   local override = {}
   if params and type(params.addNodes) == 'table' then
@@ -201,7 +380,7 @@ function M.calc_with(params)
     end
   end
   local out = calcFunc(override, params and params.useFullDPS)
-  return out, baseOut
+  return compact_calc_output(out), baseOut
 end
 
 

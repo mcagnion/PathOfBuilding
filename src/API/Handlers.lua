@@ -213,6 +213,12 @@ handlers.calc_with = function(params)
   return { ok = true, output = out }
 end
 
+handlers.get_mastery_options = function(params)
+  local result, err = BuildOps.get_mastery_options()
+  if not result then return { ok = false, error = err } end
+  return { ok = true, result = result }
+end
+
 handlers.get_config = function(params)
   local cfg, err = BuildOps.get_config()
   if not cfg then return { ok = false, error = err } end
