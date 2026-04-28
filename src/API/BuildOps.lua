@@ -147,6 +147,27 @@ local function mastery_effect_stats(effect)
   return stats
 end
 
+local function apply_mastery_effects(spec, masteryEffects)
+  if not spec or not spec.tree or not spec.tree.masteryEffects then
+    return nil, 'passive tree mastery data unavailable'
+  end
+  for masteryId, effectId in pairs(masteryEffects or {}) do
+    local node = spec.nodes and spec.nodes[masteryId] or spec.allocNodes and spec.allocNodes[masteryId]
+    local effect = spec.tree.masteryEffects[effectId]
+    if not node or not effect then
+      return nil, string.format('invalid mastery effect %s for node %s', tostring(effectId), tostring(masteryId))
+    end
+    node.sd = effect.sd
+    node.allMasteryOptions = false
+    node.reminderText = { "Tip: Right click to select a different effect" }
+    spec.masterySelections[masteryId] = effectId
+    if spec.tree.ProcessStats then
+      spec.tree:ProcessStats(node)
+    end
+  end
+  return true
+end
+
 function M.get_mastery_options()
   if not build or not build.spec then
     return nil, "build/spec not initialized"
@@ -377,29 +398,35 @@ function M.calc_with(params)
     for id, _ in pairs(set) do table.insert(nodes, id) end
     table.sort(nodes)
 
+    local requestedMasteryEffects = normalize_mastery_effects(params.masteryEffects)
     local masteryEffects = normalize_mastery_effects(current.masteryEffects)
-    for masteryId, effectId in pairs(normalize_mastery_effects(params.masteryEffects)) do
+    local changedMasteryEffects = {}
+    for masteryId, effectId in pairs(requestedMasteryEffects) do
+      if tonumber(current.masteryEffects and current.masteryEffects[masteryId]) ~= tonumber(effectId) then
+        changedMasteryEffects[masteryId] = effectId
+      end
       masteryEffects[masteryId] = effectId
     end
 
     local undoState = build.spec:CreateUndoState()
     local output, outputErr
     local ok, err = pcall(function()
-      build.spec:ImportFromNodeList(
-        tonumber(current.classId) or 0,
-        tonumber(current.ascendClassId) or 0,
-        tonumber(current.secondaryAscendClassId) or 0,
-        nodes,
-        {},
-        masteryEffects,
-        current.treeVersion
-      )
-      local calcFunc = build.calcsTab and build.calcsTab:GetMiscCalculator()
-      if calcFunc then
-        output = calcFunc({}, params and params.useFullDPS)
+      if (type(params.addNodes) == 'table' and #params.addNodes > 0) or
+         (type(params.removeNodes) == 'table' and #params.removeNodes > 0) then
+        build.spec:ImportFromNodeList(
+          tonumber(current.classId) or 0,
+          tonumber(current.ascendClassId) or 0,
+          tonumber(current.secondaryAscendClassId) or 0,
+          nodes,
+          build.spec.hashOverrides or {},
+          masteryEffects,
+          current.treeVersion
+        )
       else
-        output, outputErr = M.get_main_output()
+        local applied, applyErr = apply_mastery_effects(build.spec, changedMasteryEffects)
+        if not applied then error(applyErr) end
       end
+      output, outputErr = M.get_main_output()
     end)
 
     local restoreOk, restoreErr = pcall(function()
