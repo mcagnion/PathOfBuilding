@@ -166,6 +166,9 @@ function M.update_tree_delta(params)
     return nil, 'passive tree restore API not available'
   end
   local undoState = restoreAfter and build.spec:CreateUndoState() or nil
+  if undoState then
+    undoState.secondaryAscendClassId = current.secondaryAscendClassId or undoState.secondaryAscendClassId or 0
+  end
   local set = {}
   for _, id in ipairs(current.nodes) do set[id] = true end
   if type(params.removeNodes) == 'table' then
