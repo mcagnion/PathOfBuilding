@@ -157,15 +157,21 @@ function M.get_build_info()
 end
 
 function M.update_tree_delta(params)
+  params = params or {}
   if not build or not build.spec then return nil, 'build/spec not initialized' end
   local current, err = M.get_tree()
   if not current then return nil, err end
+  local restoreAfter = params.restoreAfter == true or params.restore_after == true or params.preview == true
+  if restoreAfter and (not build.spec.CreateUndoState or not build.spec.RestoreUndoState) then
+    return nil, 'passive tree restore API not available'
+  end
+  local undoState = restoreAfter and build.spec:CreateUndoState() or nil
   local set = {}
   for _, id in ipairs(current.nodes) do set[id] = true end
-  if params and type(params.removeNodes) == 'table' then
+  if type(params.removeNodes) == 'table' then
     for _, id in ipairs(params.removeNodes) do set[tonumber(id)] = nil end
   end
-  if params and type(params.addNodes) == 'table' then
+  if type(params.addNodes) == 'table' then
     for _, id in ipairs(params.addNodes) do set[tonumber(id)] = true end
   end
   local nodes = {}
@@ -176,9 +182,58 @@ function M.update_tree_delta(params)
   local ascendId = params.ascendClassId or current.ascendClassId or 0
   local secId = params.secondaryAscendClassId or current.secondaryAscendClassId or 0
   local tv = params.treeVersion or current.treeVersion
-  build.spec:ImportFromNodeList(tonumber(classId) or 0, tonumber(ascendId) or 0, tonumber(secId) or 0, nodes, {}, mastery, tv)
-  M.get_main_output()
-  return true
+
+  local ok, output, outputErr, previewTree, previewTreeErr = pcall(function()
+    build.spec:ImportFromNodeList(tonumber(classId) or 0, tonumber(ascendId) or 0, tonumber(secId) or 0, nodes, {}, mastery, tv)
+    local calcOutput, calcErr = M.get_main_output()
+    local tree, treeErr = M.get_tree()
+    return calcOutput, calcErr, tree, treeErr
+  end)
+
+  local restoredTree
+  local restoreErr
+  if undoState then
+    local restoreOk, err2 = pcall(function()
+      build.spec:RestoreUndoState(undoState)
+      local restoredOutput, restoredOutputErr = M.get_main_output()
+      if not restoredOutput then
+        error(restoredOutputErr or 'failed to recalculate after restoring passive tree')
+      end
+      restoredTree = M.get_tree()
+    end)
+    if not restoreOk then
+      restoreErr = tostring(err2)
+    end
+  end
+
+  if not ok then
+    if restoreErr then
+      return nil, tostring(output) .. '; restore failed: ' .. restoreErr
+    end
+    return nil, tostring(output)
+  end
+  if not output then
+    if restoreErr then
+      return nil, tostring(outputErr or 'failed to recalculate after tree delta') .. '; restore failed: ' .. restoreErr
+    end
+    return nil, outputErr
+  end
+  if not previewTree then
+    if restoreErr then
+      return nil, tostring(previewTreeErr or 'failed to read tree after tree delta') .. '; restore failed: ' .. restoreErr
+    end
+    return nil, previewTreeErr
+  end
+  if restoreErr then
+    return nil, 'failed to restore passive tree after preview: ' .. restoreErr
+  end
+
+  return {
+    tree = previewTree,
+    output = output,
+    restored = restoreAfter,
+    restoredTree = restoredTree,
+  }
 end
 
 

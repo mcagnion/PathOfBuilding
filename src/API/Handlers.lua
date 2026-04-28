@@ -201,10 +201,14 @@ handlers.get_build_info = function(params)
 end
 
 handlers.update_tree_delta = function(params)
-  local ok2, err = BuildOps.update_tree_delta(params or {})
-  if not ok2 then return { ok = false, error = err } end
-  local tree = BuildOps.get_tree()
-  return { ok = true, tree = tree }
+  local result, err = BuildOps.update_tree_delta(params or {})
+  if not result then return { ok = false, error = err } end
+  return {
+    ok = true,
+    tree = result.tree,
+    restored = result.restored == true,
+    restoredTree = result.restoredTree,
+  }
 end
 
 handlers.calc_with = function(params)
