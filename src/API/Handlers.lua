@@ -266,6 +266,12 @@ handlers.set_gem_quality = function(params)
   return { ok = true }
 end
 
+handlers.preview_gem_quality = function(params)
+  local result, err = BuildOps.preview_gem_quality(params or {})
+  if not result then return { ok = false, error = err or 'failed to preview gem quality' } end
+  return { ok = true, result = result }
+end
+
 handlers.remove_skill = function(params)
   local ok2, err = BuildOps.remove_skill(params or {})
   if not ok2 then return { ok = false, error = err or 'failed to remove skill' } end
