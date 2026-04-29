@@ -527,11 +527,10 @@ function M.set_gem_level(params)
   return true
 end
 
--- params: { groupIndex: number, gemIndex: number, quality: number, qualityId?: string }
-function M.set_gem_quality(params)
+local function resolve_gem_instance(params, requireQuality)
   if not build or not build.skillsTab then return nil, 'skills not initialized' end
   if type(params) ~= 'table' then return nil, 'invalid params' end
-  if not params.groupIndex or not params.gemIndex or not params.quality then
+  if not params.groupIndex or not params.gemIndex or (requireQuality and params.quality == nil) then
     return nil, 'missing groupIndex, gemIndex, or quality'
   end
 
@@ -541,7 +540,6 @@ function M.set_gem_quality(params)
 
   local groupIndex = tonumber(params.groupIndex)
   local gemIndex = tonumber(params.gemIndex)
-  local quality = tonumber(params.quality)
 
   local socketGroup = skillSet.socketGroupList[groupIndex]
   if not socketGroup then return nil, 'socket group not found' end
@@ -549,21 +547,104 @@ function M.set_gem_quality(params)
   local gemInstance = socketGroup.gemList[gemIndex]
   if not gemInstance then return nil, 'gem not found' end
 
-  if quality < 0 or quality > 23 then return nil, 'invalid quality (must be 0-23)' end
+  return gemInstance, socketGroup, groupIndex, gemIndex
+end
 
-  gemInstance.quality = quality
-  if params.qualityId then
-    gemInstance.qualityId = tostring(params.qualityId)
-  end
-
+local function process_socket_group(socketGroup)
   if build.skillsTab.ProcessSocketGroup then
     build.skillsTab:ProcessSocketGroup(socketGroup)
   end
-
   build.buildFlag = true
   M.get_main_output()
+end
+
+local function apply_gem_quality(socketGroup, gemInstance, quality, qualityId)
+  if quality < 0 or quality > 23 then return nil, 'invalid quality (must be 0-23)' end
+
+  gemInstance.quality = quality
+  if qualityId ~= nil then
+    gemInstance.qualityId = tostring(qualityId)
+  end
+
+  process_socket_group(socketGroup)
+  return true
+end
+
+local function gem_quality_snapshot(gemInstance)
+  return {
+    name = gemInstance.nameSpec or gemInstance.name or '',
+    quality = tonumber(gemInstance.quality) or 0,
+    qualityId = gemInstance.qualityId or 'Default',
+  }
+end
+
+-- params: { groupIndex: number, gemIndex: number, quality: number, qualityId?: string }
+function M.set_gem_quality(params)
+  local gemInstance, socketGroup = resolve_gem_instance(params, true)
+  if not gemInstance then return nil, socketGroup end
+
+  local quality = tonumber(params.quality)
+  if not quality then return nil, 'invalid quality' end
+
+  local ok, err = apply_gem_quality(socketGroup, gemInstance, quality, params.qualityId)
+  if not ok then return nil, err end
 
   return true
+end
+
+-- params: { groupIndex: number, gemIndex: number, quality: number, qualityId?: string, fields?: string[] }
+function M.preview_gem_quality(params)
+  local gemInstance, socketGroup = resolve_gem_instance(params, true)
+  if not gemInstance then return nil, socketGroup end
+
+  local quality = tonumber(params.quality)
+  if not quality then return nil, 'invalid quality' end
+  if quality < 0 or quality > 23 then return nil, 'invalid quality (must be 0-23)' end
+
+  local fields = type(params.fields) == 'table' and params.fields or nil
+  local original = gem_quality_snapshot(gemInstance)
+  local targetQualityId = params.qualityId ~= nil and tostring(params.qualityId) or original.qualityId
+
+  local beforeStats, beforeErr = M.export_stats(fields)
+  if not beforeStats then return nil, beforeErr or 'failed to read stats before preview' end
+
+  local previewStats, previewErr
+  local ok = pcall(function()
+    local applied, applyErr = apply_gem_quality(socketGroup, gemInstance, quality, targetQualityId)
+    if not applied then error(applyErr or 'failed to apply preview quality') end
+    previewStats, previewErr = M.export_stats(fields)
+    if not previewStats then error(previewErr or 'failed to read stats after preview') end
+  end)
+
+  local preview = gem_quality_snapshot(gemInstance)
+  local restoredOk, restoreErr = apply_gem_quality(socketGroup, gemInstance, original.quality, original.qualityId)
+  local restored = gem_quality_snapshot(gemInstance)
+  local restoredStats, restoredStatsErr = nil, nil
+  if restoredOk then
+    restoredStats, restoredStatsErr = M.export_stats(fields)
+  end
+
+  local restoredMatches =
+    restoredOk and
+    restored.quality == original.quality and
+    tostring(restored.qualityId or 'Default') == tostring(original.qualityId or 'Default')
+
+  if not ok then
+    return nil, 'failed to preview gem quality; restored=' .. tostring(restoredMatches)
+  end
+  if not restoredMatches then
+    return nil, restoreErr or restoredStatsErr or 'failed to restore gem quality after preview'
+  end
+
+  return {
+    before = beforeStats,
+    after = previewStats,
+    restoredStats = restoredStats,
+    restored = restoredMatches,
+    gemBefore = original,
+    gemPreview = preview,
+    gemRestored = restored,
+  }
 end
 
 -- params: { groupIndex: number }
