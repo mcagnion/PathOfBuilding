@@ -274,6 +274,190 @@ handlers.save_build = function(params)
   return { ok = true, result = res }
 end
 
+local anointHeadlineStats = {
+  CombinedDPS = true,
+  TotalDPS = true,
+  FullDPS = true,
+  FullDotDPS = true,
+  SkillDPS = true,
+  TotalEHP = true,
+  EHP = true,
+}
+
+local anointDpsMetricOrder = { 'FullDPS', 'CombinedDPS', 'TotalDPS', 'MinionCombinedDPS', 'MinionTotalDPS' }
+
+local function anoint_metric_value(output, metric)
+  if type(output) ~= 'table' or type(metric) ~= 'string' then
+    return 0
+  end
+  if metric == 'MinionCombinedDPS' then
+    return (type(output.Minion) == 'table' and tonumber(output.Minion.CombinedDPS)) or tonumber(output.MinionCombinedDPS) or 0
+  end
+  if metric == 'MinionTotalDPS' then
+    return (type(output.Minion) == 'table' and tonumber(output.Minion.TotalDPS)) or tonumber(output.MinionTotalDPS) or 0
+  end
+  return tonumber(output[metric]) or 0
+end
+
+local function choose_anoint_dps_metric(output)
+  for _, metric in ipairs(anointDpsMetricOrder) do
+    local value = anoint_metric_value(output, metric)
+    if value > 0 then
+      return metric, value
+    end
+  end
+  return 'CombinedDPS', anoint_metric_value(output, 'CombinedDPS')
+end
+
+local function summarize_anoint_metrics(output, dpsMetric)
+  return {
+    DPS = anoint_metric_value(output, dpsMetric),
+    CombinedDPS = anoint_metric_value(output, 'CombinedDPS'),
+    TotalDPS = anoint_metric_value(output, 'TotalDPS'),
+    FullDPS = anoint_metric_value(output, 'FullDPS'),
+    MinionCombinedDPS = anoint_metric_value(output, 'MinionCombinedDPS'),
+    MinionTotalDPS = anoint_metric_value(output, 'MinionTotalDPS'),
+    TotalEHP = tonumber(output.TotalEHP) or tonumber(output.Life) or 0,
+  }
+end
+
+local function copy_string_list(list)
+  local result = {}
+  if type(list) == 'table' then
+    for _, value in ipairs(list) do
+      if type(value) == 'string' then
+        table.insert(result, value)
+      end
+    end
+  end
+  return result
+end
+
+local function get_item_anoint_names(item)
+  local result = {}
+  if item then
+    for _, modList in ipairs({ item.enchantModLines, item.scourgeModLines, item.implicitModLines, item.explicitModLines, item.crucibleModLines }) do
+      if type(modList) == 'table' then
+        for _, mod in ipairs(modList) do
+          local line = type(mod) == 'table' and mod.line
+          local nodeName = type(line) == 'string' and line:match('^Allocates%s+(.+)$')
+          if nodeName then
+            table.insert(result, nodeName)
+          end
+        end
+      end
+    end
+  end
+  return result
+end
+
+local function find_tree_node_by_name(tree, name)
+  if type(name) ~= 'string' or name == '' or type(tree) ~= 'table' then
+    return nil, nil
+  end
+  local notableMap = tree.notableMap
+  if type(notableMap) == 'table' then
+    local mapped = notableMap[name:lower()]
+    if mapped then
+      return mapped.id, mapped
+    end
+  end
+  for nodeId, node in pairs(tree.nodes or {}) do
+    if node.dn == name then
+      return nodeId, node
+    end
+  end
+  return nil, nil
+end
+
+local function summarize_anoint_node(nodeId, node)
+  if not node then
+    return nil
+  end
+  return {
+    nodeId = nodeId or node.id,
+    name = node.dn,
+    statLines = copy_string_list(node.sd),
+    recipe = copy_string_list(node.recipe),
+  }
+end
+
+local function anoint_match_flags(reqFlags, notFlags, flags)
+  flags = flags or {}
+  if type(reqFlags) == 'string' then
+    reqFlags = { reqFlags }
+  end
+  if reqFlags then
+    for _, flag in ipairs(reqFlags) do
+      if not flags[flag] then
+        return false
+      end
+    end
+  end
+
+  if type(notFlags) == 'string' then
+    notFlags = { notFlags }
+  end
+  if notFlags then
+    for _, flag in ipairs(notFlags) do
+      if flags[flag] then
+        return false
+      end
+    end
+  end
+
+  return true
+end
+
+local function add_anoint_stat_deltas(deltas, statList, currentOutput, candidateOutput, skillFlags, actorName)
+  if type(statList) ~= 'table' or type(currentOutput) ~= 'table' or type(candidateOutput) ~= 'table' then
+    return
+  end
+  local seen = {}
+  for _, statData in ipairs(statList) do
+    local stat = statData.stat
+    local seenKey = tostring(stat) .. ':' .. tostring(statData.label)
+    if stat and anoint_match_flags(statData.flag, statData.notFlag, skillFlags) and not anointHeadlineStats[stat] and not statData.childStat and stat ~= 'SkillDPS' and not seen[seenKey] then
+      local current = tonumber(currentOutput[stat]) or 0
+      local candidate = tonumber(candidateOutput[stat]) or 0
+      local diff = candidate - current
+      if (diff > 0.001 or diff < -0.001) and (not statData.condFunc or statData.condFunc(candidate, candidateOutput) or statData.condFunc(current, currentOutput)) then
+        local scale = (statData.pc or statData.mod) and 100 or 1
+        local percentDelta
+        if statData.compPercent and current ~= 0 and candidate ~= 0 then
+          percentDelta = candidate / current * 100 - 100
+        end
+        table.insert(deltas, {
+          stat = stat,
+          label = statData.label or stat,
+          delta = diff * scale,
+          current = current * scale,
+          candidate = candidate * scale,
+          percentDelta = percentDelta,
+          actor = actorName,
+          lowerIsBetter = statData.lowerIsBetter == true,
+        })
+        seen[seenKey] = true
+      end
+    end
+  end
+end
+
+local function collect_anoint_stat_deltas(build, currentOutput, candidateOutput)
+  local deltas = {}
+  if not build or not build.calcsTab or not build.calcsTab.mainEnv then
+    return deltas
+  end
+  local env = build.calcsTab.mainEnv
+  if env.player then
+    add_anoint_stat_deltas(deltas, build.displayStats, currentOutput, candidateOutput, env.player.mainSkill and env.player.mainSkill.skillFlags)
+  end
+  if env.player and env.player.mainSkill and env.player.mainSkill.minion and currentOutput.Minion and candidateOutput.Minion then
+    add_anoint_stat_deltas(deltas, build.minionDisplayStats, currentOutput.Minion, candidateOutput.Minion, env.minion and env.minion.mainSkill and env.minion.mainSkill.skillFlags, 'Minion')
+  end
+  return deltas
+end
+
 -- Rank anointable notables by their DPS/EHP impact on the build, using PoB's
 -- non-destructive MiscCalculator (same mechanism as the GUI's NotableDBControl
 -- when sorting anoints in the item picker). Iterates every anointable notable
@@ -327,8 +511,27 @@ handlers.evaluate_anoint_candidates = function(params)
     return { ok = false, error = 'baseline calc failed: ' .. tostring(calcBase) }
   end
 
-  local baseDPS = tonumber(calcBase.CombinedDPS) or tonumber(calcBase.TotalDPS) or 0
+  local dpsMetric, baseDPS = choose_anoint_dps_metric(calcBase)
   local baseEHP = tonumber(calcBase.TotalEHP) or tonumber(calcBase.Life) or 0
+
+  local ok_current, calcCurrent = pcall(calcFunc, { repSlotName = baseType, repItem = currentItem })
+  if not ok_current or type(calcCurrent) ~= 'table' then
+    itemsTab.displayItem = origDisplay
+    itemsTab.anointEnchantSlot = origAnointSlot
+    return { ok = false, error = 'current anoint calc failed: ' .. tostring(calcCurrent) }
+  end
+  local currentDPS = anoint_metric_value(calcCurrent, dpsMetric)
+  local currentEHP = tonumber(calcCurrent.TotalEHP) or tonumber(calcCurrent.Life) or 0
+
+  local currentAnoints = get_item_anoint_names(currentItem)
+  local currentAnoint = nil
+  if currentAnoints[1] then
+    local currentNodeId, currentNode = find_tree_node_by_name(_G.build.spec.tree, currentAnoints[1])
+    currentAnoint = summarize_anoint_node(currentNodeId, currentNode) or { name = currentAnoints[1], statLines = {} }
+    currentAnoint.dpsDelta = currentDPS - baseDPS
+    currentAnoint.ehpDelta = currentEHP - baseEHP
+    currentAnoint.dpsMetric = dpsMetric
+  end
 
   local rankings = {}
   local evaluated = 0
@@ -338,20 +541,27 @@ handlers.evaluate_anoint_candidates = function(params)
     if node.recipe and #node.recipe >= 1 and not (_G.build.spec.allocNodes and _G.build.spec.allocNodes[nodeId]) then
       local ok_eval, output = pcall(calcFunc, { repSlotName = baseType, repItem = itemsTab:anointItem(node) })
       if ok_eval and type(output) == 'table' then
-        local newDPS = tonumber(output.CombinedDPS) or tonumber(output.TotalDPS) or 0
+        local newDPS = anoint_metric_value(output, dpsMetric)
         local newEHP = tonumber(output.TotalEHP) or tonumber(output.Life) or 0
         local dpsDelta = newDPS - baseDPS
         local ehpDelta = newEHP - baseEHP
+        local swapDpsDelta = newDPS - currentDPS
+        local swapEhpDelta = newEHP - currentEHP
         local score = 0
         if baseDPS > 0 then score = score + (dpsDelta / baseDPS) * dpsWeight end
         if baseEHP > 0 then score = score + (ehpDelta / baseEHP) * ehpWeight end
         table.insert(rankings, {
           nodeId = nodeId,
           name = node.dn,
+          statLines = copy_string_list(node.sd),
           dpsDelta = dpsDelta,
           ehpDelta = ehpDelta,
+          swapDpsDelta = swapDpsDelta,
+          swapEhpDelta = swapEhpDelta,
+          dpsMetric = dpsMetric,
           score = score,
           recipe = node.recipe,
+          statDeltas = collect_anoint_stat_deltas(_G.build, calcCurrent, output),
         })
         evaluated = evaluated + 1
       else
@@ -376,7 +586,11 @@ handlers.evaluate_anoint_candidates = function(params)
   return {
     ok = true,
     candidates = rankings,
-    base = { CombinedDPS = baseDPS, TotalEHP = baseEHP },
+    dpsMetric = dpsMetric,
+    base = summarize_anoint_metrics(calcBase, dpsMetric),
+    current = summarize_anoint_metrics(calcCurrent, dpsMetric),
+    currentAnoint = currentAnoint,
+    currentAnointDetected = currentAnoint ~= nil,
     evaluated = evaluated,
     skipped = skipped,
     slot = slotName,
