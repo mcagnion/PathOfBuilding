@@ -530,8 +530,11 @@ end
 local function resolve_gem_instance(params, requireQuality)
   if not build or not build.skillsTab then return nil, 'skills not initialized' end
   if type(params) ~= 'table' then return nil, 'invalid params' end
-  if not params.groupIndex or not params.gemIndex or (requireQuality and params.quality == nil) then
-    return nil, 'missing groupIndex, gemIndex, or quality'
+  if not params.groupIndex or not params.gemIndex then
+    return nil, 'missing groupIndex or gemIndex'
+  end
+  if requireQuality and params.quality == nil then
+    return nil, 'missing quality'
   end
 
   local skillSetId = build.skillsTab.activeSkillSetId or 1
@@ -540,6 +543,9 @@ local function resolve_gem_instance(params, requireQuality)
 
   local groupIndex = tonumber(params.groupIndex)
   local gemIndex = tonumber(params.gemIndex)
+  if not groupIndex or not gemIndex then
+    return nil, 'invalid groupIndex or gemIndex'
+  end
 
   local socketGroup = skillSet.socketGroupList[groupIndex]
   if not socketGroup then return nil, 'socket group not found' end
@@ -548,6 +554,14 @@ local function resolve_gem_instance(params, requireQuality)
   if not gemInstance then return nil, 'gem not found' end
 
   return gemInstance, socketGroup, groupIndex, gemIndex
+end
+
+local function coerce_boolean(value)
+  if value == true then return true end
+  if value == false then return false end
+  if value == 'true' then return true end
+  if value == 'false' then return false end
+  return nil
 end
 
 local function process_socket_group(socketGroup)
@@ -570,11 +584,28 @@ local function apply_gem_quality(socketGroup, gemInstance, quality, qualityId)
   return true
 end
 
+local function apply_gem_enabled(socketGroup, gemInstance, enabled)
+  gemInstance.enabled = enabled == true
+  process_socket_group(socketGroup)
+  return true
+end
+
 local function gem_quality_snapshot(gemInstance)
   return {
     name = gemInstance.nameSpec or gemInstance.name or '',
     quality = tonumber(gemInstance.quality) or 0,
     qualityId = gemInstance.qualityId or 'Default',
+  }
+end
+
+local function gem_enabled_snapshot(gemInstance)
+  return {
+    name = gemInstance.nameSpec or gemInstance.name or '',
+    level = tonumber(gemInstance.level) or 1,
+    quality = tonumber(gemInstance.quality) or 0,
+    qualityId = gemInstance.qualityId or 'Default',
+    enabled = gemInstance.enabled ~= false,
+    isSupport = gemInstance.skillId and gemInstance.skillId:find('Support') ~= nil or false,
   }
 end
 
@@ -587,6 +618,20 @@ function M.set_gem_quality(params)
   if not quality then return nil, 'invalid quality' end
 
   local ok, err = apply_gem_quality(socketGroup, gemInstance, quality, params.qualityId)
+  if not ok then return nil, err end
+
+  return true
+end
+
+-- params: { groupIndex: number, gemIndex: number, enabled: boolean }
+function M.set_gem_enabled(params)
+  local gemInstance, socketGroup = resolve_gem_instance(params, false)
+  if not gemInstance then return nil, socketGroup end
+
+  local enabled = coerce_boolean(params.enabled)
+  if enabled == nil then return nil, 'missing or invalid enabled' end
+
+  local ok, err = apply_gem_enabled(socketGroup, gemInstance, enabled)
   if not ok then return nil, err end
 
   return true
@@ -609,7 +654,7 @@ function M.preview_gem_quality(params)
   if not beforeStats then return nil, beforeErr or 'failed to read stats before preview' end
 
   local previewStats, previewErr
-  local ok = pcall(function()
+  local ok, previewFailure = pcall(function()
     local applied, applyErr = apply_gem_quality(socketGroup, gemInstance, quality, targetQualityId)
     if not applied then error(applyErr or 'failed to apply preview quality') end
     previewStats, previewErr = M.export_stats(fields)
@@ -630,7 +675,7 @@ function M.preview_gem_quality(params)
     tostring(restored.qualityId or 'Default') == tostring(original.qualityId or 'Default')
 
   if not ok then
-    return nil, 'failed to preview gem quality; restored=' .. tostring(restoredMatches)
+    return nil, 'failed to preview gem quality; restored=' .. tostring(restoredMatches) .. '; error=' .. tostring(previewFailure)
   end
   if not restoredMatches then
     return nil, restoreErr or restoredStatsErr or 'failed to restore gem quality after preview'
@@ -644,6 +689,114 @@ function M.preview_gem_quality(params)
     gemBefore = original,
     gemPreview = preview,
     gemRestored = restored,
+  }
+end
+
+-- params: { groupIndex: number, gemIndex: number, enabled: boolean, fields?: string[] }
+function M.preview_gem_enabled(params)
+  local gemInstance, socketGroup = resolve_gem_instance(params, false)
+  if not gemInstance then return nil, socketGroup end
+
+  local targetEnabled = coerce_boolean(params.enabled)
+  if targetEnabled == nil then return nil, 'missing or invalid enabled' end
+
+  local fields = type(params.fields) == 'table' and params.fields or nil
+  local original = gem_enabled_snapshot(gemInstance)
+
+  local beforeStats, beforeErr = M.export_stats(fields)
+  if not beforeStats then return nil, beforeErr or 'failed to read stats before preview' end
+
+  local previewStats, previewErr
+  local ok, previewFailure = pcall(function()
+    local applied, applyErr = apply_gem_enabled(socketGroup, gemInstance, targetEnabled)
+    if not applied then error(applyErr or 'failed to apply preview enabled state') end
+    previewStats, previewErr = M.export_stats(fields)
+    if not previewStats then error(previewErr or 'failed to read stats after preview') end
+  end)
+
+  local preview = gem_enabled_snapshot(gemInstance)
+  local restoredOk, restoreErr = apply_gem_enabled(socketGroup, gemInstance, original.enabled)
+  local restored = gem_enabled_snapshot(gemInstance)
+  local restoredStats, restoredStatsErr = nil, nil
+  if restoredOk then
+    restoredStats, restoredStatsErr = M.export_stats(fields)
+  end
+
+  local restoredMatches = restoredOk and restored.enabled == original.enabled
+
+  if not ok then
+    return nil, 'failed to preview gem enabled state; restored=' .. tostring(restoredMatches) .. '; error=' .. tostring(previewFailure)
+  end
+  if not restoredMatches then
+    return nil, restoreErr or restoredStatsErr or 'failed to restore gem enabled state after preview'
+  end
+
+  return {
+    before = beforeStats,
+    after = previewStats,
+    restoredStats = restoredStats,
+    restored = restoredMatches,
+    gemBefore = original,
+    gemPreview = preview,
+    gemRestored = restored,
+  }
+end
+
+-- params: { groupIndex: number, gemIndices?: number[], enabled?: boolean, fields?: string[] }
+function M.preview_gem_enabled_batch(params)
+  if not build or not build.skillsTab then return nil, 'skills not initialized' end
+  if type(params) ~= 'table' then return nil, 'invalid params' end
+  if not params.groupIndex then return nil, 'missing groupIndex' end
+
+  local targetEnabled = params.enabled == nil and false or coerce_boolean(params.enabled)
+  if targetEnabled == nil then return nil, 'invalid enabled' end
+
+  local skillSetId = build.skillsTab.activeSkillSetId or 1
+  local skillSet = build.skillsTab.skillSets[skillSetId]
+  if not skillSet then return nil, 'active skill set not found' end
+
+  local groupIndex = tonumber(params.groupIndex)
+  if not groupIndex then return nil, 'invalid groupIndex' end
+  local socketGroup = skillSet.socketGroupList[groupIndex]
+  if not socketGroup then return nil, 'socket group not found' end
+
+  local gemIndices = {}
+  if type(params.gemIndices) == 'table' then
+    for _, gemIndex in ipairs(params.gemIndices) do
+      local parsedGemIndex = tonumber(gemIndex)
+      if not parsedGemIndex then return nil, 'invalid gemIndex in gemIndices' end
+      table.insert(gemIndices, parsedGemIndex)
+    end
+  elseif socketGroup.gemList then
+    for gemIndex, _ in ipairs(socketGroup.gemList) do
+      table.insert(gemIndices, gemIndex)
+    end
+  end
+
+  local results = {}
+  for _, gemIndex in ipairs(gemIndices) do
+    local result, err = M.preview_gem_enabled({
+      groupIndex = groupIndex,
+      gemIndex = gemIndex,
+      enabled = targetEnabled,
+      fields = params.fields,
+    })
+    if result then
+      result.ok = true
+      result.gemIndex = gemIndex
+      table.insert(results, result)
+    else
+      table.insert(results, { ok = false, gemIndex = gemIndex, error = err or 'failed to preview gem enabled state' })
+      if err and string.find(err, 'restored=false', 1, true) then
+        break
+      end
+    end
+  end
+
+  return {
+    groupIndex = groupIndex,
+    enabled = targetEnabled,
+    results = results,
   }
 end
 
