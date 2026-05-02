@@ -6,6 +6,8 @@
 
 local dkjson = require "dkjson"
 
+local invalidPOESESSIDMessage = "POESESSID expired or invalid. Re-log on pathofexile.com and update your Trader session ID."
+
 ---@class TradeQueryRequests
 local TradeQueryRequestsClass = newClass("TradeQueryRequests", function(self, rateLimiter)
 	self.maxFetchPerSearch = 10
@@ -17,6 +19,31 @@ local TradeQueryRequestsClass = newClass("TradeQueryRequests", function(self, ra
 	}
 	self.hostName = "https://www.pathofexile.com/"
 end)
+
+function TradeQueryRequestsClass:GetInvalidPOESESSIDMessage()
+	return invalidPOESESSIDMessage
+end
+
+function TradeQueryRequestsClass:IsInvalidPOESESSIDResponse(response, errMsg, isHtmlResponse)
+	if not main.POESESSID or main.POESESSID == "" then
+		return false
+	end
+	if errMsg == "Response code: 401" then
+		return true
+	end
+	local header = response and response.header and response.header:lower() or ""
+	return isHtmlResponse and header:match("cache%-control:[^\n]*must%-revalidate") ~= nil
+end
+
+function TradeQueryRequestsClass:GetRateLimitRules(response)
+	local header = response and response.header or ""
+	return header:match("[xX]%-[rR]ate%-[lL]imit%-[rR]ules: ([^\r\n]+)")
+end
+
+function TradeQueryRequestsClass:ResponseHasAccountRateLimitRule(response)
+	local rules = self:GetRateLimitRules(response)
+	return rules and rules:match("[Aa]ccount") ~= nil
+end
 
 ---Main routine for processing request queue
 function TradeQueryRequestsClass:ProcessQueue()
@@ -30,8 +57,13 @@ function TradeQueryRequestsClass:ProcessQueue()
 					local request = table.remove(queue, 1)
 					local requestId = self.rateLimiter:InsertRequest(policy)
 					local onComplete = function(response, errMsg)
+						response = response or {}
+						response.header = response.header or ""
+						response.body = response.body or ""
 						self.rateLimiter:FinishRequest(policy, requestId)
-						self.rateLimiter:UpdateFromHeader(response.header)
+						if response.header:lower():find("x%-rate%-limit%-policy:") then
+							self.rateLimiter:UpdateFromHeader(response.header)
+						end
 						if response.header:match("HTTP/[%d%.]+ (%d+)") == "429" then
 							request.attempts = (request.attempts or 0) + 1
 							local backoff = m_min(2 ^ request.attempts, 60)
@@ -39,13 +71,16 @@ function TradeQueryRequestsClass:ProcessQueue()
 							table.insert(queue, 1, request)
 							return
 						end
+						local rateLimitRules = self:GetRateLimitRules(response)
+						local invalidPOESESSID = self:IsInvalidPOESESSIDResponse(response, errMsg)
+							or (rateLimitRules and not self:ResponseHasAccountRateLimitRule(response))
 						-- if limit rules don't return account then the POESESSID is invalid.
-						if response.header:match("[xX]%-[rR]ate%-[lL]imit%-[rR]ules: (.-)\n"):match("Account") == nil and main.POESESSID ~= "" then
+						if invalidPOESESSID and main.POESESSID ~= "" then
 							main.POESESSID = ""
 							if errMsg then
-								errMsg = errMsg .. "\nPOESESSID is invalid. Please Re-Log and reset"
+								errMsg = errMsg .. "\n" .. self:GetInvalidPOESESSIDMessage()
 							else
-								errMsg = "POESESSID is invalid. Please Re-Log and reset"
+								errMsg = self:GetInvalidPOESESSIDMessage()
 							end
 						end
 						request.callback(response.body, errMsg, unpack(request.callbackParams or {}))
@@ -215,7 +250,7 @@ function TradeQueryRequestsClass:PerformSearch(realm, league, query, callback)
 					end
 					if response.error.message:find("Logging in will increase this limit") then
 						if main.POESESSID ~= "" then
-							errMsg = "POESESSID is invalid. Please Re-Log and reset"
+							errMsg = self:GetInvalidPOESESSIDMessage()
 						else
 							errMsg = "Session is invalid. Please add your POESESSID"
 						end
@@ -362,12 +397,11 @@ function TradeQueryRequestsClass:FetchSearchQueryHTML(realm, league, queryId, ca
 	local header = "Cookie: POESESSID=" .. main.POESESSID
 	launch:DownloadPage(self:buildUrl(self.hostName .. "trade/search", realm, league, queryId),
 		function(response, errMsg)
+			if self:IsInvalidPOESESSIDResponse(response, errMsg, true) then
+				return callback(nil, self:GetInvalidPOESESSIDMessage())
+			end
 			if errMsg then
 				return callback(nil, errMsg)
-			end
-			-- check if response.header includes "Cache-Control: must-revalidate" which indicates an invalid session
-			if response.header:lower():match("cache%-control:.+must%-revalidate") then
-				return callback(nil, "Failed to get search query, check POESESSID")
 			end
 			-- full json state obj from HTML
 			local dataStr = response.body:match('require%(%["main"%].+ t%((.+)%);}%);}%);')
@@ -417,9 +451,12 @@ function TradeQueryRequestsClass:FetchRealmsAndLeaguesHTML(callback)
 		return callback(nil, "Please provide your POESESSID")
 	end
 	local header = "Cookie: POESESSID=" .. main.POESESSID
-	launch:DownloadPage(
-		self.hostName .. "trade",
+	self:DownloadTradePage(
+		header,
 		function(response, errMsg)
+			if self:IsInvalidPOESESSIDResponse(response, errMsg, true) then
+				return callback(nil, self:GetInvalidPOESESSIDMessage())
+			end
 			if errMsg then
 				return callback(nil, errMsg)
 			end
@@ -432,35 +469,80 @@ function TradeQueryRequestsClass:FetchRealmsAndLeaguesHTML(callback)
 			if err then
 				return callback(nil, "Failed to parse JSON object. ".. err)
 			end
+			if type(data) ~= "table" or type(data.leagues) ~= "table" or type(data.realms) ~= "table" then
+				return callback(nil, "League data not found on the page.")
+			end
 			callback({leagues = data.leagues, realms = data.realms}, errMsg)
-		end,
-		{header = header}
+		end
 	)
 end
 
 --- Fetches the list of all available leagues using poe API
 ---@param realm string
 ---@param callback fun(query:table, errMsg:string)
-function TradeQueryRequestsClass:FetchLeagues(realm, callback)
-	launch:DownloadPage(
-		self.hostName .. "api/leagues?compact=1&realm=" .. realm,
-		function(response, errMsg)
-			if errMsg then
-				return callback(nil, errMsg)
-			end
-			local json_data = dkjson.decode(response.body)
-			if not json_data or json_data.error then
-				errMsg = json_data and json_data.error or "Failed to get leagues"
-			end
-			local leagues = {}
-				for _, value in pairs(json_data) do
-					if (not value.id:find("SSF") and not value.id:find("Solo")) then
-						table.insert(leagues, value.id)
-					end
-				end
-			callback(leagues, errMsg)
+function TradeQueryRequestsClass:ParseLeagueList(responseBody)
+	responseBody = responseBody or ""
+	local json_data, _, jsonErr = dkjson.decode(responseBody)
+	if type(json_data) ~= "table" then
+		local errMsg = jsonErr and ("Failed to get leagues: " .. jsonErr) or "Failed to get leagues"
+		return nil, errMsg
+	end
+	if json_data.error then
+		local errMsg = json_data.error
+		if type(errMsg) == "table" then
+			errMsg = errMsg.message or errMsg.code or "Failed to get leagues"
 		end
-	)
+		return nil, tostring(errMsg)
+	end
+	local leagueData = json_data.leagues or json_data
+	if type(leagueData) ~= "table" then
+		return nil, "Failed to get leagues"
+	end
+	local leagues = {}
+	for _, value in pairs(leagueData) do
+		local leagueId = type(value) == "table" and value.id
+		if type(leagueId) == "string" and not leagueId:find("SSF") and not leagueId:find("Solo") then
+			table.insert(leagues, leagueId)
+		end
+	end
+	return leagues
+end
+
+function TradeQueryRequestsClass:GetLeagueListUrls(realm)
+	realm = realm or "pc"
+	return {
+		self.hostName .. "api/leagues?compact=1&realm=" .. realm,
+		"https://api.pathofexile.com/league?realm=" .. realm .. "&type=main",
+	}
+end
+
+function TradeQueryRequestsClass:DownloadLeagueList(url, callback)
+	launch:DownloadPage(url, callback)
+end
+
+function TradeQueryRequestsClass:DownloadTradePage(header, callback)
+	launch:DownloadPage(self.hostName .. "trade", callback, {header = header})
+end
+
+function TradeQueryRequestsClass:FetchLeagues(realm, callback)
+	local urls = self:GetLeagueListUrls(realm)
+	local function fetchLeagueList(urlIndex, previousErr)
+		local url = urls[urlIndex]
+		if not url then
+			return callback(nil, previousErr or "Failed to get leagues")
+		end
+		self:DownloadLeagueList(url, function(response, errMsg)
+			if errMsg then
+				return fetchLeagueList(urlIndex + 1, errMsg)
+			end
+			local leagues, parseErr = self:ParseLeagueList(response and response.body or "")
+			if parseErr or not leagues or #leagues == 0 then
+				return fetchLeagueList(urlIndex + 1, parseErr or "Failed to get leagues")
+			end
+			callback(leagues, nil)
+		end)
+	end
+	fetchLeagueList(1)
 end
 
 --- Build search and trade URLs with proper encoding

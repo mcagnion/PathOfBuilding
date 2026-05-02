@@ -45,12 +45,10 @@ describe("TradeQueryRequests", function()
 		-- Pass: Dequeues and processes valid item
 		-- Fail: Queue unchanged, indicating timing/insertion bug, blocking trade searches
 		it("processes search queue item", function()
-			local orig_launch = launch
-			launch = {
-				DownloadPage = function(url, onComplete, opts)
-					onComplete({ body = "{}", header = "HTTP/1.1 200 OK" }, nil)
-				end
-			}
+			local origDownloadPage = launch.DownloadPage
+			launch.DownloadPage = function(self, url, onComplete, opts)
+				onComplete({ body = "{}", header = "HTTP/1.1 200 OK" }, nil)
+			end
 			table.insert(requests.requestQueue.search, {
 				url = "test",
 				callback = function() end,
@@ -62,7 +60,58 @@ describe("TradeQueryRequests", function()
 			mock_limiter.NextRequestTime = mock_next_time
 			requests:ProcessQueue()
 			assert.are.equal(#requests.requestQueue.search, 0)
-			launch = orig_launch
+			launch.DownloadPage = origDownloadPage
+		end)
+
+		it("returns a clear error when an API search sees an expired POESESSID", function()
+			local testRequests = new("TradeQueryRequests")
+			testRequests.rateLimiter = {
+				NextRequestTime = function(self, policy, time)
+					return time - 1
+				end,
+				InsertRequest = function()
+					return 1
+				end,
+				FinishRequest = function() end,
+				UpdateFromHeader = function() end,
+				GetPolicyName = function(self, key)
+					return key
+				end
+			}
+			testRequests.requestQueue.search = {}
+			testRequests.requestQueue.fetch = {}
+			local origDownloadPage = launch.DownloadPage
+			local orig_poesessid = main.POESESSID
+			local resultErr
+			main.POESESSID = "1234567890ABCDEF1234567890ABCDEF"
+			launch.DownloadPage = function(self, url, onComplete, opts)
+				assert.is_not_nil(opts.header:find("Cookie: POESESSID=1234567890ABCDEF1234567890ABCDEF", 1, true))
+				onComplete({ body = "", header = "HTTP/1.1 401 Unauthorized" }, "Response code: 401")
+			end
+			table.insert(testRequests.requestQueue.search, {
+				url = "test",
+				callback = function(body, errMsg)
+					resultErr = errMsg
+				end,
+			})
+
+			testRequests:ProcessQueue()
+
+			launch.DownloadPage = origDownloadPage
+			assert.are.equal("", main.POESESSID)
+			main.POESESSID = orig_poesessid
+			assert.is_not_nil(resultErr:find("POESESSID expired or invalid", 1, true))
+		end)
+
+		it("only treats must-revalidate as an expired POESESSID on HTML fetches", function()
+			local orig_poesessid = main.POESESSID
+			main.POESESSID = "1234567890ABCDEF1234567890ABCDEF"
+
+			local response = { header = "HTTP/1.1 200 OK\nCache-Control: must-revalidate\n" }
+			assert.is_false(requests:IsInvalidPOESESSIDResponse(response, nil, false))
+			assert.is_true(requests:IsInvalidPOESESSIDResponse(response, nil, true))
+
+			main.POESESSID = orig_poesessid
 		end)
 
 		-- Pass: Retries with increasing backoff up to cap, preventing infinite loops
@@ -153,6 +202,79 @@ describe("TradeQueryRequests", function()
 			end, {})
 			requests.PerformSearch = orig_perform
 			requests.FetchResultBlock = orig_fetchBlock
+		end)
+	end)
+
+	describe("ParseLeagueList", function()
+		it("accepts league arrays wrapped in a leagues field", function()
+			local leagues, errMsg = requests:ParseLeagueList(
+				[[{"leagues":[{"id":"Mercenaries"},{"id":"SSF Mercenaries"},{"id":"Solo Mercenaries"},{"id":"Standard"}]}]]
+			)
+
+			assert.is_nil(errMsg)
+			assert.are.same({ "Mercenaries", "Standard" }, leagues)
+		end)
+
+		it("returns an error instead of iterating invalid JSON", function()
+			local leagues, errMsg = requests:ParseLeagueList("<html>blocked</html>")
+
+			assert.is_nil(leagues)
+			assert.is_not_nil(errMsg)
+		end)
+	end)
+
+	describe("FetchLeagues", function()
+		it("falls back to the official league endpoint when the legacy endpoint is blocked", function()
+			local origDownloadLeagueList = requests.DownloadLeagueList
+			local requestedUrls = {}
+			local resultLeagues
+			local resultErr
+			requests.DownloadLeagueList = function(self, url, callback)
+				table.insert(requestedUrls, url)
+				if #requestedUrls == 1 then
+					callback({ body = "<html>blocked</html>" }, nil)
+				else
+					callback({ body = [[{"leagues":[{"id":"Mercenaries"},{"id":"Standard"}]}]] }, nil)
+				end
+			end
+
+			requests:FetchLeagues("pc", function(leagues, errMsg)
+				resultLeagues = leagues
+				resultErr = errMsg
+			end)
+
+			requests.DownloadLeagueList = origDownloadLeagueList
+			assert.is_nil(resultErr)
+			assert.are.same({ "Mercenaries", "Standard" }, resultLeagues)
+			assert.are.equal("https://www.pathofexile.com/api/leagues?compact=1&realm=pc", requestedUrls[1])
+			assert.are.equal("https://api.pathofexile.com/league?realm=pc&type=main", requestedUrls[2])
+		end)
+	end)
+
+	describe("FetchRealmsAndLeaguesHTML", function()
+		it("reports an expired POESESSID before trying to parse the login page", function()
+			local orig_poesessid = main.POESESSID
+			local origDownloadTradePage = requests.DownloadTradePage
+			local resultData
+			local resultErr
+			main.POESESSID = "1234567890ABCDEF1234567890ABCDEF"
+			requests.DownloadTradePage = function(self, header, callback)
+				assert.are.equal("Cookie: POESESSID=1234567890ABCDEF1234567890ABCDEF", header)
+				callback({
+					body = "<html>login page</html>",
+					header = "HTTP/1.1 200 OK\nCache-Control: must-revalidate\n",
+				}, nil)
+			end
+
+			requests:FetchRealmsAndLeaguesHTML(function(data, errMsg)
+				resultData = data
+				resultErr = errMsg
+			end)
+
+			requests.DownloadTradePage = origDownloadTradePage
+			main.POESESSID = orig_poesessid
+			assert.is_nil(resultData)
+			assert.are.equal(requests:GetInvalidPOESESSIDMessage(), resultErr)
 		end)
 	end)
 

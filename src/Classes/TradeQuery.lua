@@ -380,6 +380,7 @@ Highest Weight - Displays the order retrieved from trade]]
 			self.controls.league.selIndex = nil
 			self.controls.league:SetSel(self.pbLeagueIndex)
 			self:SetCurrencyConversionButton()
+			self:ClearPublicLeagueFallbackNotice()
 		end
 		if self.allLeagues[self.pbRealm] then
 			setLeagueDropList()
@@ -708,6 +709,13 @@ function TradeQueryClass:SetNotice(notice_control, msg)
 		msg = colorCodes.NEGATIVE .. msg
 	end
 	notice_control.label = msg
+end
+
+function TradeQueryClass:ClearPublicLeagueFallbackNotice()
+	local notice = self.controls and self.controls.pbNotice
+	if notice and notice.label and notice.label:find("using public leagues", 1, true) then
+		self:SetNotice(notice, "")
+	end
 end
 
 -- Method to reduce the full output to only the values that were 'weighted'
@@ -1244,38 +1252,56 @@ function TradeQueryClass:UpdateRealms()
 		self.controls.realm:SetSel(self.pbRealmIndex)
 	end
 
-	if main.POESESSID and main.POESESSID ~= "" then
-		-- Fetch from trade page using POESESSID, includes private leagues
-		ConPrintf("Fetching realms and leagues using POESESSID")
-		self.tradeQueryRequests:FetchRealmsAndLeaguesHTML(function(data, errMsg)
-			if errMsg then
-				self:SetNotice(self.controls.pbNotice, "Error while fetching league list: "..errMsg)
-				return
-			end
-			local leagues = data.leagues
-			self.allLeagues = {}
-			for _, value in ipairs(leagues) do
-				if not self.allLeagues[value.realm] then self.allLeagues[value.realm] = {} end
-				t_insert(self.allLeagues[value.realm], value.id)
-			end
-			self.realmIds = {}
-			for _, value in pairs(data.realms) do
-				-- filter out only Path of Exile one realms, as poe2 is not supported yet
-				if value.text:match("PoE 1 ") then
-					self.realmIds[value.text:gsub("PoE 1 ", "")] = value.id
-				end
-			end
-			setRealmDropList()
-
-		end)
-	else
-		-- Fallback to static list
+	local function useStaticRealms(notice)
 		ConPrintf("Using static realms list")
 		self.realmIds = {
 			["PC"]   = "pc",
 			["PS4"]  = "sony",
 			["Xbox"] = "xbox",
 		}
+		self.allLeagues = {}
+		if notice then
+			self:SetNotice(self.controls.pbNotice, notice)
+		end
 		setRealmDropList()
+	end
+
+	local function getPrivateLeagueFallbackNotice(errMsg)
+		if errMsg and errMsg:find("POESESSID", 1, true) then
+			return colorCodes.WARNING .. errMsg .. " using public leagues until it is updated."
+		end
+		return colorCodes.WARNING .. "Private league list unavailable; using public leagues."
+	end
+
+	if main.POESESSID and main.POESESSID ~= "" then
+		-- Fetch from trade page using POESESSID, includes private leagues
+		ConPrintf("Fetching realms and leagues using POESESSID")
+		self.tradeQueryRequests:FetchRealmsAndLeaguesHTML(function(data, errMsg)
+			if errMsg or not data then
+				ConPrintf("Failed to fetch private trade leagues: %s", tostring(errMsg))
+				useStaticRealms(getPrivateLeagueFallbackNotice(errMsg))
+				return
+			end
+			self.allLeagues = {}
+			for _, value in ipairs(data.leagues or { }) do
+				if not self.allLeagues[value.realm] then self.allLeagues[value.realm] = {} end
+				t_insert(self.allLeagues[value.realm], value.id)
+			end
+			self.realmIds = {}
+			for _, value in pairs(data.realms or { }) do
+				-- filter out only Path of Exile one realms, as poe2 is not supported yet
+				if value.text and value.text:match("PoE 1 ") then
+					self.realmIds[value.text:gsub("PoE 1 ", "")] = value.id
+				end
+			end
+			if next(self.realmIds) == nil then
+				useStaticRealms(colorCodes.WARNING .. "Private realm list unavailable; using public leagues.")
+				return
+			end
+			setRealmDropList()
+
+		end)
+	else
+		useStaticRealms()
 	end
 end

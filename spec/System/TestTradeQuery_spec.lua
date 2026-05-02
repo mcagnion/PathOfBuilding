@@ -1,4 +1,72 @@
 describe("TradeQuery", function()
+	describe("UpdateRealms", function()
+		it("falls back to public realms when private league loading fails", function()
+			local orig_poesessid = main.POESESSID
+			main.POESESSID = "1234567890ABCDEF1234567890ABCDEF"
+
+			local tq = new("TradeQuery", { itemsTab = {} })
+			tq.controls.pbNotice = { label = "" }
+			tq.controls.realm = {
+				list = {},
+				selIndex = 1,
+				SetList = function(self, list)
+					self.list = list
+				end,
+				SetSel = function(self, index)
+					self.selIndex = index
+				end,
+			}
+			tq.tradeQueryRequests.FetchRealmsAndLeaguesHTML = function(self, callback)
+				callback(nil, "JSON object not found on the page.")
+			end
+
+			tq:UpdateRealms()
+
+			main.POESESSID = orig_poesessid
+			assert.are.equal("pc", tq.realmIds["PC"])
+			assert.are.equal("sony", tq.realmIds["PS4"])
+			assert.are.equal("xbox", tq.realmIds["Xbox"])
+			assert.are.equal("PC", tq.controls.realm.list[1])
+			assert.is_not_nil(tq.controls.pbNotice.label:find("Private league list unavailable", 1, true))
+		end)
+
+		it("clears the public league fallback notice after leagues load", function()
+			local tq = new("TradeQuery", { itemsTab = {} })
+			tq.controls.pbNotice = { label = colorCodes.WARNING .. "Private league list unavailable; using public leagues." }
+
+			tq:ClearPublicLeagueFallbackNotice()
+
+			assert.are.equal("", tq.controls.pbNotice.label)
+		end)
+
+		it("shows a specific notice when the session id expired", function()
+			local orig_poesessid = main.POESESSID
+			main.POESESSID = "1234567890ABCDEF1234567890ABCDEF"
+
+			local tq = new("TradeQuery", { itemsTab = {} })
+			tq.controls.pbNotice = { label = "" }
+			tq.controls.realm = {
+				list = {},
+				selIndex = 1,
+				SetList = function(self, list)
+					self.list = list
+				end,
+				SetSel = function(self, index)
+					self.selIndex = index
+				end,
+			}
+			tq.tradeQueryRequests.FetchRealmsAndLeaguesHTML = function(self, callback)
+				callback(nil, self:GetInvalidPOESESSIDMessage())
+			end
+
+			tq:UpdateRealms()
+
+			main.POESESSID = orig_poesessid
+			assert.is_not_nil(tq.controls.pbNotice.label:find("POESESSID expired or invalid", 1, true))
+			assert.is_not_nil(tq.controls.pbNotice.label:find("using public leagues", 1, true))
+		end)
+	end)
+
 	describe("result dropdown tooltipFunc", function()
 		-- Builds a TradeQuery with the strict minimum needed for
 		-- PriceItemRowDisplay to construct row 1 without exploding. Only the
