@@ -1018,6 +1018,28 @@ function M.remove_gem(params)
   return true
 end
 
+-- params: { text: string }
+-- Sets the in-memory notes buffer so a subsequent save_build serialises the
+-- new content. Without this, set_build_notes (which writes XML directly to
+-- disk) is silently overwritten the next time save_build runs from the stale
+-- in-memory NotesTab buffer.
+function M.set_notes(params)
+  if not build or not build.notesTab then
+    return nil, 'build/notes not initialized'
+  end
+  if type(params) ~= 'table' or type(params.text) ~= 'string' then
+    return nil, 'missing or invalid text'
+  end
+  local edit = build.notesTab.controls and build.notesTab.controls.edit
+  if not edit or not edit.SetText then
+    return nil, 'notes editor not available'
+  end
+  edit:SetText(params.text)
+  build.notesTab.lastContent = edit.buf
+  build.notesTab.modFlag = false
+  return { length = #(edit.buf or '') }
+end
+
 -- params: { path: string }
 function M.save_build(params)
   if not build or not build.SaveDB then
