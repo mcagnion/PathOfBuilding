@@ -274,6 +274,12 @@ handlers.save_build = function(params)
   return { ok = true, result = res }
 end
 
+handlers.set_notes = function(params)
+  local res, err = BuildOps.set_notes(params or {})
+  if not res then return { ok = false, error = err or 'failed to set notes' } end
+  return { ok = true, result = res }
+end
+
 return {
   handlers = handlers,
   version_meta = version_meta,
