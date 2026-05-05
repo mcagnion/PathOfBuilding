@@ -472,12 +472,12 @@ end
 
 function M.get_config()
   if not build or not build.configTab then return nil, 'build/config not initialized' end
-  local cfg = {
-    bandit = build.configTab.input and build.configTab.input.bandit or build.bandit,
-    pantheonMajorGod = build.configTab.input and build.configTab.input.pantheonMajorGod or build.pantheonMajorGod,
-    pantheonMinorGod = build.configTab.input and build.configTab.input.pantheonMinorGod or build.pantheonMinorGod,
-    enemyLevel = build.configTab.enemyLevel,
-  }
+  local input = build.configTab.input or {}
+  local cfg = copy_scalar_fields(input)
+  if cfg.bandit == nil then cfg.bandit = build.bandit end
+  if cfg.pantheonMajorGod == nil then cfg.pantheonMajorGod = build.pantheonMajorGod end
+  if cfg.pantheonMinorGod == nil then cfg.pantheonMinorGod = build.pantheonMinorGod end
+  cfg.enemyLevel = build.configTab.enemyLevel or cfg.enemyLevel
   return cfg
 end
 
