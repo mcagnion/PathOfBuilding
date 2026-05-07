@@ -274,6 +274,162 @@ handlers.save_build = function(params)
   return { ok = true, result = res }
 end
 
+local DEFAULT_RANK_STAT_WEIGHTS = {
+  { label = 'Full DPS',           stat = 'FullDPS',  weightMult = 1.0 },
+  { label = 'Effective Hit Pool', stat = 'TotalEHP', weightMult = 0.5 },
+}
+
+local VALID_RANK_SORT_MODES = {
+  StatValue      = true,
+  StatValuePrice = true,
+  Price          = true,
+  Weight         = true,
+}
+
+handlers.rank_trade_results = function(params)
+  if not _G.build or not _G.build.itemsTab then
+    return { ok = false, error = 'no build loaded' }
+  end
+  if type(params) ~= 'table' then
+    return { ok = false, error = 'missing params' }
+  end
+  if type(params.slot) ~= 'string' or params.slot == '' then
+    return { ok = false, error = 'missing slot' }
+  end
+  if type(params.items) ~= 'table' then
+    return { ok = false, error = 'missing items array' }
+  end
+
+  local sortMode = params.sortMode or 'StatValue'
+  if not VALID_RANK_SORT_MODES[sortMode] then
+    return { ok = false, error = 'invalid sortMode: ' .. tostring(sortMode) ..
+      ' (allowed: StatValue, StatValuePrice, Price, Weight)' }
+  end
+
+  local itemsTab = _G.build.itemsTab
+  local slot = itemsTab.slots and itemsTab.slots[params.slot]
+  if not slot then
+    return { ok = false, error = 'unknown slot: ' .. tostring(params.slot) }
+  end
+
+  local statWeights = params.statWeights
+  if not statWeights or type(statWeights) ~= 'table' or #statWeights == 0 then
+    statWeights = DEFAULT_RANK_STAT_WEIGHTS
+  end
+
+  local genCls = _G.common and _G.common.classes and _G.common.classes.TradeQueryGenerator
+  if not genCls or type(genCls.WeightedRatioOutputs) ~= 'function' then
+    return { ok = false, error = 'TradeQueryGenerator.WeightedRatioOutputs not available' }
+  end
+
+  if not _G.build.calcsTab or type(_G.build.calcsTab.GetMiscCalculator) ~= 'function' then
+    return { ok = false, error = 'calcsTab.GetMiscCalculator not available' }
+  end
+  local calcFunc, baseOutput = _G.build.calcsTab:GetMiscCalculator()
+  if type(calcFunc) ~= 'function' or type(baseOutput) ~= 'table' then
+    return { ok = false, error = 'GetMiscCalculator returned no calculator' }
+  end
+
+  local stripEnchants = params.stripEnchants
+  if stripEnchants == nil then stripEnchants = true end
+
+  local function getEntryPriceChaos(entry)
+    if type(entry.price) ~= 'table' then return nil end
+    local chaos = entry.price.chaos
+    if type(chaos) == 'number' and chaos > 0 then return chaos end
+    return nil
+  end
+
+  local scored = {}
+  for i, entry in ipairs(params.items) do
+    local item_string = type(entry) == 'table' and (entry.item_string or entry.itemString) or nil
+    if type(item_string) ~= 'string' or item_string == '' then
+      return { ok = false, error = 'items[' .. i .. '] missing item_string' }
+    end
+    local rec = {
+      index = i,
+      weight = 0,
+      deltas = {},
+      price = (type(entry) == 'table' and entry.price) or nil,
+    }
+    local ok_item, item_or_err = pcall(_G.new, 'Item', item_string)
+    if not ok_item or not item_or_err then
+      rec.error = 'failed to parse item: ' .. tostring(item_or_err)
+    else
+      local item = item_or_err
+      if stripEnchants then
+        item.enchantModLines = {}
+        if type(item.BuildAndParseRaw) == 'function' then
+          pcall(item.BuildAndParseRaw, item)
+        end
+      end
+      local ok_calc, output = pcall(calcFunc, { repSlotName = params.slot, repItem = item })
+      if not ok_calc or type(output) ~= 'table' then
+        rec.error = 'calcFunc failed: ' .. tostring(output)
+      else
+        local ok_w, weight = pcall(genCls.WeightedRatioOutputs, baseOutput, output, statWeights)
+        if ok_w and type(weight) == 'number' then
+          rec.weight = weight
+        else
+          rec.error = 'WeightedRatioOutputs failed: ' .. tostring(weight)
+        end
+        for _, sw in ipairs(statWeights) do
+          local key = sw.stat
+          if type(key) == 'string' then
+            rec.deltas[key] = (output[key] or 0) - (baseOutput[key] or 0)
+          end
+        end
+      end
+    end
+    table.insert(scored, rec)
+  end
+
+  if sortMode == 'StatValue' then
+    table.sort(scored, function(a, b) return (a.weight or 0) > (b.weight or 0) end)
+  elseif sortMode == 'StatValuePrice' then
+    -- Mirrors TradeQueryClass:SortFetchResults StatValuePrice branch
+    -- (TradeQuery.lua:836-844): outputAttr = getResultWeight(idx) / priceTable[idx].
+    -- Falls back to StatValue if any candidate is missing chaos-equivalent price,
+    -- matching the GUI's "MissingConversionRates" notice.
+    local missingPrice = false
+    for _, s in ipairs(scored) do
+      if not getEntryPriceChaos(s) then missingPrice = true; break end
+    end
+    if missingPrice then
+      table.sort(scored, function(a, b) return (a.weight or 0) > (b.weight or 0) end)
+      sortMode = 'StatValue'
+    else
+      for _, s in ipairs(scored) do
+        local chaos = getEntryPriceChaos(s)
+        s.statValuePerPrice = chaos and ((s.weight or 0) / chaos) or 0
+      end
+      table.sort(scored, function(a, b) return (a.statValuePerPrice or 0) > (b.statValuePerPrice or 0) end)
+    end
+  elseif sortMode == 'Price' then
+    -- Mirrors TradeQueryClass:SortFetchResults Price branch: ascending chaos price.
+    -- Falls back to StatValue if no candidate has chaos-equivalent price (GUI's
+    -- "MissingConversionRates" notice equivalent — order by build-impact instead
+    -- of dumping every item at math.huge).
+    local missingPrice = false
+    for _, s in ipairs(scored) do
+      if not getEntryPriceChaos(s) then missingPrice = true; break end
+    end
+    if missingPrice then
+      table.sort(scored, function(a, b) return (a.weight or 0) > (b.weight or 0) end)
+      sortMode = 'StatValue'
+    else
+      table.sort(scored, function(a, b)
+        local pa = getEntryPriceChaos(a) or math.huge
+        local pb = getEntryPriceChaos(b) or math.huge
+        return pa < pb
+      end)
+    end
+  end
+  -- Weight mode: keep input order
+
+  return { ok = true, ranked = scored, sortMode = sortMode }
+end
+
 return {
   handlers = handlers,
   version_meta = version_meta,
