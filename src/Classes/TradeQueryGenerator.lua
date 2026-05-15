@@ -190,6 +190,16 @@ local function shouldMatchBaseSubType(baseType)
 	return baseType == "Flask" or baseType == "Jewel"
 end
 
+local function isMatchingBaseSubType(baseType, baseSubType, baseData)
+	if not shouldMatchBaseSubType(baseType) then
+		return true
+	end
+	if baseType == "Flask" and baseSubType == nil then
+		return true
+	end
+	return baseData.subType == baseSubType
+end
+
 local function shouldRestrictToUniqueBases(existingItem)
 	return existingItem and (existingItem.rarity == "UNIQUE" or existingItem.rarity == "RELIC")
 end
@@ -504,7 +514,7 @@ function TradeQueryGeneratorClass:GetSelectableBaseNames(slot, existingItem, def
 	local baseNames = { }
 	local uniqueBaseNames = shouldRestrictToUniqueBases(existingItem) and getUniqueBaseNames() or nil
 	for baseName, baseData in pairs(self.itemsTab.build.data.itemBases) do
-		local subTypeMatches = not shouldMatchBaseSubType(baseType) or baseData.subType == baseSubType
+		local subTypeMatches = isMatchingBaseSubType(baseType, baseSubType, baseData)
 		if baseData.type == baseType and subTypeMatches and (not uniqueBaseNames or uniqueBaseNames[baseName]) and (not defenceProfile or getBaseDefenceProfile(baseData) == defenceProfile) then
 			t_insert(baseNames, baseName)
 		end

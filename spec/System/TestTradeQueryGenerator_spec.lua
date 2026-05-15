@@ -137,6 +137,30 @@ describe("TradeQueryGenerator", function()
 			assert.are.same({ "Heavy Belt", "Leather Belt" }, bases)
 		end)
 
+		it("lists compatible accessory bases even when the slots are empty", function()
+			local queryGen = new("TradeQueryGenerator", {
+				itemsTab = {
+					build = {
+						data = {
+							itemBases = {
+								["Amber Amulet"] = { type = "Amulet" },
+								["Jade Amulet"] = { type = "Amulet" },
+								["Coral Ring"] = { type = "Ring" },
+								["Iron Ring"] = { type = "Ring" },
+								["Leather Belt"] = { type = "Belt" },
+							}
+						}
+					}
+				}
+			})
+
+			local ringBases = queryGen:GetSelectableBaseNames({ slotName = "Ring 1" }, nil)
+			assert.are.same({ "Coral Ring", "Iron Ring" }, ringBases)
+
+			local amuletBases = queryGen:GetSelectableBaseNames({ slotName = "Amulet" }, nil)
+			assert.are.same({ "Amber Amulet", "Jade Amulet" }, amuletBases)
+		end)
+
 		it("limits unique searches to bases that have unique items", function()
 			local originalUniques = data.uniques
 			local ok, bases = pcall(function()
@@ -506,6 +530,27 @@ Implicits: 1
 			assert.are.same({ "Medium Life Flask", "Small Life Flask" }, bases)
 		end)
 
+		it("lists all flask bases when the flask slot is empty", function()
+			local queryGen = new("TradeQueryGenerator", {
+				itemsTab = {
+					build = {
+						data = {
+							itemBases = {
+								["Small Life Flask"] = { type = "Flask", subType = "Life" },
+								["Medium Life Flask"] = { type = "Flask", subType = "Life" },
+								["Small Mana Flask"] = { type = "Flask", subType = "Mana" },
+								["Quicksilver Flask"] = { type = "Flask", subType = "Utility" },
+								["Iron Ring"] = { type = "Ring" },
+							}
+						}
+					}
+				}
+			})
+
+			local bases = queryGen:GetSelectableBaseNames({ slotName = "Flask 1" }, nil)
+			assert.are.same({ "Medium Life Flask", "Quicksilver Flask", "Small Life Flask", "Small Mana Flask" }, bases)
+		end)
+
 		it("limits jewel bases to the matching jewel subtype", function()
 			local queryGen = new("TradeQueryGenerator", {
 				itemsTab = {
@@ -526,6 +571,29 @@ Implicits: 1
 			assert.are.same({ "Crimson Jewel", "Viridian Jewel" }, regularBases)
 
 			local abyssBases = queryGen:GetSelectableBaseNames({ slotName = "Abyssal Jewel 1" }, { type = "Jewel", baseName = "Hypnotic Eye Jewel" })
+			assert.are.same({ "Hypnotic Eye Jewel" }, abyssBases)
+		end)
+
+		it("keeps empty jewel slots scoped to regular or abyss jewels", function()
+			local queryGen = new("TradeQueryGenerator", {
+				itemsTab = {
+					build = {
+						data = {
+							itemBases = {
+								["Crimson Jewel"] = { type = "Jewel" },
+								["Viridian Jewel"] = { type = "Jewel" },
+								["Hypnotic Eye Jewel"] = { type = "Jewel", subType = "Abyss" },
+								["Large Cluster Jewel"] = { type = "Jewel", subType = "Cluster" },
+							}
+						}
+					}
+				}
+			})
+
+			local regularBases = queryGen:GetSelectableBaseNames({ slotName = "Jewel 1" }, nil)
+			assert.are.same({ "Crimson Jewel", "Viridian Jewel" }, regularBases)
+
+			local abyssBases = queryGen:GetSelectableBaseNames({ slotName = "Abyssal Jewel 1" }, nil)
 			assert.are.same({ "Hypnotic Eye Jewel" }, abyssBases)
 		end)
 
