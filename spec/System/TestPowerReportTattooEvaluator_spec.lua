@@ -239,17 +239,30 @@ describe("PowerReportTattooEvaluator", function()
 			return original.score - modified.score
 		end
 
-		local builder = coroutine.create(function()
-			calcsTab:PowerBuilder()
+		local originalGetTime = GetTime
+		local time = 0
+		GetTime = function()
+			time = time + 101
+			return time
+		end
+		local ok, err = pcall(function()
+			local builder = coroutine.create(function()
+				calcsTab:PowerBuilder()
+			end)
+			local resumed, resumeErr = coroutine.resume(builder)
+			assert.is_true(resumed, resumeErr)
+			assert.are.same(0, calcsTab.powerMax.singleStat)
+			repeat
+				resumed, resumeErr = coroutine.resume(builder)
+				assert.is_true(resumed, resumeErr)
+			until coroutine.status(builder) == "dead"
 		end)
-		repeat
-			local ok, err = coroutine.resume(builder)
-			assert.is_true(ok, err)
-		until coroutine.status(builder) == "dead"
+		GetTime = originalGetTime
 		build.spec.nodes = originalSpecNodes
 		build.spec.tree.nodes = originalTreeNodes
 		build.spec.tree.clusterNodeMap = originalClusterNodeMap
 		build.spec.tree.tattoo.nodes = originalTattooNodes
+		assert.is_true(ok, err)
 
 		assert.are.same(1, #calcsTab.powerTattooOptions)
 		assert.is_true(calcsTab.powerTattooOptions[1].allocated)

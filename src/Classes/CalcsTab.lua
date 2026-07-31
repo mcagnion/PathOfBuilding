@@ -490,6 +490,16 @@ end
 -- Estimate the offensive and defensive power of all unallocated nodes
 function CalcsTabClass:PowerBuilder()
 	-- local timer_start = GetTime()
+	local newPowerMax = {
+		singleStat = 0,
+		offence = 0,
+		offencePerPoint = 0,
+		defence = 0,
+		defencePerPoint = 0
+	}
+	-- Tattoo evaluation can yield before node-power calculation begins.
+	-- Keep the heat map drawable while that work is in progress.
+	self.powerMax = newPowerMax
 	local useFullDPS = self.powerStat and self.powerStat.stat == "FullDPS"
 	local calcFunc, calcBase = self:GetMiscCalculator()
 	local cache = { }
@@ -533,16 +543,6 @@ function CalcsTabClass:PowerBuilder()
 	local distanceMap = { }
 	local distanceList = { }
 	local masteryNodeList = { }
-	local newPowerMax = {
-		singleStat = 0,
-		offence = 0,
-		offencePerPoint = 0,
-		defence = 0,
-		defencePerPoint = 0
-	}
-	if not self.powerMax then
-		self.powerMax = newPowerMax
-	end
 	if coroutine.running() then
 		coroutine.yield()
 	end
