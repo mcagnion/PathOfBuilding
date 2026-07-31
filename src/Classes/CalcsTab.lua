@@ -9,6 +9,8 @@ local t_insert = table.insert
 local m_max = math.max
 local m_floor = math.floor
 
+local powerReportTattooEvaluator = LoadModule("Modules/PowerReportTattooEvaluator")
+
 local buffModeDropList = {
 	{ label = "Unbuffed", buffMode = "UNBUFFED" },
 	{ label = "Buffed", buffMode = "BUFFED" },
@@ -491,6 +493,43 @@ function CalcsTabClass:PowerBuilder()
 	local useFullDPS = self.powerStat and self.powerStat.stat == "FullDPS"
 	local calcFunc, calcBase = self:GetMiscCalculator()
 	local cache = { }
+	local treeTab = self.build.treeTab
+	local tattooEvaluationStart = GetTime()
+	local function yieldTattooEvaluation()
+		if coroutine.running() and GetTime() - tattooEvaluationStart > 100 then
+			coroutine.yield()
+			tattooEvaluationStart = GetTime()
+		end
+	end
+	local function calcPowerReportCandidate(override, cacheKey)
+		local output = cache[cacheKey]
+		if not output then
+			output = calcFunc(override, useFullDPS)
+			cache[cacheKey] = output
+		end
+		return output
+	end
+	local function calculatePowerScore(output)
+		if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
+			return self:CalculatePowerStat(self.powerStat, output, calcBase)
+		end
+		return self:CalculateCombinedOffDefStat(output, calcBase)
+	end
+	self.powerTattooOptions = powerReportTattooEvaluator.buildOptions({
+		spec = self.build.spec,
+		grantedPassives = self.mainEnv.grantedPassives,
+		canUsePathPower = function(node)
+			return node.path and not node.ascendancyName
+		end,
+		calcWithPowerReportAssumptions = function(override, cacheKey)
+			return calcPowerReportCandidate(override, cacheKey), nil
+		end,
+		yieldIfNeeded = yieldTattooEvaluation,
+		calculatePowerScore = calculatePowerScore,
+		includeTattoos = not treeTab or treeTab.includePowerReportTattoos ~= false,
+		includeRunegrafts = not treeTab or treeTab.includePowerReportRunegrafts ~= false,
+		nodePowerMaxDepth = self.nodePowerMaxDepth,
+	})
 	local distanceMap = { }
 	local distanceList = { }
 	local masteryNodeList = { }

@@ -263,12 +263,19 @@ local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 			t_insert(self.powerStatList, stat)
 		end
 	end
+	self.includePowerReportTattoos = true
+	self.includePowerReportRunegrafts = true
 
 	-- Show/Hide Power Report Button
 	self.controls.powerReport = new("ButtonControl", { "LEFT", self.controls.treeHeatMapStatSelect, "RIGHT" }, { 8, 0, 150, 20 },
 		function() return self.controls.powerReportList.shown and "Hide Power Report" or "Show Power Report" end, function()
 		self.controls.powerReportList.shown = not self.controls.powerReportList.shown
 	end)
+	self.controls.powerReportTattooOptions = new("ButtonControl", { "LEFT", self.controls.powerReport, "RIGHT" }, { 8, 0, 150, 20 },
+		"Tattoo Options...", function()
+			self:OpenPowerReportTattooOptionsPopup()
+		end)
+	self.controls.powerReportTattooOptions.shown = false
 
 	-- Power Report List
 	local yPos = self.controls.treeHeatMap.y == 0 and self.controls.specSelect.height + 4 or self.controls.specSelect.height * 2 + 8
@@ -401,7 +408,8 @@ function TreeTabClass:Draw(viewPort, inputEvents)
 									+ self.controls.nodePowerMaxDepthSelect.width + self.controls.nodePowerMaxDepthSelect.x
 									+ (self.isCustomMaxDepth and (self.controls.nodePowerMaxDepthCustom.width + self.controls.nodePowerMaxDepthCustom.x) or 0)
 									+ (self.viewer.showHeatMap and (self.controls.treeHeatMapStatSelect.width + self.controls.treeHeatMapStatSelect.x 
-																	+ self.controls.powerReport.width + self.controls.powerReport.x) or 0)
+															+ self.controls.powerReport.width + self.controls.powerReport.x
+															+ self.controls.powerReportTattooOptions.width + self.controls.powerReportTattooOptions.x) or 0)
 	
 	-- Check first line
 	if viewPort.width >= widthFirstLineControls + widthSecondLineControls + rightMargin then
@@ -458,6 +466,7 @@ function TreeTabClass:Draw(viewPort, inputEvents)
 
 	self.controls.treeHeatMap.state = self.viewer.showHeatMap
 	self.controls.treeHeatMapStatSelect.shown = self.viewer.showHeatMap
+	self.controls.powerReportTattooOptions.shown = self.viewer.showHeatMap
 	self.controls.treeHeatMapStatSelect.list = self.powerStatList
 	self.controls.treeHeatMapStatSelect.selIndex = 1
 	self.controls.treeHeatMapStatSelect:CheckDroppedWidth(true)
@@ -517,6 +526,12 @@ function TreeTabClass:Load(xml, dbFileName)
 	if not self.specList[1] then
 		self.specList[1] = new("PassiveSpec", self.build, latestTreeVersion)
 	end
+	if xml.attrib.includePowerReportTattoos ~= nil then
+		self.includePowerReportTattoos = xml.attrib.includePowerReportTattoos == "true"
+	end
+	if xml.attrib.includePowerReportRunegrafts ~= nil then
+		self.includePowerReportRunegrafts = xml.attrib.includePowerReportRunegrafts == "true"
+	end
 	self:SetActiveSpec(tonumber(xml.attrib.activeSpec) or 1)
 end
 
@@ -529,7 +544,9 @@ end
 
 function TreeTabClass:Save(xml)
 	xml.attrib = {
-		activeSpec = tostring(self.activeSpec)
+		activeSpec = tostring(self.activeSpec),
+		includePowerReportTattoos = tostring(self.includePowerReportTattoos),
+		includePowerReportRunegrafts = tostring(self.includePowerReportRunegrafts),
 	}
 	for specId, spec in ipairs(self.specList) do
 		local child = {
@@ -1049,6 +1066,33 @@ function TreeTabClass:SetPowerCalc(powerStat)
 	end
 end
 
+function TreeTabClass:OpenPowerReportTattooOptionsPopup()
+	local controls = { }
+	local function createOption(key, y, label, tooltip)
+		controls[key] = new("CheckBoxControl", nil, { -120, y, 20 }, label, function(state)
+			self[key] = state
+			self:SetPowerCalc(self.build.calcsTab.powerStat)
+		end, tooltip)
+		controls[key].state = self[key]
+	end
+	createOption(
+		"includePowerReportTattoos",
+		30,
+		"Include Tattoos",
+		"Evaluate Tattoo replacements for eligible passive nodes."
+	)
+	createOption(
+		"includePowerReportRunegrafts",
+		54,
+		"Include Runegrafts",
+		"Evaluate Runegrafts for reachable masteries."
+	)
+	controls.close = new("ButtonControl", nil, { -40, 88, 80, 20 }, "Close", function()
+		main:ClosePopup()
+	end)
+	main:OpenPopup(360, 125, "Tattoo Power Options", controls)
+end
+
 function TreeTabClass:BuildPowerReportList(currentStat)
 	local report = {}
 
@@ -1141,6 +1185,36 @@ function TreeTabClass:BuildPowerReportList(currentStat)
 		if not isAlloc then
 			local nodePower = (node.power and node.power.singleStat or 0) * powerMultiplier
 			addReportEntry(node, node.dn, nodePower, 0, "Cluster", isAlloc, "--")
+		end
+	end
+
+	for _, tattooOption in ipairs(self.build.calcsTab.powerTattooOptions or { }) do
+		local isRunegraft = tattooOption.isRunegraft
+		if (isRunegraft and self.includePowerReportRunegrafts)
+			or ((not isRunegraft) and self.includePowerReportTattoos)
+		then
+			local pathDist = tattooOption.pathDist or 0
+			local nodePower = (tattooOption.singleStat or 0) * powerMultiplier
+			local pathPower = 0
+			local pathPowerStr = "--"
+			if type(pathDist) == "number" and pathDist > 0 and tattooOption.pathPower then
+				pathPower = tattooOption.pathPower / pathDist * powerMultiplier
+				pathPowerStr = formatPower(pathPower)
+			end
+			t_insert(report, {
+				name = tattooOption.displayName or tattooOption.tattooName,
+				power = nodePower,
+				powerStr = formatPower(nodePower),
+				pathPower = pathPower,
+				pathPowerStr = pathPowerStr,
+				allocated = tattooOption.allocated,
+				id = tattooOption.baseNodeId,
+				x = tattooOption.baseNodeX,
+				y = tattooOption.baseNodeY,
+				type = isRunegraft and "Runegraft" or "Tattoo",
+				sd = tattooOption.stats,
+				pathDist = pathDist,
+			})
 		end
 	end
 
