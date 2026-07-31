@@ -18,6 +18,8 @@ local s_format = string.format
 local s_gsub = string.gsub
 local s_byte = string.byte
 local dkjson = require "dkjson"
+local powerReportOptions = LoadModule("Modules/PowerReportOptions")
+local powerReportUtils = LoadModule("Modules/PowerReportUtils")
 
 local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 	self.ControlHost()
@@ -263,19 +265,18 @@ local TreeTabClass = newClass("TreeTab", "ControlHost", function(self, build)
 			t_insert(self.powerStatList, stat)
 		end
 	end
-	self.includePowerReportTattoos = true
-	self.includePowerReportRunegrafts = true
+	powerReportOptions.applyDefaults(self)
 
 	-- Show/Hide Power Report Button
 	self.controls.powerReport = new("ButtonControl", { "LEFT", self.controls.treeHeatMapStatSelect, "RIGHT" }, { 8, 0, 150, 20 },
 		function() return self.controls.powerReportList.shown and "Hide Power Report" or "Show Power Report" end, function()
 		self.controls.powerReportList.shown = not self.controls.powerReportList.shown
 	end)
-	self.controls.powerReportTattooOptions = new("ButtonControl", { "LEFT", self.controls.powerReport, "RIGHT" }, { 8, 0, 150, 20 },
-		"Tattoo Options...", function()
-			self:OpenPowerReportTattooOptionsPopup()
+	self.controls.powerReportOptions = new("ButtonControl", { "LEFT", self.controls.powerReport, "RIGHT" }, { 8, 0, 150, 20 },
+		"Power Options...", function()
+			self:OpenPowerReportOptionsPopup()
 		end)
-	self.controls.powerReportTattooOptions.shown = false
+	self.controls.powerReportOptions.shown = false
 
 	-- Power Report List
 	local yPos = self.controls.treeHeatMap.y == 0 and self.controls.specSelect.height + 4 or self.controls.specSelect.height * 2 + 8
@@ -409,7 +410,7 @@ function TreeTabClass:Draw(viewPort, inputEvents)
 									+ (self.isCustomMaxDepth and (self.controls.nodePowerMaxDepthCustom.width + self.controls.nodePowerMaxDepthCustom.x) or 0)
 									+ (self.viewer.showHeatMap and (self.controls.treeHeatMapStatSelect.width + self.controls.treeHeatMapStatSelect.x 
 															+ self.controls.powerReport.width + self.controls.powerReport.x
-															+ self.controls.powerReportTattooOptions.width + self.controls.powerReportTattooOptions.x) or 0)
+															+ self.controls.powerReportOptions.width + self.controls.powerReportOptions.x) or 0)
 	
 	-- Check first line
 	if viewPort.width >= widthFirstLineControls + widthSecondLineControls + rightMargin then
@@ -466,7 +467,7 @@ function TreeTabClass:Draw(viewPort, inputEvents)
 
 	self.controls.treeHeatMap.state = self.viewer.showHeatMap
 	self.controls.treeHeatMapStatSelect.shown = self.viewer.showHeatMap
-	self.controls.powerReportTattooOptions.shown = self.viewer.showHeatMap
+	self.controls.powerReportOptions.shown = self.viewer.showHeatMap
 	self.controls.treeHeatMapStatSelect.list = self.powerStatList
 	self.controls.treeHeatMapStatSelect.selIndex = 1
 	self.controls.treeHeatMapStatSelect:CheckDroppedWidth(true)
@@ -526,12 +527,7 @@ function TreeTabClass:Load(xml, dbFileName)
 	if not self.specList[1] then
 		self.specList[1] = new("PassiveSpec", self.build, latestTreeVersion)
 	end
-	if xml.attrib.includePowerReportTattoos ~= nil then
-		self.includePowerReportTattoos = xml.attrib.includePowerReportTattoos == "true"
-	end
-	if xml.attrib.includePowerReportRunegrafts ~= nil then
-		self.includePowerReportRunegrafts = xml.attrib.includePowerReportRunegrafts == "true"
-	end
+	powerReportOptions.readFromXmlAttrib(self, xml.attrib)
 	self:SetActiveSpec(tonumber(xml.attrib.activeSpec) or 1)
 end
 
@@ -545,9 +541,8 @@ end
 function TreeTabClass:Save(xml)
 	xml.attrib = {
 		activeSpec = tostring(self.activeSpec),
-		includePowerReportTattoos = tostring(self.includePowerReportTattoos),
-		includePowerReportRunegrafts = tostring(self.includePowerReportRunegrafts),
 	}
+	powerReportOptions.writeToXmlAttrib(self, xml.attrib)
 	for specId, spec in ipairs(self.specList) do
 		local child = {
 			elem = "Spec"
@@ -1066,35 +1061,72 @@ function TreeTabClass:SetPowerCalc(powerStat)
 	end
 end
 
-function TreeTabClass:OpenPowerReportTattooOptionsPopup()
+function TreeTabClass:OpenPowerReportOptionsPopup()
 	local controls = { }
-	local function createOption(key, y, label, tooltip)
-		controls[key] = new("CheckBoxControl", nil, { -120, y, 20 }, label, function(state)
-			self[key] = state
-			self:SetPowerCalc(self.build.calcsTab.powerStat)
-		end, tooltip)
-		controls[key].state = self[key]
+	local y = 30
+	local options = powerReportOptions.getList()
+	local optionKeys = powerReportOptions.getKeys()
+	local maxLabelWidth = 0
+	for _, option in ipairs(options) do
+		maxLabelWidth = m_max(maxLabelWidth, DrawStringWidth(16, "VAR", option.label))
 	end
-	createOption(
-		"includePowerReportTattoos",
-		30,
-		"Include Tattoos",
-		"Evaluate Tattoo replacements for eligible passive nodes."
-	)
-	createOption(
-		"includePowerReportRunegrafts",
-		54,
-		"Include Runegrafts",
-		"Evaluate Runegrafts for reachable masteries."
-	)
-	controls.close = new("ButtonControl", nil, { -40, 88, 80, 20 }, "Close", function()
+	local popupWidth = m_max(520, maxLabelWidth + 170)
+	local checkOffset = m_floor(popupWidth / 2) - 28
+	for _, option in ipairs(options) do
+		local key = option.key
+		controls[key] = new("CheckBoxControl", nil, { checkOffset, y, 20 }, option.label, function(state)
+			self:SetPowerReportOption(key, state)
+		end, option.tooltip)
+		controls[key].state = self[key]
+		y = y + 24
+	end
+
+	local function applyOptionStates(stateByKey)
+		for _, key in ipairs(optionKeys) do
+			self[key] = stateByKey[key]
+			controls[key].state = self[key]
+		end
+		self.modFlag = true
+		self:SetPowerCalc(self.build.calcsTab.powerStat)
+	end
+
+	controls.defaults = new("ButtonControl", nil, { -130, y + 8, 120, 20 }, "Defaults", function()
+		applyOptionStates(powerReportOptions.buildStateByKey(nil))
+	end)
+	controls.none = new("ButtonControl", nil, { 0, y + 8, 90, 20 }, "None", function()
+		applyOptionStates(powerReportOptions.buildStateByKey(false))
+	end)
+	controls.close = new("ButtonControl", nil, { 130, y + 8, 90, 20 }, "Close", function()
 		main:ClosePopup()
 	end)
-	main:OpenPopup(360, 125, "Tattoo Power Options", controls)
+	main:OpenPopup(popupWidth, y + 45, "Power Options", controls)
+end
+
+function TreeTabClass:SetPowerReportOption(key, state)
+	self[key] = state
+	self.modFlag = true
+	self:SetPowerCalc(self.build.calcsTab.powerStat)
 end
 
 function TreeTabClass:BuildPowerReportList(currentStat)
 	local report = {}
+	local ascendancyContext = powerReportUtils.makeAscendancyContext(self.build.spec)
+	local function isIncludedNode(node)
+		if powerReportUtils.isClusterJewelPassiveNode(node) then
+			return self.includePowerReportClusters
+		elseif node.ascendancyName then
+			return powerReportUtils.isIncludedAscendancyNode(ascendancyContext, self, node)
+		elseif node.type == "Normal" then
+			return self.includePowerReportNormals
+		elseif node.type == "Notable" then
+			return self.includePowerReportNotables
+		elseif node.type == "Keystone" then
+			return self.includePowerReportKeystones
+		elseif node.type == "Mastery" then
+			return self.includePowerReportMasteries
+		end
+		return true
+	end
 
 	if not (currentStat and currentStat.stat) then
 		return report
@@ -1137,7 +1169,7 @@ function TreeTabClass:BuildPowerReportList(currentStat)
 		end
 		return node.power.distance or #(node.path or {}) == 0 and 1 or #node.path
 	end
-	local function addReportEntry(node, name, nodePower, pathPower, pathDist, isAlloc, pathPowerStr)
+	local function addReportEntry(node, name, nodePower, pathPower, pathDist, isAlloc, pathPowerStr, entryType)
 		t_insert(report, {
 			name = name,
 			power = nodePower,
@@ -1148,21 +1180,22 @@ function TreeTabClass:BuildPowerReportList(currentStat)
 			id = node.id,
 			x = node.x,
 			y = node.y,
-			type = node.type,
+			type = entryType or node.type,
 			sd = node.sd,
 			pathDist = pathDist
 		})
 	end
 
-	-- search all nodes, ignoring ascendancies, sockets, etc.
+	-- search all configured tree and ascendancy nodes
 	for nodeId, node in pairs(self.build.spec.nodes) do
 		local isAlloc = node.alloc or self.build.calcsTab.mainEnv.grantedPassives[nodeId]
-		if (node.type == "Normal" or node.type == "Keystone" or node.type == "Notable") and not node.ascendancyName then
+		if (node.type == "Normal" or node.type == "Keystone" or node.type == "Notable") and isIncludedNode(node) then
 			local pathDist = getNodePathDist(node, isAlloc)
 			local nodePower = (node.power.singleStat or 0) * powerMultiplier
 			local pathPower = (node.power.pathPower or 0) / pathDist * powerMultiplier
-			addReportEntry(node, node.dn, nodePower, pathPower, pathDist, isAlloc)
-		elseif node.type == "Mastery" and node.power.masteryEffects and not node.ascendancyName then
+			addReportEntry(node, node.dn, nodePower, pathPower, pathDist, isAlloc, nil,
+				powerReportUtils.reportNodeType(node, powerReportUtils.isForbiddenAscendancyNode(ascendancyContext, self, node)))
+		elseif node.type == "Mastery" and node.power.masteryEffects and isIncludedNode(node) then
 			local pathDist = getNodePathDist(node, isAlloc)
 
 			for _, masteryEffect in ipairs(node.masteryEffects or { }) do
@@ -1180,11 +1213,13 @@ function TreeTabClass:BuildPowerReportList(currentStat)
 	end
 
 	-- search all cluster notables and add to the list
-	for nodeName, node in pairs(self.build.spec.tree.clusterNodeMap) do
-		local isAlloc = node.alloc
-		if not isAlloc then
-			local nodePower = (node.power and node.power.singleStat or 0) * powerMultiplier
-			addReportEntry(node, node.dn, nodePower, 0, "Cluster", isAlloc, "--")
+	if self.includePowerReportClusters then
+		for nodeName, node in pairs(self.build.spec.tree.clusterNodeMap) do
+			local isAlloc = node.alloc
+			if not isAlloc then
+				local nodePower = (node.power and node.power.singleStat or 0) * powerMultiplier
+				addReportEntry(node, node.dn, nodePower, 0, "Cluster", isAlloc, "--", "Cluster")
+			end
 		end
 	end
 

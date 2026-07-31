@@ -10,6 +10,8 @@ local m_max = math.max
 local m_floor = math.floor
 
 local powerReportTattooEvaluator = LoadModule("Modules/PowerReportTattooEvaluator")
+local powerReportOptions = LoadModule("Modules/PowerReportOptions")
+local powerReportUtils = LoadModule("Modules/PowerReportUtils")
 
 local buffModeDropList = {
 	{ label = "Unbuffed", buffMode = "UNBUFFED" },
@@ -490,6 +492,38 @@ end
 -- Estimate the offensive and defensive power of all unallocated nodes
 function CalcsTabClass:PowerBuilder()
 	-- local timer_start = GetTime()
+	local treeTab = self.build.treeTab
+	local reportOptions = treeTab or {
+		includePowerReportNormals = true,
+		includePowerReportNotables = true,
+		includePowerReportKeystones = true,
+		includePowerReportMasteries = false,
+		includePowerReportTattoos = true,
+		includePowerReportRunegrafts = true,
+		includePowerReportClusters = true,
+		includePowerReportAscSmalls = true,
+		includePowerReportAscNotables = true,
+		includePowerReportAscKeystones = true,
+		includePowerReportBloodlineAscendancy = true,
+		includePowerReportForbiddenAscendancy = true,
+	}
+	local ascendancyContext = powerReportUtils.makeAscendancyContext(self.build.spec)
+	local function isIncludedNode(node)
+		if powerReportUtils.isClusterJewelPassiveNode(node) then
+			return reportOptions.includePowerReportClusters
+		elseif node.ascendancyName then
+			return powerReportUtils.isIncludedAscendancyNode(ascendancyContext, reportOptions, node)
+		elseif node.type == "Normal" then
+			return reportOptions.includePowerReportNormals
+		elseif node.type == "Notable" then
+			return reportOptions.includePowerReportNotables
+		elseif node.type == "Keystone" then
+			return reportOptions.includePowerReportKeystones
+		elseif node.type == "Mastery" then
+			return reportOptions.includePowerReportMasteries
+		end
+		return true
+	end
 	local newPowerMax = {
 		singleStat = 0,
 		offence = 0,
@@ -500,10 +534,14 @@ function CalcsTabClass:PowerBuilder()
 	-- Tattoo evaluation can yield before node-power calculation begins.
 	-- Keep the heat map drawable while that work is in progress.
 	self.powerMax = newPowerMax
+	if not powerReportOptions.hasAnyEnabled(reportOptions) then
+		self.powerTattooOptions = { }
+		self.powerBuilderInitialized = true
+		return
+	end
 	local useFullDPS = self.powerStat and self.powerStat.stat == "FullDPS"
 	local calcFunc, calcBase = self:GetMiscCalculator()
 	local cache = { }
-	local treeTab = self.build.treeTab
 	local tattooEvaluationStart = GetTime()
 	local function yieldTattooEvaluation()
 		if coroutine.running() and GetTime() - tattooEvaluationStart > 100 then
@@ -536,8 +574,8 @@ function CalcsTabClass:PowerBuilder()
 		end,
 		yieldIfNeeded = yieldTattooEvaluation,
 		calculatePowerScore = calculatePowerScore,
-		includeTattoos = not treeTab or treeTab.includePowerReportTattoos ~= false,
-		includeRunegrafts = not treeTab or treeTab.includePowerReportRunegrafts ~= false,
+		includeTattoos = reportOptions.includePowerReportTattoos,
+		includeRunegrafts = reportOptions.includePowerReportRunegrafts,
 		nodePowerMaxDepth = self.nodePowerMaxDepth,
 	})
 	local distanceMap = { }
@@ -597,7 +635,7 @@ function CalcsTabClass:PowerBuilder()
 		if node.type == "Mastery" then
 			node.power.masteryEffects = { }
 		end
-		if node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] then
+		if node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] and isIncludedNode(node) then
 			if node.type == "Mastery" and node.allMasteryOptions then
 				if not (self.nodePowerMaxDepth and self.nodePowerMaxDepth < node.pathDist) then
 					t_insert(masteryNodeList, node)
@@ -608,7 +646,7 @@ function CalcsTabClass:PowerBuilder()
 					end
 				end
 			else
-				local dist = node.pathDist or 1000
+				local dist = powerReportUtils.isRemoteAscendancyCandidate(ascendancyContext, node) and 1 or (node.pathDist or 1000)
 				for _, leap in ipairs(node.intuitiveLeapLikesAffecting or {}) do
 					if leap.alloc then
 						dist = math.max(math.min(leap.pathDist or 1000, dist), 1)
@@ -629,9 +667,11 @@ function CalcsTabClass:PowerBuilder()
 	distanceMap = nil
 	table.sort(distanceList, function(a, b) return a[1] < b[1] end)
 	-- Count eligible cluster nodes
-	for _, node in pairs(self.build.spec.tree.clusterNodeMap) do
-		if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[node.id] then
-			total = total + 1
+	if reportOptions.includePowerReportClusters then
+		for _, node in pairs(self.build.spec.tree.clusterNodeMap) do
+			if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[node.id] then
+				total = total + 1
+			end
 		end
 	end
 
@@ -743,26 +783,28 @@ function CalcsTabClass:PowerBuilder()
 
 	-- Calculate the impact of every cluster notable
 	-- used for the power report screen
-	for nodeName, node in pairs(self.build.spec.tree.clusterNodeMap) do
-		if not node.power then
-			node.power = {}
-		end
-		wipeTable(node.power)
-		if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[node.id] then
-			if not cache[node.modKey] then
-				cache[node.modKey] = calcFunc({ addNodes = { [node] = true } }, useFullDPS)
+	if reportOptions.includePowerReportClusters then
+		for nodeName, node in pairs(self.build.spec.tree.clusterNodeMap) do
+			if not node.power then
+				node.power = {}
 			end
-			local output = cache[node.modKey]
-			if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
-				node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
-			end
-			nodeIndex = nodeIndex + 1
-			if coroutine.running() and GetTime() - start > 100 then
-				if self.build.powerBuilderProgressCallback then
-					self.build.powerBuilderProgressCallback(m_floor(nodeIndex/total*100))
+			wipeTable(node.power)
+			if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[node.id] then
+				if not cache[node.modKey] then
+					cache[node.modKey] = calcFunc({ addNodes = { [node] = true } }, useFullDPS)
 				end
-				coroutine.yield()
-				start = GetTime()
+				local output = cache[node.modKey]
+				if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
+					node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
+				end
+				nodeIndex = nodeIndex + 1
+				if coroutine.running() and GetTime() - start > 100 then
+					if self.build.powerBuilderProgressCallback then
+						self.build.powerBuilderProgressCallback(m_floor(nodeIndex/total*100))
+					end
+					coroutine.yield()
+					start = GetTime()
+				end
 			end
 		end
 	end

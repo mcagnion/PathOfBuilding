@@ -226,6 +226,7 @@ describe("PowerReportTattooEvaluator", function()
 				MinimumConnected = 0,
 			},
 		}
+		treeTab.includePowerReportNormals = false
 		treeTab.includePowerReportTattoos = true
 		treeTab.includePowerReportRunegrafts = false
 		calcsTab.nodePowerMaxDepth = 0
@@ -267,5 +268,6 @@ describe("PowerReportTattooEvaluator", function()
 		assert.are.same(1, #calcsTab.powerTattooOptions)
 		assert.is_true(calcsTab.powerTattooOptions[1].allocated)
 		assert.are.same(20, calcsTab.powerTattooOptions[1].singleStat)
+		assert.is_nil(strengthNode.power.singleStat)
 	end)
 end)

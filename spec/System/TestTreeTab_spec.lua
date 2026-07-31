@@ -15,6 +15,7 @@ describe("TreeTab", function()
 
 	it("adds separate power report entries for mastery effects", function()
 		local treeTab = build.treeTab
+		treeTab.includePowerReportMasteries = true
 		local parentNode = { id = 2 }
 		local masteryNode = {
 			id = 1,
@@ -59,6 +60,9 @@ describe("TreeTab", function()
 		assert.are.same(2, report[1].pathDist)
 		assert.are.same(10, report[2].power)
 		assert.are.same("Two Hand Mastery: Gain 10 Damage", report[2].name)
+
+		treeTab.includePowerReportMasteries = false
+		assert.are.same(0, #treeTab:BuildPowerReportList({ stat = "Damage", label = "Damage" }))
 	end)
 
 	it("adds tattoo and runegraft power report entries", function()
@@ -106,5 +110,69 @@ describe("TreeTab", function()
 		assert.are.same("Tattoo", report[2].type)
 		assert.are.same(10, report[2].power)
 		assert.are.same(10, report[2].pathPower)
+
+		treeTab.includePowerReportTattoos = false
+		treeTab.includePowerReportRunegrafts = false
+		assert.are.same(0, #treeTab:BuildPowerReportList({ stat = "Damage", label = "Damage" }))
+	end)
+
+	it("filters normal, notable, keystone and cluster report entries", function()
+		local treeTab = build.treeTab
+		local normalNode = { id = 1, type = "Normal", dn = "Strength", power = { singleStat = 10 }, path = { }, x = 10, y = 10 }
+		local notableNode = { id = 2, type = "Notable", dn = "Strong Arm", power = { singleStat = 20 }, path = { }, x = 20, y = 20 }
+		local keystoneNode = { id = 3, type = "Keystone", dn = "Resolute Technique", power = { singleStat = 30 }, path = { }, x = 30, y = 30 }
+		local clusterNode = { id = 65536, type = "Notable", dn = "Cluster Power", power = { singleStat = 40 }, expansionSkill = true, x = 40, y = 40 }
+
+		treeTab.build.displayStats = {
+			{ stat = "Damage", label = "Damage", fmt = ".1f" },
+		}
+		treeTab.build.spec.nodes = {
+			[normalNode.id] = normalNode,
+			[notableNode.id] = notableNode,
+			[keystoneNode.id] = keystoneNode,
+			[clusterNode.id] = clusterNode,
+		}
+		treeTab.build.spec.tree.clusterNodeMap = { }
+		treeTab.build.calcsTab.mainEnv = { grantedPassives = { } }
+		treeTab.build.calcsTab.powerTattooOptions = { }
+
+		treeTab.includePowerReportNormals = false
+		treeTab.includePowerReportNotables = false
+		treeTab.includePowerReportKeystones = false
+		treeTab.includePowerReportClusters = false
+		assert.are.same(0, #treeTab:BuildPowerReportList({ stat = "Damage", label = "Damage" }))
+
+		treeTab.includePowerReportNormals = true
+		local report = treeTab:BuildPowerReportList({ stat = "Damage", label = "Damage" })
+		assert.are.same(1, #report)
+		assert.are.same("Normal", report[1].type)
+
+		treeTab.includePowerReportNormals = false
+		treeTab.includePowerReportNotables = true
+		report = treeTab:BuildPowerReportList({ stat = "Damage", label = "Damage" })
+		assert.are.same(1, #report)
+		assert.are.same("Notable", report[1].type)
+
+		treeTab.includePowerReportNotables = false
+		treeTab.includePowerReportKeystones = true
+		report = treeTab:BuildPowerReportList({ stat = "Damage", label = "Damage" })
+		assert.are.same(1, #report)
+		assert.are.same("Keystone", report[1].type)
+
+		treeTab.includePowerReportKeystones = false
+		treeTab.includePowerReportClusters = true
+		report = treeTab:BuildPowerReportList({ stat = "Damage", label = "Damage" })
+		assert.are.same(1, #report)
+		assert.are.same("Cluster Power", report[1].name)
+	end)
+
+	it("marks the build modified when a power report option changes", function()
+		local treeTab = build.treeTab
+		treeTab.modFlag = false
+
+		treeTab:SetPowerReportOption("includePowerReportNormals", false)
+
+		assert.is_false(treeTab.includePowerReportNormals)
+		assert.is_true(treeTab.modFlag)
 	end)
 end)
