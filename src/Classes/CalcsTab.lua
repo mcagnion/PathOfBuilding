@@ -534,8 +534,18 @@ function CalcsTabClass:PowerBuilder()
 	-- Tattoo evaluation can yield before node-power calculation begins.
 	-- Keep the heat map drawable while that work is in progress.
 	self.powerMax = newPowerMax
+	self.powerTattooOptions = { }
+	for _, node in pairs(self.build.spec.nodes) do
+		if node.power then
+			wipeTable(node.power)
+		end
+	end
+	for _, node in pairs(self.build.spec.tree.clusterNodeMap) do
+		if node.power then
+			wipeTable(node.power)
+		end
+	end
 	if not powerReportOptions.hasAnyEnabled(reportOptions) then
-		self.powerTattooOptions = { }
 		self.powerBuilderInitialized = true
 		return
 	end

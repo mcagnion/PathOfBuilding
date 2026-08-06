@@ -1,5 +1,6 @@
 describe("PowerReportTattooEvaluator", function()
 	local evaluator = LoadModule("Modules/PowerReportTattooEvaluator")
+	local powerReportOptions = LoadModule("Modules/PowerReportOptions")
 
 	local function makeContext(options)
 		local rootNode = { id = 0 }
@@ -191,6 +192,33 @@ describe("PowerReportTattooEvaluator", function()
 		for _, override in ipairs(overrides) do
 			assert.is_true(override.removeNodes[allocatedRunegraft])
 		end
+	end)
+
+	it("clears stale power results when every report option is disabled", function()
+		newBuild()
+		local calcsTab = build.calcsTab
+		local treeTab = build.treeTab
+		local originalSpecNodes = build.spec.nodes
+		local originalClusterNodeMap = build.spec.tree.clusterNodeMap
+		local treeNode = { id = 1, power = { singleStat = 10, offence = 20, defence = 30 } }
+		local clusterNode = { id = 2, power = { singleStat = 40 } }
+		build.spec.nodes = { [treeNode.id] = treeNode }
+		build.spec.tree.clusterNodeMap = { TestCluster = clusterNode }
+		for _, key in ipairs(powerReportOptions.getKeys()) do
+			treeTab[key] = false
+		end
+		calcsTab.powerTattooOptions = { { singleStat = 50 } }
+
+		local ok, err = pcall(function()
+			calcsTab:PowerBuilder()
+			assert.is_nil(next(treeNode.power))
+			assert.is_nil(next(clusterNode.power))
+			assert.are.same(0, #calcsTab.powerTattooOptions)
+			assert.are.same(0, calcsTab.powerMax.singleStat)
+		end)
+		build.spec.nodes = originalSpecNodes
+		build.spec.tree.clusterNodeMap = originalClusterNodeMap
+		assert.is_true(ok, err)
 	end)
 
 	it("integrates tattoo options into the power builder", function()
