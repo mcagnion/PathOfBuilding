@@ -582,6 +582,66 @@ describe("TestRadiusJewelStatDiff", function()
 		assert.is_truthy(calcFunc(override), "calcFunc with removeNodes should return output")
 	end)
 
+	it("node power separates nodes sharing a modKey inside and outside a radius jewel", function()
+		local spec, socketNode = setupAllocatedSocket()
+		local item = new("Item"):Item("Rarity: UNIQUE\n" ..
+			"The Light of Meaning\n" ..
+			"Prismatic Jewel\n" ..
+			"Radius: Large\n" ..
+			"Implicits: 0\n" ..
+			"Passive Skills in Radius also grant +5 to maximum Life\n")
+		equipJewelInSocket(item, socketNode)
+		rebuildBuild()
+
+		-- Closest pair of unallocated nodes with the same modKey, one inside the jewel radius and one outside
+		local inRadius = spec.nodes[socketNode.id].nodesInRadius[item.jewelRadiusIndex]
+		local allNodeIds = sortedNodeIds(spec.nodes)
+		local inside, outside
+		for _, nodeId in ipairs(sortedNodeIds(inRadius)) do
+			local node = spec.nodes[nodeId]
+			if not node.alloc and node.type == "Normal" and node.modKey ~= "" then
+				for _, otherId in ipairs(allNodeIds) do
+					local other = spec.nodes[otherId]
+					if not other.alloc and not inRadius[otherId] and other.type == "Normal" and not other.ascendancyName
+					and other.modKey == node.modKey
+					and (not inside or math.max(node.pathDist, other.pathDist) < math.max(inside.pathDist, outside.pathDist)) then
+						inside, outside = node, other
+					end
+				end
+			end
+		end
+		assert.is_truthy(inside, "Should find same-modKey nodes inside and outside the jewel radius")
+
+		local calcsTab = build.calcsTab
+		for _, powerStat in ipairs(data.powerStatList) do
+			if powerStat.stat == "Life" then
+				calcsTab.powerStat = powerStat
+			end
+		end
+		calcsTab.nodePowerMaxDepth = math.max(inside.pathDist, outside.pathDist)
+		local function assertOwnPower(override)
+			local powerBuilder = coroutine.create(calcsTab.PowerBuilder)
+			repeat
+				local ok, errMsg = coroutine.resume(powerBuilder, calcsTab)
+				assert.is_true(ok, errMsg)
+			until coroutine.status(powerBuilder) == "dead"
+
+			local calcFunc, calcBase = calcsTab:GetMiscCalculator()
+			local insidePower = calcsTab:CalculatePowerStat(calcsTab.powerStat, calcFunc({ [override] = { [inside] = true } }), calcBase)
+			local outsidePower = calcsTab:CalculatePowerStat(calcsTab.powerStat, calcFunc({ [override] = { [outside] = true } }), calcBase)
+			assert.are_not.equal(insidePower, outsidePower, "The jewel should only change Life for the node in its radius")
+			assert.are.equal(insidePower, inside.power.singleStat)
+			assert.are.equal(outsidePower, outside.power.singleStat)
+		end
+		assertOwnPower("addNodes")
+
+		assert.is_true(allocatePathToNode(spec, inside), "Should allocate the node in the jewel radius")
+		assert.is_true(allocatePathToNode(spec, outside), "Should allocate the node outside the jewel radius")
+		spec:BuildAllDependsAndPaths()
+		rebuildBuild()
+		assertOwnPower("removeNodes")
+	end)
+
 	it("AddItemTooltip emits a remove-comparison block for an equipped Timeless jewel", function()
 		local spec, socketNode = setupAllocatedSocket()
 

@@ -2660,6 +2660,7 @@ function CompareTabClass:ComparePowerBuilder(compareEntry, powerStat, categories
 		local compareNodes = compareEntry.spec and compareEntry.spec.allocNodes or {}
 		local primaryNodes = self.primaryBuild.spec and self.primaryBuild.spec.allocNodes or {}
 		local cache = {}
+		local nodeCacheKey = self.primaryBuild.calcsTab:GetNodeCacheKeyFunc()
 
 		for nodeId, _ in pairs(compareNodes) do
 			if type(nodeId) == "number" and nodeId < CLUSTER_NODE_OFFSET and not primaryNodes[nodeId] then
@@ -2667,11 +2668,12 @@ function CompareTabClass:ComparePowerBuilder(compareEntry, powerStat, categories
 				if pNode and (pNode.type == "Normal" or pNode.type == "Notable" or pNode.type == "Keystone")
 						and not pNode.ascendancyName and pNode.modKey ~= "" then
 					local output
-					if cache[pNode.modKey] then
-						output = cache[pNode.modKey]
+					local cacheKey = nodeCacheKey(pNode)
+					if cache[cacheKey] then
+						output = cache[cacheKey]
 					else
 						output = calcFunc({ addNodes = { [pNode] = true } }, useFullDPS)
-						cache[pNode.modKey] = output
+						cache[cacheKey] = output
 					end
 					local impact = self.primaryBuild.calcsTab:CalculatePowerStat(powerStat, output, calcBase)
 					local pathDist = pNode.pathDist or 0
