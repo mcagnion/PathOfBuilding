@@ -493,7 +493,8 @@ function CalcsTabClass:BuildPower()
 end
 
 -- Returns a function giving the key under which the calculator output for adding or removing a single node can be cached
--- Radius jewels can change what a node grants, so nodes with the same modKey only share a key when they are in the radius of the same radius jewels
+-- Besides its stats, a node's output depends on its type (allocated notable and mastery counts), its tattoo (tattoo effects
+-- and counts) and the radius jewels it is in, so nodes with the same modKey only share a key when all of these match
 function CalcsTabClass:GetNodeCacheKeyFunc()
 	local radiusKeys = { }
 	for index, rad in ipairs(self.mainEnv.radiusJewelList) do
@@ -502,7 +503,7 @@ function CalcsTabClass:GetNodeCacheKeyFunc()
 		end
 	end
 	return function(node)
-		return node.modKey .. (radiusKeys[node.id] or "")
+		return node.type .. node.modKey .. (radiusKeys[node.id] or "") .. (node.isTattoo and node.overrideType or "")
 	end
 end
 
@@ -686,10 +687,11 @@ function CalcsTabClass:PowerBuilder()
 				if effect then
 					local effectNode = buildMasteryEffectNode(node, effect)
 					if effectNode.modKey ~= "" then
-						if not cache[effectNode.modKey] then
-							cache[effectNode.modKey] = calcFunc({ addNodes = { [effectNode] = true } }, useFullDPS)
+						local cacheKey = nodeCacheKey(effectNode)
+						if not cache[cacheKey] then
+							cache[cacheKey] = calcFunc({ addNodes = { [effectNode] = true } }, useFullDPS)
 						end
-						local output = cache[effectNode.modKey]
+						local output = cache[cacheKey]
 						node.power.masteryEffects[effect.id] = { }
 						local effectPower = node.power.masteryEffects[effect.id]
 						calculateAddNodePower(effectPower, node.pathDist, node, output, function()
@@ -734,10 +736,11 @@ function CalcsTabClass:PowerBuilder()
 		end
 		wipeTable(node.power)
 		if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[node.id] then
-			if not cache[node.modKey] then
-				cache[node.modKey] = calcFunc({ addNodes = { [node] = true } }, useFullDPS)
+			local cacheKey = nodeCacheKey(node)
+			if not cache[cacheKey] then
+				cache[cacheKey] = calcFunc({ addNodes = { [node] = true } }, useFullDPS)
 			end
-			local output = cache[node.modKey]
+			local output = cache[cacheKey]
 			if self.powerStat and self.powerStat.stat and not self.powerStat.ignoreForNodes then
 				node.power.singleStat = self:CalculatePowerStat(self.powerStat, output, calcBase)
 			end

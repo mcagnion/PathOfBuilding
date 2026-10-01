@@ -278,6 +278,30 @@ local function sortedNodeIds(nodeMap)
 	return nodeIds
 end
 
+-- Helper: run the power report and check that two nodes sharing a modKey each get their own power, i.e. the
+-- delta of calculating that node alone. `override` is "addNodes" or "removeNodes".
+local function assertOwnNodePower(statName, override, nodeA, nodeB)
+	local calcsTab = build.calcsTab
+	for _, powerStat in ipairs(data.powerStatList) do
+		if powerStat.stat == statName then
+			calcsTab.powerStat = powerStat
+		end
+	end
+	calcsTab.nodePowerMaxDepth = math.max(nodeA.pathDist, nodeB.pathDist)
+	local powerBuilder = coroutine.create(calcsTab.PowerBuilder)
+	repeat
+		local ok, errMsg = coroutine.resume(powerBuilder, calcsTab)
+		assert.is_true(ok, errMsg)
+	until coroutine.status(powerBuilder) == "dead"
+
+	local calcFunc, calcBase = calcsTab:GetMiscCalculator()
+	local powerA = calcsTab:CalculatePowerStat(calcsTab.powerStat, calcFunc({ [override] = { [nodeA] = true } }), calcBase)
+	local powerB = calcsTab:CalculatePowerStat(calcsTab.powerStat, calcFunc({ [override] = { [nodeB] = true } }), calcBase)
+	assert.are_not.equal(powerA, powerB, "The two nodes should give different " .. statName)
+	assert.are.equal(powerA, nodeA.power.singleStat)
+	assert.are.equal(powerB, nodeB.power.singleStat)
+end
+
 local function findLeapOverlapCandidates(spec, radiusIndex)
 	local socketList = { }
 	for _, node in pairs(spec.nodes) do
@@ -611,35 +635,93 @@ describe("TestRadiusJewelStatDiff", function()
 			end
 		end
 		assert.is_truthy(inside, "Should find same-modKey nodes inside and outside the jewel radius")
-
-		local calcsTab = build.calcsTab
-		for _, powerStat in ipairs(data.powerStatList) do
-			if powerStat.stat == "Life" then
-				calcsTab.powerStat = powerStat
-			end
-		end
-		calcsTab.nodePowerMaxDepth = math.max(inside.pathDist, outside.pathDist)
-		local function assertOwnPower(override)
-			local powerBuilder = coroutine.create(calcsTab.PowerBuilder)
-			repeat
-				local ok, errMsg = coroutine.resume(powerBuilder, calcsTab)
-				assert.is_true(ok, errMsg)
-			until coroutine.status(powerBuilder) == "dead"
-
-			local calcFunc, calcBase = calcsTab:GetMiscCalculator()
-			local insidePower = calcsTab:CalculatePowerStat(calcsTab.powerStat, calcFunc({ [override] = { [inside] = true } }), calcBase)
-			local outsidePower = calcsTab:CalculatePowerStat(calcsTab.powerStat, calcFunc({ [override] = { [outside] = true } }), calcBase)
-			assert.are_not.equal(insidePower, outsidePower, "The jewel should only change Life for the node in its radius")
-			assert.are.equal(insidePower, inside.power.singleStat)
-			assert.are.equal(outsidePower, outside.power.singleStat)
-		end
-		assertOwnPower("addNodes")
+		assertOwnNodePower("Life", "addNodes", inside, outside)
 
 		assert.is_true(allocatePathToNode(spec, inside), "Should allocate the node in the jewel radius")
 		assert.is_true(allocatePathToNode(spec, outside), "Should allocate the node outside the jewel radius")
 		spec:BuildAllDependsAndPaths()
 		rebuildBuild()
-		assertOwnPower("removeNodes")
+		assertOwnNodePower("Life", "removeNodes", inside, outside)
+	end)
+
+	it("node power separates a tattooed node from a regular node with the same stats in a Warrior's Tale radius", function()
+		local spec = build.spec
+		local tattoo = spec.tree.tattoo.nodes["Tattoo of the Ngamahu Makanga"]
+		local mediumIndex = radiusIndexFor("Medium")
+		-- A socket whose Medium radius holds a Strength node to tattoo and a regular node with the tattoo's stats
+		local socket
+		for _, socketId in ipairs(sortedNodeIds(spec.tree.sockets)) do
+			local hasStrength, hasRegular = false, false
+			local socketNode = spec.nodes[socketId]
+			for nodeId in pairs(socketNode and socketNode.nodesInRadius and socketNode.nodesInRadius[mediumIndex] or { }) do
+				local node = spec.nodes[nodeId]
+				hasStrength = hasStrength or (node and node.dn == "Strength")
+				hasRegular = hasRegular or (node and node.modKey == tattoo.modKey)
+			end
+			if hasStrength and hasRegular then
+				socket = socketNode
+				break
+			end
+		end
+		assert.is_truthy(socket, "Should find a socket with a Strength node and a matching regular node in its radius")
+		assert.is_true(allocatePathToNode(spec, socket), "Should allocate a path to the socket")
+		spec:BuildAllDependsAndPaths()
+		runCallback("OnFrame")
+
+		local target, regular
+		for _, nodeId in ipairs(sortedNodeIds(socket.nodesInRadius[mediumIndex])) do
+			local node = spec.nodes[nodeId]
+			if not node.alloc and node.dn == "Strength" then
+				target = target or node
+			elseif not node.alloc and node.modKey == tattoo.modKey then
+				regular = regular or node
+			end
+		end
+		assert.is_truthy(target and regular, "Should find unallocated nodes to compare")
+		local override = copyTable(tattoo, true)
+		override.id = target.id
+		spec.hashOverrides[target.id] = override
+		equipJewelInSocket(new("Item"):Item("Rarity: UNIQUE\n" ..
+			"Warrior's Tale\n" ..
+			"Crimson Jewel\n" ..
+			"Radius: Medium\n" ..
+			"Implicits: 0\n" ..
+			"100% increased effect of Tattoos in Radius\n"), socket)
+		-- Capped fire resistance, so that maximum fire resistance changes the fire damage taken
+		build.itemsTab:CreateDisplayItemFromRaw("Rarity: RARE\nFire Ward\nIron Ring\nImplicits: 0\n+300% to Fire Resistance\n")
+		build.itemsTab:AddDisplayItem()
+		spec:BuildAllDependsAndPaths()
+		rebuildBuild()
+
+		assertOwnNodePower("FireTakenHit", "addNodes", spec.nodes[target.id], regular)
+	end)
+
+	it("node power separates same-stat nodes of different types", function()
+		local spec = build.spec
+		local normal, notable
+		local nodesByKey = { }
+		for _, nodeId in ipairs(sortedNodeIds(spec.nodes)) do
+			local node = spec.nodes[nodeId]
+			if node.modKey ~= "" and not node.ascendancyName and (node.type == "Normal" or node.type == "Notable") then
+				local pair = nodesByKey[node.modKey] or { }
+				nodesByKey[node.modKey] = pair
+				pair[node.type] = pair[node.type] or node
+				if not normal and pair.Normal and pair.Notable then
+					normal, notable = pair.Normal, pair.Notable
+				end
+			end
+		end
+		assert.is_truthy(normal, "Should find a Normal and a Notable node with the same stats")
+
+		-- Only the allocated notable count tells these nodes apart
+		assert.is_true(allocatePathToNode(spec, normal), "Should allocate the Normal node")
+		assert.is_true(allocatePathToNode(spec, notable), "Should allocate the Notable node")
+		build.itemsTab:CreateDisplayItemFromRaw("Rarity: RARE\nNotable Charm\nOnyx Amulet\nImplicits: 0\n+10 to maximum Life per Allocated Notable Passive Skill\n")
+		build.itemsTab:AddDisplayItem()
+		spec:BuildAllDependsAndPaths()
+		rebuildBuild()
+
+		assertOwnNodePower("Life", "removeNodes", normal, notable)
 	end)
 
 	it("AddItemTooltip emits a remove-comparison block for an equipped Timeless jewel", function()
