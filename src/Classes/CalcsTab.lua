@@ -512,7 +512,7 @@ function CalcsTabClass:PowerBuilder()
 	-- local timer_start = GetTime()
 	local useFullDPS = self.powerStat and self.powerStat.stat == "FullDPS"
 	local calcFunc, calcBase = self:GetMiscCalculator()
-	local nodeCacheKey = self:GetNodeCacheKeyFunc()
+	local nodeCacheKeyFunc = self:GetNodeCacheKeyFunc()
 	local cache = { }
 	local distanceMap = { }
 	local distanceList = { }
@@ -626,7 +626,7 @@ function CalcsTabClass:PowerBuilder()
 		end
 		for nodeId, node in pairs(nodes) do
 			if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] then
-				local cacheKey = nodeCacheKey(node)
+				local cacheKey = nodeCacheKeyFunc(node)
 				if not cache[cacheKey] then
 					cache[cacheKey] = calcFunc({ addNodes = { [node] = true } }, useFullDPS)
 				end
@@ -639,7 +639,7 @@ function CalcsTabClass:PowerBuilder()
 					return pathNodes
 				end)
 			elseif node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[nodeId] then
-				local cacheKey = nodeCacheKey(node).."_remove"
+				local cacheKey = nodeCacheKeyFunc(node).."_remove"
 				if not cache[cacheKey] then
 					cache[cacheKey] = calcFunc({ removeNodes = { [node] = true } }, useFullDPS)
 				end
@@ -687,7 +687,7 @@ function CalcsTabClass:PowerBuilder()
 				if effect then
 					local effectNode = buildMasteryEffectNode(node, effect)
 					if effectNode.modKey ~= "" then
-						local cacheKey = nodeCacheKey(effectNode)
+						local cacheKey = nodeCacheKeyFunc(effectNode)
 						if not cache[cacheKey] then
 							cache[cacheKey] = calcFunc({ addNodes = { [effectNode] = true } }, useFullDPS)
 						end
@@ -736,7 +736,7 @@ function CalcsTabClass:PowerBuilder()
 		end
 		wipeTable(node.power)
 		if not node.alloc and node.modKey ~= "" and not self.mainEnv.grantedPassives[node.id] then
-			local cacheKey = nodeCacheKey(node)
+			local cacheKey = nodeCacheKeyFunc(node)
 			if not cache[cacheKey] then
 				cache[cacheKey] = calcFunc({ addNodes = { [node] = true } }, useFullDPS)
 			end

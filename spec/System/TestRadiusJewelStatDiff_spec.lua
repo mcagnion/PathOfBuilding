@@ -279,8 +279,8 @@ local function sortedNodeIds(nodeMap)
 end
 
 -- Helper: run the power report and check that two nodes sharing a modKey each get their own power, i.e. the
--- delta of calculating that node alone. `override` is "addNodes" or "removeNodes".
-local function assertOwnNodePower(statName, override, nodeA, nodeB)
+-- delta of calculating that node alone. `overrideKey` is "addNodes" or "removeNodes".
+local function assertOwnNodePower(statName, overrideKey, nodeA, nodeB)
 	local calcsTab = build.calcsTab
 	for _, powerStat in ipairs(data.powerStatList) do
 		if powerStat.stat == statName then
@@ -295,8 +295,8 @@ local function assertOwnNodePower(statName, override, nodeA, nodeB)
 	until coroutine.status(powerBuilder) == "dead"
 
 	local calcFunc, calcBase = calcsTab:GetMiscCalculator()
-	local powerA = calcsTab:CalculatePowerStat(calcsTab.powerStat, calcFunc({ [override] = { [nodeA] = true } }), calcBase)
-	local powerB = calcsTab:CalculatePowerStat(calcsTab.powerStat, calcFunc({ [override] = { [nodeB] = true } }), calcBase)
+	local powerA = calcsTab:CalculatePowerStat(calcsTab.powerStat, calcFunc({ [overrideKey] = { [nodeA] = true } }), calcBase)
+	local powerB = calcsTab:CalculatePowerStat(calcsTab.powerStat, calcFunc({ [overrideKey] = { [nodeB] = true } }), calcBase)
 	assert.are_not.equal(powerA, powerB, "The two nodes should give different " .. statName)
 	assert.are.equal(powerA, nodeA.power.singleStat)
 	assert.are.equal(powerB, nodeB.power.singleStat)
