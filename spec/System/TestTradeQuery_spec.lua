@@ -1,3 +1,5 @@
+local dkjson = require "dkjson"
+
 describe("TradeQuery", function()
 	local mock_tradeQuery
 	local mock_queryGen
@@ -121,6 +123,95 @@ describe("TradeQuery", function()
 				assert.is_table(entry.DNs)
 				assert.is_true(#entry.DNs >= 2)
 			end
+		end)
+	end)
+	describe("Stat Gain vs Budget sort", function()
+		-- Stat Value 1 means the current item: gain = Stat Value - 1.
+		-- Results as { Stat Value, price in divines }.
+		local upgradeResults = {
+			{ 0.875, 0.0625 }, -- cheap downgrade
+			{ 1.5, 64 },       -- best gain, most expensive
+			{ 1.375, 16 },     -- near-best at a mid price
+			{ 1.3125, 8 },     -- ties with result 3 when Max Price is 64
+			{ 1.0625, 1 },     -- cheap small upgrade
+		}
+		local downgradeResults = {
+			{ 0.875, 0.0625 }, -- smallest loss
+			{ 0.75, 64 },      -- largest loss
+			{ 0.8125, 64 },    -- expensive mid loss
+		}
+
+		local function newBudgetTradeQuery(results, query)
+			local tq = new("TradeQuery"):TradeQuery({ itemsTab = {} })
+			-- sort modes are defined with the Trader window controls
+			tq.sortModes = { StatGainBudget = "budget" }
+			tq.statSortSelectionList = { { stat = "FullDPS", weightMult = 1 } }
+			tq.tradeQueryGenerator = new("TradeQueryGenerator"):TradeQueryGenerator({ itemsTab = {} })
+			tq.itemsTab.build = { calcsTab = { GetMiscCalculator = function() return nil, { FullDPS = 100 } end } }
+			tq.slotTables[1] = { slotName = "Ring 1" }
+			tq.lastQueries[1] = query and dkjson.encode(query)
+			tq.resultTbl[1] = {}
+			for index, result in ipairs(results) do
+				tq.resultTbl[1][index] = { currency = "divine", amount = result[2] }
+			end
+			tq.GetResultEvaluation = function(_, _, resultIndex)
+				return { { weight = results[resultIndex][1] } }
+			end
+			local divsPerUnit = { divine = 1, chaos = 1 / 256 }
+			tq.ConvertCurrencyToDivs = function(_, currency, amount)
+				return divsPerUnit[currency] and amount * divsPerUnit[currency]
+			end
+			return tq
+		end
+
+		local function sortedIndices(tq)
+			local sorted, errMsg = tq:SortFetchResults(1, tq.sortModes.StatGainBudget)
+			assert.is_nil(errMsg)
+			local indices = {}
+			for _, entry in ipairs(sorted) do
+				table.insert(indices, entry.index)
+			end
+			return indices
+		end
+
+		it("charges price against the Max Price the search used", function()
+			-- 32768 Chaos Orb Equivalent = 128 divines
+			local tq = newBudgetTradeQuery(upgradeResults, {
+				query = { filters = { trade_filters = { filters = { price = { max = 32768 } } } } },
+			})
+
+			assert.are.same({ 3, 4, 2, 5, 1 }, sortedIndices(tq))
+		end)
+
+		it("uses the highest fetched price without a Max Price, cheaper first on ties", function()
+			local tq = newBudgetTradeQuery(upgradeResults, { query = {} })
+
+			assert.are.same({ 4, 3, 5, 2, 1 }, sortedIndices(tq))
+		end)
+
+		it("does not reward price when no result is an upgrade", function()
+			local tq = newBudgetTradeQuery(downgradeResults, {
+				query = { filters = { trade_filters = { filters = { price = { option = "divine", max = 64 } } } } },
+			})
+
+			assert.are.same({ 1, 3, 2 }, sortedIndices(tq))
+		end)
+
+		it("ranks Megalomaniac results by Stat Value, cheaper first on ties", function()
+			local tq = newBudgetTradeQuery({ { 1.5, 64 }, { 1.375, 1 }, { 1.5, 32 } }, { query = {} })
+			tq.slotTables[1] = { slotName = "Megalomaniac" }
+
+			assert.are.same({ 3, 1, 2 }, sortedIndices(tq))
+		end)
+
+		it("reports missing conversion rates", function()
+			local tq = newBudgetTradeQuery(upgradeResults, { query = {} })
+			tq.ConvertCurrencyToDivs = function() end
+
+			local sorted, errMsg = tq:SortFetchResults(1, tq.sortModes.StatGainBudget)
+
+			assert.is_nil(sorted)
+			assert.are.equal("MissingConversionRates", errMsg)
 		end)
 	end)
 	describe("ReduceOutput", function()

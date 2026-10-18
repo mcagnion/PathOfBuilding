@@ -434,6 +434,7 @@ on trade site to work on other leagues and realms)]]
 		StatValuePrice = "Stat Value / Price",
 		Price = "(Lowest) Price",
 		Weight = "(Highest) Weighted Sum",
+		StatGainBudget = "Stat Gain vs Budget",
 	}
 	-- Item sort dropdown
 	self.itemSortSelectionList = {
@@ -441,6 +442,7 @@ on trade site to work on other leagues and realms)]]
 		self.sortModes.StatValuePrice,
 		self.sortModes.Price,
 		self.sortModes.Weight,
+		self.sortModes.StatGainBudget,
 	}
 	self.controls.itemSortSelection = new("DropDownControl"):DropDownControl({"TOPRIGHT", self.controls.StatWeightMultipliersButton, "TOPLEFT"}, {-8, 0, 170, row_height}, self.itemSortSelectionList, function(index, value)
 		self.pbItemSortSelectionIndex = index
@@ -454,7 +456,8 @@ Additional post filtering options can be done these include:
 Highest Stat Value - Sort from highest to lowest Stat Value change of equipping item
 Highest Stat Value / Price - Sorts from highest to lowest by estimated Stat Value per currency
 Lowest Price - Sorts from lowest to highest price of retrieved items
-Highest Weight - Displays the order retrieved from trade]]
+Highest Weight - Displays the order retrieved from trade
+Stat Gain vs Budget - Sorts by Stat Value gain minus best gain x price / Max Price (highest price found if none)]]
 	-- avoid calling selFunc to avoid updating controls before they are initialised
 	self.controls.itemSortSelection:SetSel(self.pbItemSortSelectionIndex, true)
 	self.controls.itemSortSelectionLabel = new("LabelControl"):LabelControl({"TOPRIGHT", self.controls.itemSortSelection, "TOPLEFT"}, {-4, 0, 56, 16}, "^7Sort By:")
@@ -1015,6 +1018,48 @@ function TradeQueryClass:SortFetchResults(row_idx, mode)
 			t_insert(newTbl, { outputAttr = price, index = result_index })
 		end
 		table.sort(newTbl, function(a,b) return a.outputAttr < b.outputAttr end)
+	elseif mode == self.sortModes.StatGainBudget then
+		local priceTable = getPriceTable()
+		if priceTable == nil then
+			return nil, "MissingConversionRates"
+		end
+		-- Stat Value of keeping the current item, through the same reduction as GetResultEvaluation
+		local _, currentOutput = self.itemsTab.build.calcsTab:GetMiscCalculator()
+		local currentStatValue = self.tradeQueryGenerator.WeightedRatioOutputs(currentOutput, self:ReduceOutput(currentOutput), self.statSortSelectionList)
+		local gains = {}
+		local bestGain, highestPrice = 0, 0
+		for result_index = 1, #self.resultTbl[row_idx] do
+			gains[result_index] = getResultWeight(result_index) - currentStatValue
+			bestGain = m_max(bestGain, gains[result_index])
+			highestPrice = m_max(highestPrice, priceTable[result_index])
+		end
+		-- the budget is the Max Price the search was generated with, else the highest fetched price
+		local query = self.lastQueries[row_idx] and dkjson.decode(self.lastQueries[row_idx])
+		local tradeFilters = query and query.query and query.query.filters and query.query.filters.trade_filters
+		local priceFilter = tradeFilters and tradeFilters.filters and tradeFilters.filters.price
+		-- "Chaos Orb Equivalent" leaves the price option unset
+		local maxPrice = priceFilter and priceFilter.max and self:ConvertCurrencyToDivs(priceFilter.option or "chaos", priceFilter.max)
+		local budget = (maxPrice and maxPrice > 0) and maxPrice or highestPrice
+		-- spending the whole budget costs the best gain found; bestGain starts at 0 so that
+		-- price is never rewarded when no result is an upgrade.
+		-- Megalomaniac Stat Values are per passive point spent, so they have no current item
+		-- to compare with: rank them by Stat Value alone
+		local gainPerDiv = 0
+		if budget > 0 and self.slotTables[row_idx].slotName ~= "Megalomaniac" then
+			gainPerDiv = bestGain / budget
+		end
+		for result_index, gain in ipairs(gains) do
+			t_insert(newTbl, { outputAttr = gain - gainPerDiv * priceTable[result_index], price = priceTable[result_index], index = result_index })
+		end
+		table.sort(newTbl, function(a,b)
+			if a.outputAttr ~= b.outputAttr then
+				return a.outputAttr > b.outputAttr
+			end
+			if a.price ~= b.price then
+				return a.price < b.price
+			end
+			return a.index < b.index
+		end)
 	else
 		return nil, "InvalidSort"
 	end
