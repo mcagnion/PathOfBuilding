@@ -191,6 +191,53 @@ Strict-Transport-Security: max-age=63115200; includeSubDomains; preload]]
 			requests.PerformSearch = orig_perform
 			requests.FetchResultBlock = orig_fetchBlock
 		end)
+
+		it("streams exactly the final items, including previous-search fill", function()
+			local call_count = 0
+			local orig_perform = requests.PerformSearch
+			local orig_fetchBlock = requests.FetchResultBlock
+			local orig_maxFetch = requests.maxFetchPerSearch
+			requests.maxFetchPerSearch = 20
+			local clippedIds = { }
+			for i = 1, 20 do
+				table.insert(clippedIds, "clipped" .. i)
+			end
+			requests.PerformSearch = function(self, realm, league, query, callback)
+				call_count = call_count + 1
+				if call_count < 5 then
+					callback({ total = 10000, result = clippedIds, id = "clipped" }, nil)
+				else
+					callback({ total = 3, result = { "final1", "final2", "final3" }, id = "final" }, nil)
+				end
+			end
+			requests.FetchResultBlock = function(self, url, callback)
+				local itemBlock = { }
+				for hash in url:match("fetch/([^?]+)"):gmatch("[^,]+") do
+					table.insert(itemBlock, { weight = "100", id = hash })
+				end
+				callback(itemBlock)
+			end
+			local streamedIds = { }
+			local finalIds
+			requests:SearchWithQueryWeightAdjusted("pc", "league", [[{"query":{"stats":[{"value":{"min":0}}]}}]], function(items)
+				finalIds = { }
+				for _, item in ipairs(items) do
+					table.insert(finalIds, item.id)
+				end
+			end, {
+				onFetchedItems = function(items)
+					for _, item in ipairs(items) do
+						table.insert(streamedIds, item.id)
+					end
+				end,
+			})
+			requests.PerformSearch = orig_perform
+			requests.FetchResultBlock = orig_fetchBlock
+			requests.maxFetchPerSearch = orig_maxFetch
+
+			assert.are.equal(20, #finalIds)
+			assert.are.same(finalIds, streamedIds)
+		end)
 	end)
 
 	describe("FetchResultBlock", function()
@@ -317,6 +364,41 @@ Strict-Transport-Security: max-age=63115200; includeSubDomains; preload]]
 				assert.are.equal(block_count, 1)
 			end)
 			requests.FetchResultBlock = orig_fetchBlock
+		end)
+
+		it("hands each fetched block over before all blocks arrived", function()
+			local itemHashes = { }
+			for i = 1, 25 do
+				table.insert(itemHashes, "id" .. i)
+			end
+			local pendingBlocks = { }
+			local orig_fetchBlock = requests.FetchResultBlock
+			local orig_maxFetch = requests.maxFetchPerSearch
+			requests.maxFetchPerSearch = 30
+			requests.FetchResultBlock = function(self, url, callback)
+				local itemBlock = { }
+				for hash in url:match("fetch/([^?]+)"):gmatch("[^,]+") do
+					table.insert(itemBlock, { id = hash })
+				end
+				table.insert(pendingBlocks, function() callback(itemBlock) end)
+			end
+			local fetchedBlockSizes = { }
+			local finalItems
+			requests:FetchResults(itemHashes, "queryId", function(items)
+				finalItems = items
+			end, function(itemBlock)
+				table.insert(fetchedBlockSizes, #itemBlock)
+			end)
+			requests.FetchResultBlock = orig_fetchBlock
+			requests.maxFetchPerSearch = orig_maxFetch
+
+			pendingBlocks[1]()
+			assert.are.same({ 10 }, fetchedBlockSizes)
+			assert.is_nil(finalItems)
+			pendingBlocks[2]()
+			pendingBlocks[3]()
+			assert.are.same({ 10, 10, 5 }, fetchedBlockSizes)
+			assert.are.equal(25, #finalItems)
 		end)
 	end)
 end)

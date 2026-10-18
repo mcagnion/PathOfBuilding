@@ -32,6 +32,12 @@ function TradeQueryClass:TradeQuery(itemsTab)
 	self.resultTbl = { }
 	self.sortedResultTbl = { }
 	self.itemIndexTbl = { }
+	-- per row: the running search, so results of a replaced search are ignored
+	self.resultFetchContexts = { }
+	-- per row: the result the user picked, kept selected while more results arrive
+	self.userSelectedResult = { }
+	-- per row: results that arrived while the result list was open
+	self.resultDisplayPending = { }
 	-- tooltip acceleration tables
 	self.onlyWeightedBaseOutput = { }
 	self.lastComparedWeightList = { }
@@ -676,6 +682,9 @@ Highest Weight - Displays the order retrieved from trade]]
 	end
 	main.onFrameFuncs["TradeQueryRequests"] = function()
 		self.tradeQueryRequests:ProcessQueue(onRateLimit)
+		for rowIdx in pairs(self.resultDisplayPending) do
+			self:RefreshFetchedResults(rowIdx)
+		end
 		if self.countDown then
 			coroutine.resume(self.countDown)
 			if coroutine.status(self.countDown) == "dead" then
@@ -880,12 +889,13 @@ function TradeQueryClass:GetResultEvaluation(row_idx, result_index, calcFunc, ba
 end
 
 -- Method to update controls after a search is completed
-function TradeQueryClass:UpdateDropdownList(row_idx)
+function TradeQueryClass:UpdateDropdownList(row_idx, selIndex)
 	local dropdownLabels = {}
 
 	if not self.resultTbl[row_idx] then return end
 
-	for result_index = 1, #self.resultTbl[row_idx] do
+	-- the sorted list can lag behind results added while the list was open
+	for result_index = 1, #(self.sortedResultTbl[row_idx] or { }) do
 
 		local pb_index = self.sortedResultTbl[row_idx][result_index].index
 		local result = self.resultTbl[row_idx][pb_index]
@@ -893,10 +903,106 @@ function TradeQueryClass:UpdateDropdownList(row_idx)
 		local item = new("Item"):Item(result.item_string)
 		table.insert(dropdownLabels, colorCodes[item.rarity] .. item.name .. price)
 	end
-	self.controls["resultDropdown".. row_idx].selIndex = 1
+	self.controls["resultDropdown".. row_idx].selIndex = selIndex or 1
 	self.controls["resultDropdown".. row_idx]:SetList(dropdownLabels)
 end
+function TradeQueryClass:StartResultFetch(rowIdx)
+	self:CancelResultFetch(rowIdx)
+	local context = { }
+	self.resultFetchContexts[rowIdx] = context
+	local button = self.controls["priceButton" .. rowIdx]
+	if button then
+		button.label = "Searching..."
+	end
+	return context
+end
+function TradeQueryClass:IsResultFetchCurrent(rowIdx, context)
+	return self.resultFetchContexts[rowIdx] == context
+end
+function TradeQueryClass:FinishResultFetch(rowIdx, context)
+	if not self:IsResultFetchCurrent(rowIdx, context) then
+		return false
+	end
+	self.resultFetchContexts[rowIdx] = nil
+	local button = self.controls["priceButton" .. rowIdx]
+	if button then
+		button.label = "Price Item"
+	end
+	return true
+end
+function TradeQueryClass:CancelResultFetch(rowIdx)
+	self:FinishResultFetch(rowIdx, self.resultFetchContexts[rowIdx])
+	self.userSelectedResult[rowIdx] = nil
+	self.resultDisplayPending[rowIdx] = nil
+end
+-- Streamed blocks and the final list hold the same listing tables: prepare each listing once,
+-- so the final ranking reuses the evaluations made while the search was running
+function TradeQueryClass:PrepareFetchedResults(items, preparedItems, prepareItems)
+	local unpreparedItems = { }
+	for _, item in ipairs(items) do
+		if preparedItems[item] == nil then
+			preparedItems[item] = false
+			t_insert(unpreparedItems, item)
+		end
+	end
+	for _, result in ipairs(prepareItems(unpreparedItems)) do
+		preparedItems[result] = true
+	end
+	local results = { }
+	for _, item in ipairs(items) do
+		if preparedItems[item] then
+			t_insert(results, item)
+		end
+	end
+	return results
+end
+-- Adds the results of one fetched block while the search is still running. The first block of a
+-- search replaces the results of the previous one at once, even in an open list, so that the
+-- listed entries never point into a replaced result table.
+function TradeQueryClass:AddFetchedResults(rowIdx, results, fetchContext)
+	if not results[1] then
+		return
+	end
+	if not fetchContext.listedResults then
+		fetchContext.listedResults = true
+		self.resultTbl[rowIdx] = results
+		self.resultDisplayPending[rowIdx] = nil
+		self:UpdateControlsWithItems(rowIdx, self.userSelectedResult[rowIdx])
+		return
+	end
+	for _, result in ipairs(results) do
+		t_insert(self.resultTbl[rowIdx], result)
+	end
+	self:RefreshFetchedResults(rowIdx)
+end
+-- Lists the complete results of a search. They are normally the streamed ones, already listed.
+function TradeQueryClass:SetFetchedResults(rowIdx, results)
+	local listedResults = self.resultTbl[rowIdx]
+	local alreadyListed = listedResults ~= nil and #listedResults == #results
+	for index = 1, alreadyListed and #results or 0 do
+		if listedResults[index] ~= results[index] then
+			alreadyListed = false
+			break
+		end
+	end
+	if not alreadyListed then
+		self.resultTbl[rowIdx] = results
+		self.resultDisplayPending[rowIdx] = nil
+		self:UpdateControlsWithItems(rowIdx, self.userSelectedResult[rowIdx])
+	end
+end
+-- Ranks the row again, but not while its list is open: entries would move under the cursor
+function TradeQueryClass:RefreshFetchedResults(rowIdx)
+	local dropdown = self.controls["resultDropdown" .. rowIdx]
+	if dropdown and dropdown.dropped then
+		self.resultDisplayPending[rowIdx] = true
+		return
+	end
+	self.resultDisplayPending[rowIdx] = nil
+	self:UpdateControlsWithItems(rowIdx, self.userSelectedResult[rowIdx])
+end
 function TradeQueryClass:ResetResultRow(rowIdx)
+	self:CancelResultFetch(rowIdx)
 	self.itemIndexTbl[rowIdx] = nil
 	self.sortedResultTbl[rowIdx] = nil
 	self.resultTbl[rowIdx] = nil
@@ -904,7 +1010,8 @@ function TradeQueryClass:ResetResultRow(rowIdx)
 	self:UpdateDropdownList(rowIdx)
 	self.controls.fullPrice.label = "^7Total Price: " .. self:GetTotalPriceString()
 end
-function TradeQueryClass:UpdateControlsWithItems(row_idx)
+---@param keptResult table? @ result to keep selected if it is still listed, instead of the best one
+function TradeQueryClass:UpdateControlsWithItems(row_idx, keptResult)
 	local sortMode = self.itemSortSelectionList[self.pbItemSortSelectionIndex]
 	local sortedItems, errMsg = self:SortFetchResults(row_idx, sortMode)
 	if errMsg == "MissingConversionRates" then
@@ -923,7 +1030,19 @@ function TradeQueryClass:UpdateControlsWithItems(row_idx)
 		self:SetNotice(self.controls.pbNotice, "^4No compatible items found for this slot.")
 		return
 	end
-	local pb_index = sortedItems[1].index
+	local selIndex
+	for sortedIndex, sortedItem in ipairs(sortedItems) do
+		if keptResult and self.resultTbl[row_idx][sortedItem.index] == keptResult then
+			selIndex = sortedIndex
+			break
+		end
+	end
+	if not selIndex then
+		-- the best result is selected instead: results added later must not bring back an older pick
+		selIndex = 1
+		self.userSelectedResult[row_idx] = nil
+	end
+	local pb_index = sortedItems[selIndex].index
 	self.itemIndexTbl[row_idx] = pb_index
 	self.controls["priceButton".. row_idx].tooltipText = "Sorted by " .. self.itemSortSelectionList[self.pbItemSortSelectionIndex]
 	self.totalPrice[row_idx] = {
@@ -931,7 +1050,7 @@ function TradeQueryClass:UpdateControlsWithItems(row_idx)
 		amount = self.resultTbl[row_idx][pb_index].amount,
 	}
 	self.controls.fullPrice.label = "^7Total Price: " .. self:GetTotalPriceString()
-	self:UpdateDropdownList(row_idx)
+	self:UpdateDropdownList(row_idx, selIndex)
 end
 
 -- Method to set the current result return in the pane based of an index
@@ -1065,48 +1184,60 @@ function TradeQueryClass:PriceItemRowDisplay(row_idx, top_pane_alignment_ref, ro
 				controls["uri"..context.row_idx]:SetText(url, true)
 				return
 			end
-			context.controls["priceButton"..context.row_idx].label = "Searching..."
+			local fetchContext = self:StartResultFetch(context.row_idx)
 			self.lastQueries[row_idx] = query
+			local preparedItems = { }
+			local function prepareItems(items)
+				local selectedSlot = getSelectedSlot()
+				local itemsSafe = self:FilterToSafeItems(items, selectedSlot and selectedSlot.slotName)
+				-- replace eldritch mods or enchants if the user requested
+				-- so in TradeQueryGenerator
+				for i, _ in ipairs(itemsSafe) do
+					local item = new("Item"):Item(itemsSafe[i].item_string)
+					-- assume the user will add quality if they buy the item
+					item:NormaliseQuality()
+					if self.tradeQueryGenerator.lastIncludeEldritch == "Copy Current" or
+						self.tradeQueryGenerator.lastCopyEnchantMode == "Copy Current" then
+						self.itemsTab:CopyAnointsAndEldritchImplicits(item, true, true, context.slotTbl.slotName)
+					elseif self.tradeQueryGenerator.lastIncludeEldritch == "Remove" then
+						if item.tangle or item.cleansing then
+							item.implicitModLines = {}
+						end
+					elseif self.tradeQueryGenerator.lastCopyEnchantMode == "Remove" then
+						item.enchantModLines = {}
+					end
+					itemsSafe[i].item_string = item:BuildRaw()
+				end
+				return itemsSafe
+			end
 			self.tradeQueryRequests:SearchWithQueryWeightAdjusted(self.pbRealm, self.pbLeague, query,
 				function(items, errMsg)
+					if not self:FinishResultFetch(context.row_idx, fetchContext) then
+						return
+					end
+					-- results already listed stay listed after an error
 					if errMsg then
 						self:SetNotice(context.controls.pbNotice, colorCodes.NEGATIVE .. errMsg)
-						context.controls["priceButton"..context.row_idx].label =  "Price Item"
 						return
 					else
 						self:SetNotice(context.controls.pbNotice, "")
 					end
 
-					local selectedSlot = getSelectedSlot()
-					local itemsSafe = self:FilterToSafeItems(items, selectedSlot and selectedSlot.slotName)
-					-- replace eldritch mods or enchants if the user requested
-					-- so in TradeQueryGenerator
-					for i, _ in ipairs(itemsSafe) do
-						local item = new("Item"):Item(itemsSafe[i].item_string)
-						-- assume the user will add quality if they buy the item
-						item:NormaliseQuality()
-						if self.tradeQueryGenerator.lastIncludeEldritch == "Copy Current" or
-							self.tradeQueryGenerator.lastCopyEnchantMode == "Copy Current" then
-							self.itemsTab:CopyAnointsAndEldritchImplicits(item, true, true, context.slotTbl.slotName)
-						elseif self.tradeQueryGenerator.lastIncludeEldritch == "Remove" then
-							if item.tangle or item.cleansing then
-								item.implicitModLines = {}
-							end
-						elseif self.tradeQueryGenerator.lastCopyEnchantMode == "Remove" then
-							item.enchantModLines = {}
-						end
-						itemsSafe[i].item_string = item:BuildRaw()
-					end
-
-					self.resultTbl[context.row_idx] = itemsSafe
-					self:UpdateControlsWithItems(context.row_idx)
-					context.controls["priceButton"..context.row_idx].label =  "Price Item"
+					self:SetFetchedResults(context.row_idx, self:PrepareFetchedResults(items, preparedItems, prepareItems))
 				end,
 				{
 					callbackQueryId = function(queryId)
+						if not self:IsResultFetchCurrent(context.row_idx, fetchContext) then
+							return
+						end
 						local url = self.tradeQueryRequests:buildUrl(self.hostName .. "trade/search", self.pbRealm, self.pbLeague, queryId)
 						controls["uri"..context.row_idx]:SetText(url, true)
-					end
+					end,
+					onFetchedItems = function(items)
+						if self:IsResultFetchCurrent(context.row_idx, fetchContext) then
+							self:AddFetchedResults(context.row_idx, self:PrepareFetchedResults(items, preparedItems, prepareItems), fetchContext)
+						end
+					end,
 				}
 			)
 		end)
@@ -1159,24 +1290,36 @@ you can add them, copy the link here, and press "Price Item" to evaluate the ite
 	end
 	controls["priceButton"..row_idx] = new("ButtonControl"):ButtonControl({ "TOPLEFT", controls["uri"..row_idx], "TOPRIGHT"}, {8, 0, 100, row_height}, "Price Item",
 		function()
-			controls["priceButton"..row_idx].label = "Searching..."
+			local fetchContext = self:StartResultFetch(row_idx)
 			local url = controls["uri" .. row_idx].buf
 			if not url:find("^https://") then
 				url = "https://" .. url
 			end
+			local preparedItems = { }
+			local function prepareItems(items)
+				local selectedSlot = getSelectedSlot()
+				return self:FilterToSafeItems(items, selectedSlot and selectedSlot.slotName)
+			end
 			self.tradeQueryRequests:SearchWithURL(url, function(items, errMsg, query)
+				if not self:FinishResultFetch(row_idx, fetchContext) then
+					return
+				end
+				-- results already listed stay listed after an error
 				if errMsg then
 					self:SetNotice(controls.pbNotice, "Error: " .. errMsg)
 				else
 					self:SetNotice(controls.pbNotice, "")
 					self.lastQueries[row_idx] = query
-					local selectedSlot = getSelectedSlot()
-					local itemsSafe = self:FilterToSafeItems(items, selectedSlot and selectedSlot.slotName)
-					self.resultTbl[row_idx] = itemsSafe
-					self:UpdateControlsWithItems(row_idx)
+					self:SetFetchedResults(row_idx, self:PrepareFetchedResults(items, preparedItems, prepareItems))
 				end
-				controls["priceButton"..row_idx].label = "Price Item"
-			end)
+			end, {
+				onFetchedItems = function(items, query)
+					if self:IsResultFetchCurrent(row_idx, fetchContext) then
+						self.lastQueries[row_idx] = query
+						self:AddFetchedResults(row_idx, self:PrepareFetchedResults(items, preparedItems, prepareItems), fetchContext)
+					end
+				end,
+			})
 		end)
 	local jewelUniques = {
 		Megalomaniac = true,
@@ -1210,6 +1353,7 @@ you can add them, copy the link here, and press "Price Item" to evaluate the ite
 	controls["changeButton"..row_idx].shown = function() return self.resultTbl[row_idx] end
 	controls["resultDropdown" .. row_idx] = new("DropDownControl"):DropDownControl({ "TOPLEFT", controls["changeButton" .. row_idx], "TOPRIGHT" }, { 8, 0, 351, row_height }, {}, function(index)
 		self.itemIndexTbl[row_idx] = self.sortedResultTbl[row_idx][index].index
+		self.userSelectedResult[row_idx] = self.resultTbl[row_idx][self.itemIndexTbl[row_idx]]
 		self:SetFetchResultReturn(row_idx, self.itemIndexTbl[row_idx])
 	end)
 	self:UpdateDropdownList(row_idx)

@@ -95,7 +95,8 @@ end
 ---@param league string
 ---@param query string
 ---@param callback fun(items:table, errMsg:string)
----@param params table @ params = { callbackQueryId = fun(queryId:string) }
+---@param params table @ params = { callbackQueryId = fun(queryId:string), onFetchedItems = fun(items:table) }
+---onFetchedItems receives each fetched block of the final items before callback receives all of them
 function TradeQueryRequestsClass:SearchWithQuery(realm, league, query, callback, params)
 	params = params or {}
 	--ConPrintf("Query json: %s", query)
@@ -106,7 +107,7 @@ function TradeQueryRequestsClass:SearchWithQuery(realm, league, query, callback,
 		if errMsg then
 			return callback(nil, errMsg)
 		end
-		self:FetchResults(response.result, response.id, callback)
+		self:FetchResults(response.result, response.id, callback, params.onFetchedItems)
 	end)
 end
 
@@ -115,7 +116,8 @@ end
 ---@param league string
 ---@param query string
 ---@param callback fun(items:table, errMsg:string)
----@param params table @ params = { callbackQueryId = fun(queryId:string) }
+---@param params table @ params = { callbackQueryId = fun(queryId:string), onFetchedItems = fun(items:table) }
+---onFetchedItems only receives items of the final search, not those fetched to adjust the weight
 function TradeQueryRequestsClass:SearchWithQueryWeightAdjusted(realm, league, query, callback, params)
 	params = params or {}
 	local previousSearchId = nil
@@ -141,6 +143,7 @@ function TradeQueryRequestsClass:SearchWithQueryWeightAdjusted(realm, league, qu
 					if errMsg then
 						return callback(nil, errMsg)
 					end
+					local fetchedItemCount = #items
 					local fetchedItemIds = {}
 					local idSet = {}
 					for _, value in pairs(items) do
@@ -157,6 +160,9 @@ function TradeQueryRequestsClass:SearchWithQueryWeightAdjusted(realm, league, qu
 							table.insert(items, value)
 							table.insert(fetchedItemIds, value.id)
 						end
+					end
+					if params.onFetchedItems and #items > fetchedItemCount then
+						params.onFetchedItems({ unpack(items, fetchedItemCount + 1) })
 					end
 					local fillCount = self.maxFetchPerSearch - #items
 					if fillCount > 0 then
@@ -176,14 +182,14 @@ function TradeQueryRequestsClass:SearchWithQueryWeightAdjusted(realm, league, qu
 							end
 							items = tableConcat(items, newItems)
 							callback(items, errMsg)
-						end)
+						end, params.onFetchedItems)
 					else
 						callback(items, errMsg)
 					end
-				end)
+				end, params.onFetchedItems)
 			else
 				-- Search not clipped and result count satisfy maxFetchPerSearch, proceed normally
-				self:FetchResults(response.result, response.id,  callback)
+				self:FetchResults(response.result, response.id, callback, params.onFetchedItems)
 			end
 		else
 			if response.total < self.maxFetchPerSearch then -- Less than maximum items retrieved lower weight to try and get more.
@@ -259,7 +265,8 @@ end
 ---@param itemHashes string[]
 ---@param queryId string
 ---@param callback fun(items:table, errMsg:string)
-function TradeQueryRequestsClass:FetchResults(itemHashes, queryId, callback)
+---@param onFetchedItems fun(items:table)? @ receives each fetched block before callback receives all items
+function TradeQueryRequestsClass:FetchResults(itemHashes, queryId, callback, onFetchedItems)
 	local quantity_found = math.min(#itemHashes, self.maxFetchPerSearch)
 	local max_block_size = 10
 	local items = {}
@@ -273,6 +280,9 @@ function TradeQueryRequestsClass:FetchResults(itemHashes, queryId, callback)
 			end
 			for _, item in pairs(itemBlock) do
 				table.insert(items, item)
+			end
+			if onFetchedItems then
+				onFetchedItems(itemBlock)
 			end
 			-- finished fetching item blocks
 			if #items >= quantity_found then
@@ -401,7 +411,8 @@ function TradeQueryRequestsClass:FetchResultBlock(url, callback)
 end
 
 ---@param callback fun(items:table, errMsg:string, query: string?)
-function TradeQueryRequestsClass:SearchWithURL(url, callback)
+---@param params table? @ params = { onFetchedItems = fun(items:table, query:string) }
+function TradeQueryRequestsClass:SearchWithURL(url, callback, params)
 	local subpath = url:match(self.hostNamePattern .. "trade/search/(.+)$")
 	local paths = {}
 	for path in subpath:gmatch("[^/]+") do
@@ -435,9 +446,12 @@ function TradeQueryRequestsClass:SearchWithURL(url, callback)
 		end
 		query = dkjson.encode(json_data)
 
+		local onFetchedItems = params and params.onFetchedItems
 		self:SearchWithQuery(realm, league, query, function(items, searchErrMsg)
 			callback(items, searchErrMsg, query)
-		end)
+		end, { onFetchedItems = onFetchedItems and function(items)
+			onFetchedItems(items, query)
+		end })
 	end)
 end
 

@@ -176,4 +176,109 @@ describe("TradeQuery", function()
 			assert.are.equals(1.2, result)
 		end)
 	end)
+
+	describe("results of a running search", function()
+		-- Row 1 priced from a trade URL; each listing's Stat Value comes from statValues by id
+		local function newPricedRow(statValues)
+			local tq = new("TradeQuery"):TradeQuery({ itemsTab = {} })
+			tq.itemsTab.activeItemSet = {}
+			tq.itemsTab.slots = {}
+			tq.itemsTab.build = { calcsTab = { GetMiscCalculator = function() end } }
+			tq.slotTables[1] = { slotName = "Ring 1" }
+			tq.controls.pbNotice = {}
+			tq.controls.fullPrice = {}
+			tq.sortModes = { StatValue = "(Highest) Stat Value" }
+			tq.itemSortSelectionList = { tq.sortModes.StatValue }
+			tq.GetResultEvaluation = function(self, rowIdx, resultIndex)
+				return { { weight = statValues[self.resultTbl[rowIdx][resultIndex].id] } }
+			end
+			local searches = { }
+			tq.tradeQueryRequests = {
+				SearchWithURL = function(_, url, callback, params)
+					table.insert(searches, { callback = callback, params = params })
+				end,
+			}
+			tq:PriceItemRowDisplay(1, nil, 0, 20)
+			tq.controls.uri1.buf = "https://www.pathofexile.com/trade/search/Standard/abc"
+			return tq, searches
+		end
+		local function listings(...)
+			local items = { }
+			for _, id in ipairs({ ... }) do
+				table.insert(items, { id = id, item_string = "Rarity: RARE\n" .. id .. "\nGold Ring", amount = 1, currency = "chaos" })
+			end
+			return items
+		end
+		local function listedIds(tq)
+			local ids = { }
+			for _, sorted in ipairs(tq.sortedResultTbl[1]) do
+				table.insert(ids, tq.resultTbl[1][sorted.index].id)
+			end
+			return ids
+		end
+		local function selectedId(tq)
+			return tq.resultTbl[1][tq.itemIndexTbl[1]].id
+		end
+
+		it("ranks each fetched block with the earlier ones", function()
+			local tq, searches = newPricedRow({ a = 1, b = 3, c = 2, d = 5 })
+			tq.controls.priceButton1.onClick()
+			local block1, block2 = listings("a", "b"), listings("c", "d")
+
+			searches[1].params.onFetchedItems(block1, "query")
+			assert.are.same({ "b", "a" }, listedIds(tq))
+			assert.are.equal("b", selectedId(tq))
+			searches[1].params.onFetchedItems(block2, "query")
+			assert.are.same({ "d", "b", "c", "a" }, listedIds(tq))
+			assert.are.equal("d", selectedId(tq))
+			assert.are.equal("Searching...", tq.controls.priceButton1.label)
+
+			searches[1].callback({ block1[1], block1[2], block2[1], block2[2] }, nil, "query")
+			assert.are.same({ "d", "b", "c", "a" }, listedIds(tq))
+			assert.are.equal("Price Item", tq.controls.priceButton1.label)
+		end)
+
+		it("waits for the open list to close and keeps the picked result", function()
+			local tq, searches = newPricedRow({ a = 1, b = 3, d = 5 })
+			tq.controls.priceButton1.onClick()
+			searches[1].params.onFetchedItems(listings("a", "b"), "query")
+			tq.controls.resultDropdown1:SetSel(2)
+			assert.are.equal("a", selectedId(tq))
+
+			tq.controls.resultDropdown1.dropped = true
+			searches[1].params.onFetchedItems(listings("d"), "query")
+			assert.are.same({ "b", "a" }, listedIds(tq))
+
+			tq.controls.resultDropdown1.dropped = false
+			tq:RefreshFetchedResults(1)
+			assert.are.same({ "d", "b", "a" }, listedIds(tq))
+			assert.are.equal("a", selectedId(tq))
+			assert.are.equal(3, tq.controls.resultDropdown1.selIndex)
+		end)
+
+		it("forgets the picked result once a new sort selects the best one", function()
+			local tq, searches = newPricedRow({ a = 1, b = 3, d = 5 })
+			tq.controls.priceButton1.onClick()
+			searches[1].params.onFetchedItems(listings("a", "b"), "query")
+			tq.controls.resultDropdown1:SetSel(2)
+			-- what a sort mode or stat weight change does
+			tq:UpdateControlsWithItems(1)
+			searches[1].params.onFetchedItems(listings("d"), "query")
+			assert.are.equal("d", selectedId(tq))
+		end)
+
+		it("replaces the previous results and ignores a replaced search", function()
+			local tq, searches = newPricedRow({ a = 1, b = 3, c = 2 })
+			tq.controls.priceButton1.onClick()
+			searches[1].params.onFetchedItems(listings("a"), "query")
+			tq.controls.priceButton1.onClick()
+
+			searches[2].params.onFetchedItems(listings("b"), "query")
+			assert.are.same({ "b" }, listedIds(tq))
+			searches[1].params.onFetchedItems(listings("c"), "query")
+			searches[1].callback(listings("a", "c"), nil, "query")
+			assert.are.same({ "b" }, listedIds(tq))
+			assert.are.equal("Searching...", tq.controls.priceButton1.label)
+		end)
+	end)
 end)
