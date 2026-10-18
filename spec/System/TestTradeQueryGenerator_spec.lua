@@ -204,4 +204,181 @@ describe("TradeQueryGenerator", function()
 			assert.is_not_nil(query.filters.socket_filters.filters.links)
 		end)
 	end)
+
+	describe("Harmful mod penalties", function()
+		-- The stub build scores 1000 x Life / 100, so a test item's weighted gain equals gainAt(roll).
+		-- entries is one entry or a list of entries, each generated in its own group, in that order.
+		local function generateWeights(entries, gainAt, penaltyFloor, quality)
+			local queryGen = new("TradeQueryGenerator"):TradeQueryGenerator({ itemsTab = {} })
+			local calcs = 0
+			queryGen.modWeights = { }
+			queryGen.alreadyWeightedMods = { }
+			queryGen.openPenalties = { }
+			queryGen.calcContext = {
+				itemCategory = "Belt",
+				testItem = new("Item"):Item("Rarity: RARE\nNew Item\nLeather Belt\nImplicits: 0"),
+				slot = { slotName = "Belt" },
+				baseOutput = { Life = 100 },
+				baseStatValue = 1000,
+				penaltyFloor = penaltyFloor,
+				options = { statWeights = { { stat = "Life", weightMult = 1 } } },
+				calcFunc = function(override)
+					calcs = calcs + 1
+					local roll = tonumber(override.repItem.explicitModLines[1].line:match("%-?%d+")) or 1
+					return { Life = 100 + gainAt(roll) / 10 }
+				end,
+			}
+			local defaultQuality = main.defaultItemAffixQuality
+			main.defaultItemAffixQuality = quality or 0.5
+			local ok, err = pcall(function()
+				for _, entry in ipairs(entries.tradeMod and { entries } or entries) do
+					queryGen:GenerateModWeights({ entry })
+				end
+			end)
+			main.defaultItemAffixQuality = defaultQuality
+			assert(ok, err)
+			return queryGen.modWeights, calcs
+		end
+		local function mod(min, max, text, sign)
+			return { Belt = { min = min, max = max }, sign = sign or "", specialCaseData = { }, tradeMod = { id = "explicit.stat_1", text = text or "#% increased Armour" } }
+		end
+
+		it("weights a loss that grows with the roll by its smaller per-point loss", function()
+			-- -102 at the tested roll 20, -152 at the probed maximum 30
+			local weights = generateWeights(mod(10, 30), function(roll) return -5 * roll - 2 end, 10)
+			assert.are.equal(1, #weights)
+			assert.is_true(math.abs(weights[1].weight - (-152 / 30)) < 1e-6)
+		end)
+
+		it("weights a mod without a value by its whole loss", function()
+			local weights, calcs = generateWeights(mod(1, 1, "Can't use Flask in Fifth Slot"), function() return -238 end, 10)
+			assert.are.equal(1, #weights)
+			assert.are.equal(-238, weights[1].weight)
+			assert.are.equal(1, calcs)
+		end)
+
+		it("leaves losses a per-point weight cannot express neutral", function()
+			for label, case in pairs({
+				constant = { mod(10, 30), function() return -100 end, 10 },
+				positiveSlope = { mod(10, 30), function(roll) return -150 + 3 * roll end, 10 },
+				largeOffset = { mod(10, 30), function(roll) return -100 - 0.5 * roll end, 10 },
+				belowFloor = { mod(10, 30), function(roll) return -0.2 * roll end, 10 },
+				fixedRoll = { mod(1, 1, "+# to Level of Socketed Gems"), function() return -50 end, 10 },
+				reducedSign = { mod(10, 30, nil, "-"), function(roll) return 5 * roll end, 10 },
+				reducedRange = { mod(-30, -10), function(roll) return 5 * roll end, 10 },
+				gainAtLowEnd = { mod(1, 40), function(roll) return 20 - 5 * roll end, 10, 1 },
+				noFloor = { mod(10, 30), function(roll) return -5 * roll end, nil },
+			}) do
+				assert.are.equal(0, #generateWeights(case[1], case[2], case[3], case[4]), label)
+			end
+		end)
+
+		it("tests the other ranges of a stat whose first entry a guard left neutral", function()
+			-- the fixed 25 roll costs -125 but stays neutral; the 18-35 range is then tested at 27 and probed at 35
+			local weights, calcs = generateWeights({ mod(25, 25), mod(18, 35) }, function(roll) return -5 * roll end, 10)
+			assert.are.equal(1, #weights)
+			assert.is_true(weights[1].penalty)
+			assert.are.equal(-5, weights[1].weight)
+			assert.are.equal(3, calcs)
+		end)
+
+		it("keeps the smaller per-point loss of two penalised ranges, whatever their order", function()
+			-- -5.27 per point on 18-35 (tested at 27), -5.24 on 22-25 (tested at 24)
+			local function gainAt(roll) return -5 * roll - 0.01 * roll * roll end
+			for _, order in ipairs({ { mod(18, 35), mod(22, 25) }, { mod(22, 25), mod(18, 35) } }) do
+				local weights = generateWeights(order, gainAt, 10)
+				assert.are.equal(1, #weights)
+				assert.is_true(math.abs(weights[1].weight - gainAt(24) / 24) < 1e-6)
+			end
+		end)
+
+		it("never adds a positive weight to a stat a loss kept open", function()
+			-- a later range of the same stat gains: the stat ends neutral, with neither the penalty nor a positive weight
+			assert.are.equal(0, #generateWeights({ mod(25, 25), mod(18, 35) }, function(roll) return roll == 25 and -125 or 5 * roll end, 10))
+			assert.are.equal(0, #generateWeights({ mod(18, 35), mod(40, 50) }, function(roll) return roll >= 40 and 5 * roll or -5 * roll end, 10))
+			-- and the gain closes it: a later losing range does not bring the penalty back
+			assert.are.equal(0, #generateWeights({ mod(25, 25), mod(40, 50), mod(18, 35) }, function(roll) return roll >= 40 and 5 * roll or -5 * roll end, 10))
+		end)
+
+		it("penalises a costlier range even when a range below the floor comes first", function()
+			-- 8-15 tested at 12 loses 12, under the floor of 15; 16-18 tested at 17 loses 17
+			for _, order in ipairs({ { mod(8, 15), mod(16, 18) }, { mod(16, 18), mod(8, 15) } }) do
+				local weights = generateWeights(order, function(roll) return -roll end, 15)
+				assert.are.equal(1, #weights)
+				assert.are.equal(-1, weights[1].weight)
+			end
+		end)
+
+		it("still marks a stat after a first entry without effect, or without the option", function()
+			for label, floor in pairs({ noEffect = 10, noOption = false }) do
+				local _, calcs = generateWeights({ mod(25, 25), mod(18, 35) }, function(roll) return roll == 25 and 0 or -5 * roll end, floor or nil)
+				assert.are.equal(1, calcs, label)
+			end
+		end)
+
+		it("ranks penalties against positive weights and caps them", function()
+			local function finish(withPositives)
+				local queryGen = new("TradeQueryGenerator"):TradeQueryGenerator({ itemsTab = { items = {} } })
+				queryGen.modWeights = { }
+				for index = 1, withPositives and 30 or 0 do
+					table.insert(queryGen.modWeights, { tradeModId = "explicit.stat_" .. index, weight = 1, meanStatDiff = 31 - index })
+				end
+				for index = 1, 8 do
+					table.insert(queryGen.modWeights, { tradeModId = "explicit.stat_" .. (100 + index), weight = -2, meanStatDiff = -400, penalty = true })
+				end
+				-- a penalty on a stat usually searched through a pseudo total (Fire Resistance) stays on its own stat
+				table.insert(queryGen.modWeights, { tradeModId = "explicit.stat_3372524247", weight = -2, meanStatDiff = -500, penalty = true })
+				queryGen.calcContext = {
+					testItem = new("Item"):Item("Rarity: RARE\nNew Item\nGold Ring\nImplicits: 0"),
+					baseOutput = { },
+					baseStatValue = 0,
+					itemCategoryQueryStr = "accessory.ring",
+					special = { },
+					options = { statWeights = { }, influence1 = 1, influence2 = 1, includeMirrored = false },
+				}
+				queryGen.tradeTypeIndex = 1
+				local query
+				queryGen.requesterCallback = function(_, queryJson)
+					query = require("dkjson").decode(queryJson).query
+				end
+				queryGen:FinishQuery()
+				local penalties = 0
+				for _, filter in ipairs(query.stats[1].filters) do
+					assert.is_nil(filter.id:match("^pseudo%."))
+					if filter.value.weight < 0 then penalties = penalties + 1 end
+				end
+				return penalties
+			end
+
+			assert.are.equal(6, finish(true))
+			assert.are.equal(0, finish(false))
+		end)
+
+		it("penalises only when the Harmful Mods option is checked", function()
+			local function penaltyFloor(options)
+				local calcFunc = function() return { Life = 100 } end
+				local queryGen = new("TradeQueryGenerator"):TradeQueryGenerator({ itemsTab = { items = { }, build = { calcsTab = { GetMiscCalculator = function() return calcFunc, { Life = 100 } end } } } })
+				options.statWeights = { { stat = "Life", weightMult = 1 } }
+				queryGen:StartQuery({ slotName = "Belt" }, options)
+				main:ClosePopup()
+				return queryGen.calcContext.penaltyFloor
+			end
+
+			assert.is_nil(penaltyFloor({ }))
+			assert.are.equal(10, penaltyFloor({ includeHarmfulMods = true }))
+		end)
+
+		it("offers the Harmful Mods option unchecked for regular searches only", function()
+			local function harmfulModsControl(slotTbl)
+				local queryGen = new("TradeQueryGenerator"):TradeQueryGenerator({ itemsTab = { items = { } } })
+				queryGen:RequestQuery({ slotName = "Belt" }, { slotTbl = slotTbl }, { }, function() end)
+				local control = main.popups[1].controls.includeHarmfulMods
+				main:ClosePopup()
+				return control
+			end
+
+			assert.is_false(harmfulModsControl({ slotName = "Belt" }).state)
+			assert.is_nil(harmfulModsControl({ slotName = "Megalomaniac", unique = true, alreadyCorrupted = true }))
+		end)
+	end)
 end)

@@ -560,11 +560,94 @@ See TradeSiteStats.lua for a list of all trade site stats.]]
 	utils.saveTableToFile(queryModFilePath, self.modData, qmDescription)
 end
 
+-- Weighted stat change of the test item carrying this mod at the given value
+function TradeQueryGeneratorClass:TestModWeight(entry, modValue)
+	local modValueStr = (entry.sign and entry.sign or "") .. tostring(modValue)
+
+	-- Apply override text for special cases
+	local modLine
+	if modValue == 1 and entry.specialCaseData.overrideModLineSingular ~= nil then
+		modLine = entry.specialCaseData.overrideModLineSingular
+	elseif entry.specialCaseData.overrideModLine ~= nil then
+		modLine = entry.specialCaseData.overrideModLine
+	else
+		modLine = entry.tradeMod.text
+	end
+	modLine = modLine:gsub("#",modValueStr)
+
+	self.calcContext.testItem.explicitModLines[1] = { line = modLine, custom = true }
+	self.calcContext.testItem:BuildAndParseRaw()
+
+	if (self.calcContext.testItem.modList ~= nil and #self.calcContext.testItem.modList == 0) or (self.calcContext.testItem.slotModList ~= nil and #self.calcContext.testItem.slotModList[1] == 0 and #self.calcContext.testItem.slotModList[2] == 0) then
+		logToFile("Failed to test %s mod: %s", self.calcContext.itemCategory, modLine)
+	end
+
+	local output = self.calcContext.calcFunc({ repSlotName = self.calcContext.slot.slotName, repItem = self.calcContext.testItem })
+	return TradeQueryGeneratorClass.WeightedRatioOutputs(self.calcContext.baseOutput, output, self.calcContext.options.statWeights) * 1000 - (self.calcContext.baseStatValue or 0)
+end
+
+-- Negative weight per point for a mod that costs the build, or nil when a per-point weight would misrepresent the loss
+function TradeQueryGeneratorClass:GetPenaltyWeight(entry, modValue, meanStatDiff)
+	-- A reduced roll is already repelled by the positive weight of the same stat (negative ranges end with a positive weight below)
+	if entry.sign == "-" then
+		return
+	end
+	-- The trade site counts a mod without a value as 1
+	if not entry.tradeMod.text:find("#") then
+		return meanStatDiff
+	end
+	local range = entry[self.calcContext.itemCategory]
+	if range.min == range.max then
+		return
+	end
+	-- Keep only a loss roughly proportional to the roll: a constant loss (such as losing a passive's condition) or one that shrinks with the roll cannot be expressed per point
+	local probeValue = modValue < range.max and range.max or range.min
+	local probeDiff = self:TestModWeight(entry, probeValue)
+	local slope = (probeDiff - meanStatDiff) / (probeValue - modValue)
+	if math.abs(meanStatDiff - slope * modValue) > 0.25 * math.abs(meanStatDiff) then
+		return
+	end
+	-- The smaller per-point loss of the two rolls, so the penalty never exceeds a measured loss
+	local weight = meanStatDiff / modValue
+	if probeValue > 0 then
+		weight = m_max(weight, probeDiff / probeValue)
+	end
+	if weight < 0 then
+		return weight
+	end
+end
+
+-- Another entry of a stat a loss kept open: it can only lower the penalty to its smaller per-point loss, or cancel it with a gain
+function TradeQueryGeneratorClass:UpdateOpenPenalty(entry, modValue, meanStatDiff)
+	local id = entry.tradeMod.id
+	local penalty = self.openPenalties[id]
+	if meanStatDiff > 0.01 then
+		-- A stat that both gains and loses is left neutral, and closed
+		for index, weight in ipairs(self.modWeights) do
+			if weight == penalty then
+				table.remove(self.modWeights, index)
+				break
+			end
+		end
+		self.openPenalties[id] = nil
+	elseif meanStatDiff <= -self.calcContext.penaltyFloor then
+		local penaltyWeight = self:GetPenaltyWeight(entry, modValue, meanStatDiff)
+		if penaltyWeight and not penalty then
+			penalty = { tradeModId = id, weight = penaltyWeight, meanStatDiff = meanStatDiff, invert = false, penalty = true }
+			t_insert(self.modWeights, penalty)
+			self.openPenalties[id] = penalty
+		elseif penaltyWeight and penaltyWeight > penalty.weight then
+			penalty.weight, penalty.meanStatDiff = penaltyWeight, meanStatDiff
+		end
+	end
+end
+
 function TradeQueryGeneratorClass:GenerateModWeights(modsToTest)
 	local start = GetTime()
 	for _, entry in pairs(modsToTest) do
 		if entry[self.calcContext.itemCategory] ~= nil then
-			if self.alreadyWeightedMods[entry.tradeMod.id] ~= nil then -- Don't calculate the same thing twice (can happen with corrupted vs implicit)
+			local openPenalty = self.openPenalties[entry.tradeMod.id]
+			if self.alreadyWeightedMods[entry.tradeMod.id] ~= nil and openPenalty == nil then -- Don't calculate the same thing twice (can happen with corrupted vs implicit)
 				goto continue
 			elseif self.calcContext.options.includeTalisman == false and entry[self.calcContext.itemCategory].subType == "Talisman" then -- Talisman implicits take up a lot of query slots, so we have an option to skip them
 				goto continue
@@ -572,30 +655,20 @@ function TradeQueryGeneratorClass:GenerateModWeights(modsToTest)
 
 			-- Test with a value halfway (or configured default Item Affix Quality) between the min and max available for this mod in this slot. Note that this can generate slightly different values for the same mod as implicit vs explicit.
 			local modValue = math.ceil((entry[self.calcContext.itemCategory].max - entry[self.calcContext.itemCategory].min) * ( main.defaultItemAffixQuality or 0.5 ) + entry[self.calcContext.itemCategory].min)
-			local modValueStr = (entry.sign and entry.sign or "") .. tostring(modValue)
-
-			-- Apply override text for special cases
-			local modLine
-			if modValue == 1 and entry.specialCaseData.overrideModLineSingular ~= nil then
-				modLine = entry.specialCaseData.overrideModLineSingular
-			elseif entry.specialCaseData.overrideModLine ~= nil then
-				modLine = entry.specialCaseData.overrideModLine
-			else
-				modLine = entry.tradeMod.text
-			end
-			modLine = modLine:gsub("#",modValueStr)
-
-			self.calcContext.testItem.explicitModLines[1] = { line = modLine, custom = true }
-			self.calcContext.testItem:BuildAndParseRaw()
-
-			if (self.calcContext.testItem.modList ~= nil and #self.calcContext.testItem.modList == 0) or (self.calcContext.testItem.slotModList ~= nil and #self.calcContext.testItem.slotModList[1] == 0 and #self.calcContext.testItem.slotModList[2] == 0) then
-				logToFile("Failed to test %s mod: %s", self.calcContext.itemCategory, modLine)
-			end
-
-			local output = self.calcContext.calcFunc({ repSlotName = self.calcContext.slot.slotName, repItem = self.calcContext.testItem })
-			local meanStatDiff = TradeQueryGeneratorClass.WeightedRatioOutputs(self.calcContext.baseOutput, output, self.calcContext.options.statWeights) * 1000 - (self.calcContext.baseStatValue or 0)
-			if meanStatDiff > 0.01 then
+			local meanStatDiff = self:TestModWeight(entry, modValue)
+			if openPenalty ~= nil then
+				self:UpdateOpenPenalty(entry, modValue, meanStatDiff)
+			elseif meanStatDiff > 0.01 then
 				t_insert(self.modWeights, { tradeModId = entry.tradeMod.id, weight = meanStatDiff / modValue, meanStatDiff = meanStatDiff, invert = entry.sign == "-" and true or false })
+			elseif self.calcContext.penaltyFloor and meanStatDiff < -0.01 then
+				local penaltyWeight = meanStatDiff <= -self.calcContext.penaltyFloor and self:GetPenaltyWeight(entry, modValue, meanStatDiff)
+				local penalty = penaltyWeight and { tradeModId = entry.tradeMod.id, weight = penaltyWeight, meanStatDiff = meanStatDiff, invert = false, penalty = true }
+				if penalty then
+					t_insert(self.modWeights, penalty)
+				end
+				-- After any measurable loss, keep testing the stat's other entries: a fixed roll a guard left neutral, or a
+				-- smaller loss under the floor, must not hide a costlier range, so the penalty does not depend on the order
+				self.openPenalties[entry.tradeMod.id] = penalty or false
 			end
 			self.alreadyWeightedMods[entry.tradeMod.id] = true
 
@@ -769,9 +842,22 @@ function TradeQueryGeneratorClass:StartQuery(slot, options)
 	-- make weights more human readable
 	local compStatValue = TradeQueryGeneratorClass.WeightedRatioOutputs(baseOutput, baseItemOutput, options.statWeights) * 1000
 
+	-- With the Harmful Mods option, mods that cost at least 1% of the weighted stats get a negative weight (a penalty).
+	-- The option is only offered for regular searches, never for the special unique ones.
+	local penaltyFloor
+	if options.includeHarmfulMods then
+		penaltyFloor = 0
+		for _, statWeight in ipairs(options.statWeights) do
+			penaltyFloor = penaltyFloor + 10 * statWeight.weightMult
+		end
+		penaltyFloor = penaltyFloor > 0 and penaltyFloor or nil
+	end
+
 	-- Test each mod one at a time and cache the normalized Stat (configured earlier) diff to use as weight
 	self.modWeights = { }
 	self.alreadyWeightedMods = { }
+	-- Stats whose other entries are still tested because a loss was measured (Harmful Mods only): trade id -> penalty or false
+	self.openPenalties = { }
 
 	self.calcContext = {
 		itemCategoryQueryStr = itemCategoryQueryStr,
@@ -780,6 +866,7 @@ function TradeQueryGeneratorClass:StartQuery(slot, options)
 		testItem = testItem,
 		baseOutput = baseOutput,
 		baseStatValue = compStatValue,
+		penaltyFloor = penaltyFloor,
 		calcFunc = calcFunc,
 		options = options,
 		slot = slot,
@@ -934,12 +1021,16 @@ function TradeQueryGeneratorClass:FinishQuery()
 		self:addMoreWEMods()
 	end
 
-	-- Sort by mean Stat diff rather than weight to more accurately prioritize stats that can contribute more
+	-- Sort by mean Stat diff rather than weight to more accurately prioritize stats that can contribute more.
+	-- A penalty ranks on half its loss, so a large penalty can take the place of a weak gain.
+	local function priority(entry)
+		return entry.penalty and 0.5 * math.abs(entry.meanStatDiff) or entry.meanStatDiff
+	end
 	table.sort(self.modWeights, function(a, b)
-		if a.meanStatDiff == b.meanStatDiff then
+		if priority(a) == priority(b) then
 			return math.abs(a.weight) > math.abs(b.weight)
 		end
-		return a.meanStatDiff > b.meanStatDiff
+		return priority(a) > priority(b)
 	end)
 
 	-- A megalomaniac is not being compared to anything and the currentStatDiff will be 0, so just go for an arbitrary min weight - in this case triple the weight of the worst evaluated node.
@@ -1032,6 +1123,7 @@ function TradeQueryGeneratorClass:FinishQuery()
 	end
 	local statFilters = {}
 	local pseudoMods = {}
+	local penaltyFilters = {}
 	for _, entry in ipairs(self.modWeights) do
 		local hash = entry.tradeModId:match("stat_(%d+)")
 		local filterEntry = { id = entry.tradeModId, value = { weight = (entry.invert == true and entry.weight * -1 or entry.weight) } }
@@ -1039,6 +1131,10 @@ function TradeQueryGeneratorClass:FinishQuery()
 		-- individual stats
 		if ignoredStats[hash] then
 			goto weightContinue
+		elseif entry.penalty then
+			-- kept on its own stat: pseudo totals keep the largest weight of their sources, which would drop a penalty
+			penaltyFilters[filterEntry] = true
+			table.insert(statFilters, filterEntry)
 		elseif pseudoMap[hash] then
 			local tradeId = pseudoMap[hash]
 			filterEntry.id = tradeId
@@ -1143,13 +1239,22 @@ function TradeQueryGeneratorClass:FinishQuery()
 		end
 	end
 
+	local penaltyCount = 0
 	for _, entry in ipairs(statFilters) do
 		-- leave some room for the exact search account name and price query
 		if complexityBudget < 8 then
 			break
 		end
-		complexityBudget = complexityBudget - 4
-		t_insert(weightGroup.filters, entry)
+		-- a few penalties are enough to push down the listings that carry them without crowding out gains
+		if not penaltyFilters[entry] or penaltyCount < 6 then
+			penaltyCount = penaltyCount + (penaltyFilters[entry] and 1 or 0)
+			complexityBudget = complexityBudget - 4
+			t_insert(weightGroup.filters, entry)
+		end
+	end
+	-- penalties alone find no listing: they only lower the sum of listings found for their gains
+	if penaltyCount > 0 and penaltyCount == #weightGroup.filters then
+		weightGroup.filters = { }
 	end
 	local errMsg = nil
 	ConPrintf("filters: %d, budget: %d", #weightGroup.filters, complexityBudget)
@@ -1237,6 +1342,10 @@ function TradeQueryGeneratorClass:RequestQuery(slot, context, statWeights, callb
 		controls.includeMirrored = new("CheckBoxControl"):CheckBoxControl({"TOPRIGHT",lastItemAnchor,"BOTTOMRIGHT"}, {0, 5, 18}, "Mirrored Items:", function(state) end)
 		controls.includeMirrored.state = (self.lastIncludeMirrored == nil or self.lastIncludeMirrored == true)
 		updateLastAnchor(controls.includeMirrored)
+
+		controls.includeHarmfulMods = new("CheckBoxControl"):CheckBoxControl({"TOPRIGHT",lastItemAnchor,"BOTTOMRIGHT"}, {0, 5, 18}, "Harmful Mods:", function(state) end, "Gives a negative weight to modifiers that noticeably lower the sorted stats, so listings carrying them rank lower.\nNote that there is a maximum search filter count which means this might cause other weights to not be included.")
+		controls.includeHarmfulMods.state = not not self.lastIncludeHarmfulMods
+		updateLastAnchor(controls.includeHarmfulMods)
 	end
 
 	if not isJewelSlot and not isAbyssalJewelSlot and includeScourge then
@@ -1392,6 +1501,9 @@ Remove: %s will be removed from the search results.]], term, term, term)
 		end
 		if controls.includeTalisman then
 			self.lastIncludeTalisman, options.includeTalisman = controls.includeTalisman.state, controls.includeTalisman.state
+		end
+		if controls.includeHarmfulMods then
+			self.lastIncludeHarmfulMods, options.includeHarmfulMods = controls.includeHarmfulMods.state, controls.includeHarmfulMods.state
 		end
 		if controls.jewelType then
 			self.lastJewelType = controls.jewelType.selIndex
