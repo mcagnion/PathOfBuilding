@@ -89,9 +89,7 @@ local function getRequirementWarningEntries(baseOutput, compareOutput)
 	end
 
 	for _, entry in ipairs(entries) do
-		local baseRequirement = baseOutput[entry.req] or 0
 		local compareRequirement = compareOutput[entry.req] or 0
-		local baseAttribute = baseOutput[entry.attr] or 0
 		local compareAttribute = compareOutput[entry.attr] or 0
 
 		if compareRequirement > compareAttribute then
